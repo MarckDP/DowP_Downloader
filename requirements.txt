@@ -1,0 +1,4 @@
+customtkinter
+yt_dlp
+PIL
+Pillow 
