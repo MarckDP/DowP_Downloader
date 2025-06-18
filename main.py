@@ -23,7 +23,7 @@ def check_and_install_dependencies():
     package_imports = {
         "customtkinter": "customtkinter",
         "yt_dlp": "yt_dlp",
-        "Pillow": "PIL",  # El paquete es Pillow, pero el módulo a importar es PIL
+        "Pillow": "Pillow", 
         "requests": "requests"
     }
 
