@@ -10,7 +10,8 @@ REQUIRED_PACKAGES = [
     "customtkinter",
     "yt_dlp",
     "Pillow",  # CORREGIDO: Usar "Pillow" para la verificación e instalación del paquete.
-    "requests"
+    "requests",
+    "ffmpeg"
 ]
 
 def check_and_install_dependencies():
@@ -24,7 +25,8 @@ def check_and_install_dependencies():
         "customtkinter": "customtkinter",
         "yt_dlp": "yt_dlp",
         "Pillow": "PIL", 
-        "requests": "requests"
+        "requests": "requests",
+        "ffmpeg": "ffmpeg"
     }
 
     for package_name, import_name in package_imports.items():
