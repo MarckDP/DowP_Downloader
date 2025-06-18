@@ -2,3 +2,4 @@ customtkinter
 yt_dlp
 Pillow 
 requests
+ffmpeg
