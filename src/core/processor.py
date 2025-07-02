@@ -116,7 +116,43 @@ CODEC_PROFILES = {
                 "Calidad Alta (CQP 20)": "-c:v hevc_nvenc -preset p7 -rc vbr -cq 20",
                 "Calidad Media (CQP 24)": "-c:v hevc_nvenc -preset p5 -rc vbr -cq 24"
             }, "container": ".mp4"
-        }
+        },
+        "H.264 (Intel QSV)": {
+            "h264_qsv": {
+                "Alta Calidad": "-c:v h264_qsv -preset veryslow -global_quality 18",
+                "Calidad Media": "-c:v h264_qsv -preset medium -global_quality 23"
+            }, "container": ".mp4"
+        },
+        "H.265/HEVC (Intel QSV)": {
+            "hevc_qsv": {
+                "Alta Calidad": "-c:v hevc_qsv -preset veryslow -global_quality 20",
+                "Calidad Media": "-c:v hevc_qsv -preset medium -global_quality 24"
+            }, "container": ".mp4"
+        },
+        "H.264 (AMD AMF)": {
+            "h264_amf": {
+                "Alta Calidad": "-c:v h264_amf -quality quality -rc cqp -qp_i 18 -qp_p 18",
+                "Calidad Balanceada": "-c:v h264_amf -quality balanced -rc cqp -qp_i 23 -qp_p 23"
+            }, "container": ".mp4"
+        },
+        "H.265/HEVC (AMD AMF)": {
+            "hevc_amf": {
+                "Alta Calidad": "-c:v hevc_amf -quality quality -rc cqp -qp_i 20 -qp_p 20",
+                "Calidad Balanceada": "-c:v hevc_amf -quality balanced -rc cqp -qp_i 24 -qp_p 24"
+            }, "container": ".mp4"
+        },
+        "H.264 (Apple VideoToolbox)": {
+            "h264_videotoolbox": {
+                "Alta Calidad": "-c:v h264_videotoolbox -profile:v high -q:v 70",
+                "Calidad Media": "-c:v h264_videotoolbox -profile:v main -q:v 50"
+            }, "container": ".mp4"
+        },
+        "H.265/HEVC (Apple VideoToolbox)": {
+            "hevc_videotoolbox": {
+                "Alta Calidad": "-c:v hevc_videotoolbox -profile:v main -q:v 80",
+                "Calidad Media": "-c:v hevc_videotoolbox -profile:v main -q:v 65"
+            }, "container": ".mp4"
+        }        
     },
     "Audio": {
         "AAC": {
