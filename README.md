@@ -27,9 +27,8 @@ Es fácil:
 
 - Debajo de la miniatura tienen las opciones para descargarla directamente o que se guarde junto al video que vayan a descargar.
 - Tienen dos modos de descarga: **Video+Audio** ó **Solo Audio** y en las opciones de las calidades se mostraran todas las que `yt-dlp` encuentre, en cada una se mostrara la resolución, el contendor, el códec y el tamaño del formato y además de una nota que indica si el formato es compatible con **Premiere Pro** o si requiere recodificación para que sea compatible.
-<p align="center">
-  <img width="280" height="500" src="https://github-production-user-asset-6210df.s3.amazonaws.com/130426515/462348626-ce3ce328-7882-4982-8855-0c7033a8e7f5.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVCODYLSA53PQK4ZA%2F20250704%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250704T071330Z&X-Amz-Expires=300&X-Amz-Signature=66d0212f7a8b5c2311c9e586dfe8e8be7b2161e087953a0e942d74bd5b35d3cd&X-Amz-SignedHeaders=host">
-</p>
+
+  ![image](https://github.com/user-attachments/assets/9e470e1f-89b7-4b95-b4d2-927f5ec5997d)
 
 - Cuenta con una sección debajo de la miniatura para usar `cookies` genéricas de distintos navegadores o usar las que hayan extraído por su cuenta en caso que quieran descargar videos privados, con restricción de edad o que requieran un inicio de sesión para poder verlos.
 
