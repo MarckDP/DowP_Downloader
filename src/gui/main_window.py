@@ -996,7 +996,7 @@ class MainWindow(ctk.CTk):
         self.recode_audio_options_frame.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(self.recode_audio_options_frame, text="Opciones de Audio", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, pady=(5, 10), padx=10)
         ctk.CTkLabel(self.recode_audio_options_frame, text="Codec de Audio:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.recode_audio_codec_menu = ctk.CTkOptionMenu(self.recode_audio_options_frame, values=["-"], state="disabled", command=lambda _: self._validate_recode_compatibility())
+        self.recode_audio_codec_menu = ctk.CTkOptionMenu(self.recode_audio_options_frame, values=["-"], state="disabled", command=self.update_audio_profile_menu)
         self.recode_audio_codec_menu.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         ctk.CTkLabel(self.recode_audio_options_frame, text="Perfil de Audio:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
         self.recode_audio_profile_menu = ctk.CTkOptionMenu(self.recode_audio_options_frame, values=["-"], state="disabled", command=lambda _: self._validate_recode_compatibility())
@@ -1394,7 +1394,7 @@ class MainWindow(ctk.CTk):
             self.recode_audio_profile_menu.set(saved_profile)
         else:
             self.recode_audio_profile_menu.set(profiles[0])
-        self.update_recode_container_label()
+        self._validate_recode_compatibility()
 
     def on_audio_selection_change(self, selection):
         """Se ejecuta al cambiar el códec o perfil de audio para verificar la compatibilidad."""
