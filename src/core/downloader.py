@@ -12,7 +12,9 @@ def get_video_info(url):
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
-        'timeout': 30, 
+        'timeout': 30,
+        'client': 'tv',
+        'impersonate': True, 
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

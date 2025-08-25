@@ -16,6 +16,7 @@ import json
 import time
 import shutil
 import platform
+import yt_dlp
 
 from datetime import datetime, timedelta
 from src.core.downloader import get_video_info, download_media
@@ -35,6 +36,14 @@ class ConflictDialog(ctk.CTkToplevel):
         self.grab_set()
         self.geometry("500x180")
         self.resizable(False, False)
+        self.update_idletasks()
+        win_width = 500
+        win_height = 180
+        master_geo = self.master.geometry()
+        master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
+        pos_x = master_x + (master_width // 2) - (win_width // 2)
+        pos_y = master_y + (master_height // 2) - (win_height // 2)
+        self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
         self.result = "cancel"
         main_label = ctk.CTkLabel(self, text=f"El archivo '{filename}' ya existe en la carpeta de destino.", font=ctk.CTkFont(size=14), wraplength=460)
         main_label.pack(pady=(20, 10), padx=20)
@@ -90,6 +99,14 @@ class LoadingWindow(ctk.CTkToplevel):
             self.progress_bar.set(1)
 
 class MainWindow(ctk.CTk):
+
+    VIDEO_EXTENSIONS = {'mp4', 'mkv', 'webm', 'mov', 'flv', 'avi'}
+    AUDIO_EXTENSIONS = {'m4a', 'mp3', 'ogg', 'opus', 'flac', 'wav'}
+    SINGLE_STREAM_AUDIO_CONTAINERS = {'.mp3', '.wav', '.flac', '.ac3'}
+    FORMAT_MUXER_MAP = {
+        ".m4a": "mp4",
+        ".wma": "asf"
+}
 
     LANG_CODE_MAP = {
         # --- Orden de Popularidad Original (Mantenido) ---
@@ -356,7 +373,6 @@ class MainWindow(ctk.CTk):
         "uzb-uz": "Uzbeko (Uzbekistán)",
         "vie-vn": "Vietnamita (Vietnam)",
         "war": "Waray",
-        # --- Alias de 3 letras de TikTok añadidos para compatibilidad ---
         "alb": "Albanés",
         "ara": "Árabe",
         "aze": "Azerí",
@@ -446,15 +462,23 @@ class MainWindow(ctk.CTk):
     }
 
     EDITOR_FRIENDLY_CRITERIA = {
-        "compatible_vcodecs": ["avc1", "h264", "prores", "dnxhd", "cfhd"],
-        "compatible_acodecs": ["aac", "mp4a", "pcm_s16le", "pcm_s24le", "mp3"],
-        "compatible_exts": ["mp4", "mov"],
+        "compatible_vcodecs": [
+            "h264", "avc1",  # H.264
+            "hevc", "h265",  # H.265
+            "prores",        # Apple ProRes
+            "dnxhd", "dnxhr", # Avid DNxHD/HR
+            "cfhd",          # GoPro CineForm
+            "mpeg2video",    # Común en cámaras más antiguas y DVDs
+            "dvvideo"        # Formato de cámaras MiniDV
+        ],
+        "compatible_acodecs": ["aac", "mp4a", "pcm_s16le", "pcm_s24le", "mp3", "ac3"],
+        "compatible_exts": ["mp4", "mov", "mxf", "mts", "m2ts", "avi"],
     }
 
     COMPATIBILITY_RULES = {
         ".mov": {
             "video": ["prores_aw", "prores_ks", "dnxhd", "cfhd", "qtrle", "hap", "h264_videotoolbox", "libx264"],
-            "audio": ["pcm_s16le", "pcm_s24le", "aac", "alac"]
+            "audio": ["pcm_s16le", "pcm_s24le", "alac"]
         },
         ".mp4": {
             "video": ["libx264", "libx265", "h264_nvenc", "hevc_nvenc", "h264_amf", "hevc_amf", "av1_nvenc", "av1_amf", "h264_qsv", "hevc_qsv", "av1_qsv", "vp9_qsv"],
@@ -465,6 +489,9 @@ class MainWindow(ctk.CTk):
             "audio": ["aac", "mp3", "opus", "flac", "libvorbis", "ac3", "pcm_s16le"]
         },
         ".webm": { "video": ["libvpx", "libvpx-vp9", "libaom-av1"], "audio": ["libopus", "libvorbis"] },
+        ".ogg": { "video": [], "audio": ["libvorbis", "libopus"] },
+        ".ac3": { "video": [], "audio": ["ac3"] },
+        ".wma": { "video": [], "audio": ["wmav2"] },
         ".mxf": { "video": ["mpeg2video", "dnxhd"], "audio": ["pcm_s16le", "pcm_s24le"] },
         ".flac": { "video": [], "audio": ["flac"] },
         ".mp3": { "video": [], "audio": ["libmp3lame"] },
@@ -473,13 +500,141 @@ class MainWindow(ctk.CTk):
         ".wav": { "video": [], "audio": ["pcm_s16le", "pcm_s24le"] }
     }
 
-    def __init__(self):
+    class CompromiseDialog(ctk.CTkToplevel):
+        """Diálogo que pregunta al usuario si acepta una calidad de descarga alternativa."""
+        def __init__(self, master, details_message):
+            super().__init__(master)
+            self.title("Calidad no Disponible")
+            self.lift()
+            self.attributes("-topmost", True)
+            self.grab_set()
 
+            self.result = "cancel"
+
+            container = ctk.CTkFrame(self, fg_color="transparent")
+            container.pack(padx=20, pady=20, fill="both", expand=True)
+
+            main_label = ctk.CTkLabel(container, text="No se pudo obtener la calidad seleccionada.", font=ctk.CTkFont(size=15, weight="bold"), wraplength=450)
+            main_label.pack(pady=(0, 10), anchor="w")
+            
+            details_frame = ctk.CTkFrame(container, fg_color="transparent")
+            details_frame.pack(pady=5, anchor="w")
+            ctk.CTkLabel(details_frame, text="La mejor alternativa disponible es:", font=ctk.CTkFont(size=12)).pack(anchor="w")
+            
+            details_label = ctk.CTkLabel(details_frame, text=details_message, font=ctk.CTkFont(size=13, weight="bold"), text_color="#52a2f2", wraplength=450, justify="left")
+            details_label.pack(anchor="w")
+
+            question_label = ctk.CTkLabel(container, text="¿Deseas descargar esta versión en su lugar?", font=ctk.CTkFont(size=12), wraplength=450)
+            question_label.pack(pady=10, anchor="w")
+
+            button_frame = ctk.CTkFrame(container, fg_color="transparent")
+            button_frame.pack(pady=15, fill="x")
+            button_frame.grid_columnconfigure((0, 1), weight=1)
+
+            accept_btn = ctk.CTkButton(button_frame, text="Sí, Descargar", command=lambda: self.set_result("accept"))
+            cancel_btn = ctk.CTkButton(button_frame, text="No, Cancelar", fg_color="red", hover_color="#990000", command=lambda: self.set_result("cancel"))
+            
+            accept_btn.grid(row=0, column=0, padx=(0, 10), sticky="ew")
+            cancel_btn.grid(row=0, column=1, padx=(10, 0), sticky="ew")
+
+            # Forzamos un ciclo de actualización completo antes de centrar
+            self.update()
+            self.update_idletasks()
+            
+            win_width = self.winfo_reqwidth()
+            win_height = self.winfo_reqheight()
+            
+            master_geo = self.master.geometry()
+            master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
+            
+            pos_x = master_x + (master_width // 2) - (win_width // 2)
+            pos_y = master_y + (master_height // 2) - (win_height // 2)
+            self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+
+        def set_result(self, result):
+            self.result = result
+            self.destroy()
+    
+    class SimpleMessageDialog(ctk.CTkToplevel):
+        """Un diálogo simple para mostrar un mensaje de error o información."""
+        def __init__(self, master, title, message):
+            super().__init__(master)
+            self.title(title)
+            self.lift()
+            self.attributes("-topmost", True)
+            self.grab_set()
+            self.resizable(False, False)
+
+            message_label = ctk.CTkLabel(self, text=message, font=ctk.CTkFont(size=13), wraplength=450, justify="left")
+            message_label.pack(padx=20, pady=20, fill="both", expand=True)
+            
+            ok_button = ctk.CTkButton(self, text="OK", command=self.destroy, width=100)
+            ok_button.pack(padx=20, pady=(0, 20))
+
+            self.update()
+            
+            win_width = self.winfo_reqwidth()
+            win_height = self.winfo_reqheight()
+            
+            master_geo = self.master.geometry()
+            master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
+            
+            pos_x = master_x + (master_width // 2) - (win_width // 2)
+            pos_y = master_y + (master_height // 2) - (win_height // 2)
+            self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+
+    def _get_best_available_info(self, url, options):
+        """Ejecuta una simulación con yt-dlp para ver qué descargaría con 'bestvideo+bestaudio'."""
+        try:
+            command = [
+                'yt-dlp', '-j', '--simulate', url, '--no-warnings', '--no-playlist',
+                '-f', 'bv+ba' # Usamos bv+ba para video, ba para solo audio
+            ]
+            if options["mode"] == "Solo Audio":
+                command[-1] = 'ba'
+
+            # Añadir cookies si es necesario
+            cookie_mode = options["cookie_mode"]
+            if cookie_mode == "Archivo Manual..." and options["cookie_path"]:
+                command.extend(['--cookies', options["cookie_path"]])
+            elif cookie_mode != "No usar":
+                browser_arg = options["selected_browser"]
+                if options["browser_profile"]: browser_arg += f":{options['browser_profile']}"
+                command.extend(['--cookies-from-browser', browser_arg])
+
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8', errors='ignore', creationflags=creationflags)
+            
+            info = json.loads(result.stdout)
+            
+            if options["mode"] == "Solo Audio":
+                abr = info.get('abr', 0)
+                acodec = info.get('acodec', 'N/A').split('.')[0]
+                return f"Audio: ~{abr:.0f} kbps ({acodec})"
+
+            vcodec = info.get('vcodec', 'N/A').split('.')[0]
+            resolution = f"{info.get('width')}x{info.get('height')}"
+            abr = info.get('abr', 0)
+            acodec = info.get('acodec', 'N/A').split('.')[0]
+            
+            return f"Video: {resolution} ({vcodec})  |  Audio: ~{abr:.0f} kbps ({acodec})"
+
+        except (subprocess.CalledProcessError, json.JSONDecodeError, Exception) as e:
+            print(f"ERROR: Falló la simulación de descarga: {e}")
+            return "No se pudieron obtener los detalles."
+
+    def __init__(self):
         super().__init__()
         self.is_shutting_down = False
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.title("DowP")
-        self.geometry("835x900")
+        win_width = 835
+        win_height = 900
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        pos_x = (screen_width // 2) - (win_width // 2)
+        pos_y = (screen_height // 2) - (win_height // 2)
+        self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
         self.is_updating_dimension = False
         self.current_aspect_ratio = None
         self.minsize(835, 900)
@@ -545,6 +700,10 @@ class MainWindow(ctk.CTk):
         self.ffmpeg_processor = FFmpegProcessor()
         self.create_widgets()
         self.run_initial_setup()
+        self.original_video_width = 0
+        self.original_video_height = 0
+        self.has_video_streams = False
+        self.has_audio_streams = False
 
     def create_entry_context_menu(self, widget):
         """Crea y muestra un menú contextual para un widget de entrada de texto."""
@@ -553,11 +712,13 @@ class MainWindow(ctk.CTk):
             widget.event_generate("<<Copy>>")
             if widget.select_present():
                 widget.delete("sel.first", "sel.last")
+                self.after(10, self.update_download_button_state)
         def paste_text():
             if widget.select_present():
                 widget.delete("sel.first", "sel.last")
             try:
                 widget.insert("insert", self.clipboard_get())
+                self.after(10, self.update_download_button_state)
             except tkinter.TclError:
                 pass
         menu.add_command(label="Cortar", command=cut_text)
@@ -583,7 +744,6 @@ class MainWindow(ctk.CTk):
         if self.ui_request_event.is_set():
             self.ui_request_event.clear()
             request_type = self.ui_request_data.get("type")
-
             if request_type == "ask_yes_no":
                 if self.loading_window and self.loading_window.winfo_exists():
                     self.loading_window.withdraw()
@@ -595,10 +755,6 @@ class MainWindow(ctk.CTk):
                     self.loading_window.deiconify()
                 self.lift() 
                 self.ui_response_event.set()
-
-            # --- LA CORRECCIÓN CLAVE ESTÁ AQUÍ ---
-            # Ahora reconoce tanto la petición del modo URL ("ask_conflict")
-            # como la del modo local ("ask_conflict_recode").
             elif request_type in ["ask_conflict", "ask_conflict_recode"]:
                 filename = self.ui_request_data.get("filename", "")
                 dialog = ConflictDialog(self, filename)
@@ -607,7 +763,14 @@ class MainWindow(ctk.CTk):
                 self.focus_force()
                 self.ui_response_data["result"] = dialog.result
                 self.ui_response_event.set()
-
+            elif request_type == "ask_compromise":
+                details = self.ui_request_data.get("details", "Detalles no disponibles.")
+                dialog = self.CompromiseDialog(self, details)
+                self.wait_window(dialog)
+                self.lift()
+                self.focus_force()
+                self.ui_response_data["result"] = dialog.result
+                self.ui_response_event.set()
         self.after(100, self._check_for_ui_requests)
 
     def run_initial_setup(self):
@@ -629,50 +792,33 @@ class MainWindow(ctk.CTk):
         status = status_info.get("status")
 
         if status == "error":
-            # Si el error es realmente crítico (ej: no hay FFmpeg y no se puede descargar)
             self.loading_window.update_progress(status_info.get("message"), -1)
-            # La aplicación se detiene aquí a propósito.
             return
-
         if status == "warning":
-            # --- ESTA ES LA CORRECCIÓN CLAVE ---
-            # El programa encontró un problema (no pudo verificar la versión), pero no es crítico.
-            # Le decimos a la ventana de carga que ignore el estado de error y que continúe.
             if self.loading_window and self.loading_window.winfo_exists():
                 self.loading_window.error_state = False
-                # Restablecemos el color de la barra de progreso a su color por defecto
                 try:
-                    # Intenta obtener el color azul por defecto de otro botón
                     default_color = self.analyze_button.cget("fg_color")
                     self.loading_window.progress_bar.configure(progress_color=default_color)
                 except Exception:
-                    # Si falla, usa un color de respaldo
                     self.loading_window.progress_bar.configure(progress_color=["#3a7ebf", "#346ead"])
-
             self.after(0, self.loading_window.update_progress, status_info.get("message"), 95)
-            self.after(500, self.on_setup_complete) # Se le indica que finalice la configuración.
+            self.after(500, self.on_setup_complete)
             return
-
-        # --- El resto de la función para el caso de éxito continúa igual ---
         local_version = status_info.get("local_version")
         latest_version = status_info.get("latest_version")
         download_url = status_info.get("download_url")
         ffmpeg_exists = status_info.get("ffmpeg_path_exists")
         should_download = False
         update_available = ffmpeg_exists and local_version != latest_version
-
         if not ffmpeg_exists:
             self.after(0, self.loading_window.update_progress, "FFmpeg no encontrado. Se instalará automáticamente.", 40)
             should_download = True
         elif update_available:
-            # Comprobar si el usuario ha pospuesto la notificación
             snoozed = self.ffmpeg_update_snooze_until and datetime.now() < self.ffmpeg_update_snooze_until
-
-            # Si no está pospuesto O si es una comprobación manual forzada
             if not snoozed or force_check:
                 if self.loading_window and self.loading_window.winfo_exists():
                     self.loading_window.withdraw()
-
                 user_response = messagebox.askyesno(
                     "Actualización Disponible",
                     f"Hay una nueva versión de FFmpeg disponible.\n\n"
@@ -682,16 +828,13 @@ class MainWindow(ctk.CTk):
                 )
                 if self.loading_window and self.loading_window.winfo_exists():
                     self.loading_window.deiconify()
-
                 self.lift() 
                 if user_response:
                     self.after(0, self.loading_window.update_progress, "Actualizando FFmpeg...", 40)
                     should_download = True
-                    # Si el usuario actualiza, eliminamos el snooze
                     self.ffmpeg_update_snooze_until = None
                     self.save_settings()
                 else:
-                    # El usuario dijo NO, establecemos el snooze para 15 días
                     self.ffmpeg_update_snooze_until = datetime.now() + timedelta(days=15)
                     self.save_settings()
                     print(f"DEBUG: Actualización de FFmpeg pospuesta hasta {self.ffmpeg_update_snooze_until.isoformat()}")
@@ -710,7 +853,6 @@ class MainWindow(ctk.CTk):
                 self.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} (Actualización a {latest_version} disponible)")
             else:
                 self.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} (Actualizado)")
-
             self.after(0, self.loading_window.update_progress, f"FFmpeg está actualizado ({local_version}).", 95)
             self.after(500, self.on_setup_complete)
 
@@ -774,10 +916,8 @@ class MainWindow(ctk.CTk):
         Una vez que termina (después de su limpieza), cierra la ventana.
         """
         if self.active_operation_thread and self.active_operation_thread.is_alive():
-            # El hilo todavía está ocupado (probablemente limpiando), esperamos un poco más
             self.after(100, self._wait_for_thread_to_finish_and_destroy)
         else:
-            # El hilo ha terminado, ahora es seguro cerrar
             self.save_settings()
             self.destroy()
 
@@ -790,6 +930,7 @@ class MainWindow(ctk.CTk):
         self.url_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.url_entry))
         self.url_entry.bind("<Return>", self.start_analysis_thread)
         self.url_entry.bind("<KeyRelease>", self.update_download_button_state)
+        self.url_entry.bind("<<Paste>>", lambda e: self.after(50, self.update_download_button_state))
         self.analyze_button = ctk.CTkButton(url_frame, text=self.original_analyze_text, command=self.original_analyze_command)
         self.analyze_button.pack(side="left", padx=(5, 10))
         self.original_analyze_fg_color = self.analyze_button.cget("fg_color")
@@ -809,6 +950,56 @@ class MainWindow(ctk.CTk):
         self.auto_save_thumbnail_check.pack(padx=10, pady=5, anchor="w")
         options_scroll_frame = ctk.CTkScrollableFrame(left_column_container)
         options_scroll_frame.pack(pady=10, fill="both", expand=True)
+
+        ctk.CTkLabel(options_scroll_frame, text="Descargar Fragmento", font=ctk.CTkFont(weight="bold")).pack(fill="x", padx=10, pady=(5, 2))
+        
+        fragment_frame = ctk.CTkFrame(options_scroll_frame)
+        fragment_frame.pack(fill="x", padx=5, pady=(0, 10))
+
+        self.fragment_checkbox = ctk.CTkCheckBox(fragment_frame, text="Activar corte de fragmento", command=lambda: (self._toggle_fragment_panel(), self.update_download_button_state()))
+        self.fragment_checkbox.pack(padx=10, pady=5, anchor="w")
+
+        self.fragment_options_frame = ctk.CTkFrame(fragment_frame, fg_color="transparent")
+        
+        self.fragment_options_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(self.fragment_options_frame, text="Inicio:").grid(row=0, column=0, padx=(0, 5), pady=5, sticky="w")
+        
+        start_time_frame = ctk.CTkFrame(self.fragment_options_frame, fg_color="transparent")
+        start_time_frame.grid(row=0, column=1, pady=5, sticky="ew")
+        
+        self.start_h = ctk.CTkEntry(start_time_frame, width=40, placeholder_text="00")
+        self.start_m = ctk.CTkEntry(start_time_frame, width=40, placeholder_text="00")
+        self.start_s = ctk.CTkEntry(start_time_frame, width=40, placeholder_text="00")
+                
+        self.start_h.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(start_time_frame, text=":", font=ctk.CTkFont(size=14)).pack(side="left", padx=5)
+        self.start_m.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(start_time_frame, text=":", font=ctk.CTkFont(size=14)).pack(side="left", padx=5)
+        self.start_s.pack(side="left", fill="x", expand=True)
+
+        ctk.CTkLabel(self.fragment_options_frame, text="Final:").grid(row=1, column=0, padx=(0, 5), pady=5, sticky="w")
+
+        end_time_frame = ctk.CTkFrame(self.fragment_options_frame, fg_color="transparent")
+        end_time_frame.grid(row=1, column=1, pady=5, sticky="ew")
+
+        self.end_h = ctk.CTkEntry(end_time_frame, width=40, placeholder_text="00")
+        self.end_m = ctk.CTkEntry(end_time_frame, width=40, placeholder_text="00")
+        self.end_s = ctk.CTkEntry(end_time_frame, width=40, placeholder_text="00")
+
+        self.end_h.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(end_time_frame, text=":", font=ctk.CTkFont(size=14)).pack(side="left", padx=5)
+        self.end_m.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(end_time_frame, text=":", font=ctk.CTkFont(size=14)).pack(side="left", padx=5)
+        self.end_s.pack(side="left", fill="x", expand=True)
+
+        self.keep_original_on_clip_check = ctk.CTkCheckBox(self.fragment_options_frame, text="Conservar completo (solo modo URL)")
+        self.keep_original_on_clip_check.grid(row=3, column=0, columnspan=2, pady=(5,0), sticky="w")
+
+        self.time_warning_label = ctk.CTkLabel(self.fragment_options_frame, text="", text_color="orange", wraplength=280, justify="left")
+        # La posicionaremos en la fila 3, ocupando ambas columnas
+        self.time_warning_label.grid(row=4, column=0, columnspan=2, pady=(5,0), sticky="w")
+
         ctk.CTkLabel(options_scroll_frame, text="Subtítulos", font=ctk.CTkFont(weight="bold")).pack(fill="x", padx=10, pady=(5, 2))
         subtitle_options_frame = ctk.CTkFrame(options_scroll_frame)
         subtitle_options_frame.pack(fill="x", padx=5, pady=(0, 10))
@@ -825,7 +1016,7 @@ class MainWindow(ctk.CTk):
         self.save_subtitle_button.pack(fill="x", padx=10, pady=5)
         self.auto_download_subtitle_check = ctk.CTkCheckBox(subtitle_options_frame, text="Descargar subtítulos con el video", command=self.toggle_manual_subtitle_button)
         self.auto_download_subtitle_check.pack(padx=10, pady=5, anchor="w")
-        self.clean_subtitle_check = ctk.CTkCheckBox(subtitle_options_frame, text="Simplificar a formato estándar (SRT)")
+        self.clean_subtitle_check = ctk.CTkCheckBox(subtitle_options_frame, text="Convertir y estandarizar a formato SRT")
         self.clean_subtitle_check.pack(padx=10, pady=(0, 5), anchor="w")
 
         ctk.CTkLabel(options_scroll_frame, text="Cookies", font=ctk.CTkFont(weight="bold")).pack(fill="x", padx=10, pady=(5, 2))
@@ -836,19 +1027,19 @@ class MainWindow(ctk.CTk):
         self.manual_cookie_frame = ctk.CTkFrame(cookie_options_frame, fg_color="transparent")
         self.cookie_path_entry = ctk.CTkEntry(self.manual_cookie_frame, placeholder_text="Ruta al archivo cookies.txt...")
         self.cookie_path_entry.pack(fill="x")
-        self.cookie_path_entry.bind("<KeyRelease>", lambda event: self.save_settings())
+        self.cookie_path_entry.bind("<KeyRelease>", self._on_cookie_detail_change)
         self.select_cookie_file_button = ctk.CTkButton(self.manual_cookie_frame, text="Elegir Archivo...", command=lambda: self.select_cookie_file())
         self.select_cookie_file_button.pack(fill="x", pady=(5,0))
         self.browser_options_frame = ctk.CTkFrame(cookie_options_frame, fg_color="transparent")
         ctk.CTkLabel(self.browser_options_frame, text="Navegador:").pack(padx=10, pady=(5,0), anchor="w")
         self.browser_var = ctk.StringVar(value=self.selected_browser_saved)
-        self.browser_menu = ctk.CTkOptionMenu(self.browser_options_frame, values=["chrome", "firefox", "edge", "opera", "vivaldi", "brave"], variable=self.browser_var, command=self.save_settings)
+        self.browser_menu = ctk.CTkOptionMenu(self.browser_options_frame, values=["chrome", "firefox", "edge", "opera", "vivaldi", "brave"], variable=self.browser_var, command=self._on_cookie_detail_change)
         self.browser_menu.pack(fill="x", padx=10)
         ctk.CTkLabel(self.browser_options_frame, text="Perfil (Opcional):").pack(padx=10, pady=(5,0), anchor="w")
         self.browser_profile_entry = ctk.CTkEntry(self.browser_options_frame, placeholder_text="Ej: Default, Profile 1")
         self.browser_profile_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.browser_profile_entry))
         self.browser_profile_entry.pack(fill="x", padx=10)
-        self.browser_profile_entry.bind("<KeyRelease>", lambda event: self.save_settings())
+        self.browser_profile_entry.bind("<KeyRelease>", self._on_cookie_detail_change)
         cookie_advice_label = ctk.CTkLabel(self.browser_options_frame, text=" ⓘ Si falla, cierre el navegador por completo. \n ⓘ Para Chrome/Edge/Brave,\n se recomienda usar la opción 'Archivo Manual'", font=ctk.CTkFont(size=11), text_color="orange", justify="left")
         cookie_advice_label.pack(pady=(10, 5), padx=10, fill="x", anchor="w")
 
@@ -875,17 +1066,19 @@ class MainWindow(ctk.CTk):
         self.mode_selector.pack(side="left", expand=True, fill="x")
         self.video_quality_label = ctk.CTkLabel(details_frame, text="Calidad de Video:", anchor="w")
         self.video_quality_menu = ctk.CTkOptionMenu(details_frame, state="disabled", values=["-"], command=self.on_video_quality_change)
-        self.audio_quality_label = ctk.CTkLabel(details_frame, text="Calidad de Audio:", anchor="w")
-        self.audio_quality_menu = ctk.CTkOptionMenu(details_frame, state="disabled", values=["-"], command=lambda _: (self._update_warnings(), self._validate_recode_compatibility()))
+        self.audio_options_frame = ctk.CTkFrame(details_frame, fg_color="transparent")
+        self.audio_quality_label = ctk.CTkLabel(self.audio_options_frame, text="Calidad de Audio:", anchor="w")
+        self.audio_quality_menu = ctk.CTkOptionMenu(self.audio_options_frame, state="disabled", values=["-"], command=lambda _: (self._update_warnings(), self._validate_recode_compatibility()))
+        self.use_all_audio_tracks_check = ctk.CTkCheckBox(self.audio_options_frame, text="Aplicar la recodificación a todas las pistas de audio", command=self._on_use_all_audio_tracks_change)
+        self.audio_quality_label.pack(fill="x", padx=5, pady=(10,0))
+        self.audio_quality_menu.pack(fill="x", padx=5, pady=(0,5))
 
-
-        legend_text = (
+        legend_text = (         
             "Guía de etiquetas en la lista:\n"
             "✨ Ideal: Formato óptimo para editar sin conversión.\n"
             "⚠️ Lento: El proceso de recodificación puede tardar más.\n"
             "⚠️ Recodificar: Formato no compatible con editores."
         )
-        # Crea la etiqueta usando el texto de la guía
         self.format_warning_label = ctk.CTkLabel(
             details_frame, 
             text=legend_text, 
@@ -898,23 +1091,24 @@ class MainWindow(ctk.CTk):
         self.recode_main_frame = ctk.CTkScrollableFrame(details_frame)
         ctk.CTkLabel(self.recode_main_frame, text="Opciones de Recodificación", font=ctk.CTkFont(weight="bold")).pack(pady=(5,10))
 
-        recode_toggle_frame = ctk.CTkFrame(self.recode_main_frame, fg_color="transparent")
-        recode_toggle_frame.pack(side="top", fill="x", padx=10, pady=(0, 10))
-        recode_toggle_frame.grid_columnconfigure((0, 1), weight=1)
+        self.recode_toggle_frame = ctk.CTkFrame(self.recode_main_frame, fg_color="transparent")
+        self.recode_toggle_frame.pack(side="top", fill="x", padx=10, pady=(0, 10))
+        self.recode_toggle_frame.grid_columnconfigure((0, 1), weight=1)
 
-        self.recode_video_checkbox = ctk.CTkCheckBox(recode_toggle_frame, text="Recodificar Video", command=self._toggle_recode_panels, state="disabled")
+        self.recode_video_checkbox = ctk.CTkCheckBox(self.recode_toggle_frame, text="Recodificar Video", command=self._toggle_recode_panels, state="disabled")
         self.recode_video_checkbox.grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.recode_audio_checkbox = ctk.CTkCheckBox(recode_toggle_frame, text="Recodificar Audio", command=self._toggle_recode_panels, state="disabled")
+        self.recode_audio_checkbox = ctk.CTkCheckBox(self.recode_toggle_frame, text="Recodificar Audio", command=self._toggle_recode_panels, state="disabled")
         self.recode_audio_checkbox.grid(row=0, column=1, padx=5, pady=5, sticky="w")
-        self.keep_original_checkbox = ctk.CTkCheckBox(recode_toggle_frame, text="Mantener los archivos originales", state="disabled", command=self.save_settings)
+        self.keep_original_checkbox = ctk.CTkCheckBox(self.recode_toggle_frame, text="Mantener los archivos originales", state="disabled", command=self.save_settings)
         self.keep_original_checkbox.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="w")
         self.keep_original_checkbox.select()
 
-        self.recode_warning_frame = ctk.CTkFrame(self.recode_main_frame, fg_color="transparent", height=40)
+        self.recode_warning_frame = ctk.CTkFrame(self.recode_main_frame, fg_color="transparent")
         self.recode_warning_frame.pack(pady=0, padx=10, fill="x")
-        self.recode_warning_frame.pack_propagate(False)
         
         self.recode_warning_label = ctk.CTkLabel(self.recode_warning_frame, text="", wraplength=400, justify="left", font=ctk.CTkFont(weight="bold"))
+        self.recode_warning_label.pack(pady=5, padx=5, fill="both", expand=True)
+
 
         self.recode_options_frame = ctk.CTkFrame(self.recode_main_frame)
         ctk.CTkLabel(self.recode_options_frame, text="Opciones de Video", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), padx=10)
@@ -1007,7 +1201,7 @@ class MainWindow(ctk.CTk):
         ctk.CTkLabel(local_import_frame, text="¿Tienes un archivo existente?", font=ctk.CTkFont(weight="bold")).pack()
         self.import_button = ctk.CTkButton(local_import_frame, text="Importar Archivo Local para Recodificar", command=self.import_local_file)
         self.import_button.pack(fill="x", padx=10, pady=5)
-        self.save_in_same_folder_check = ctk.CTkCheckBox(local_import_frame, text="Guardar en la misma carpeta que el original")
+        self.save_in_same_folder_check = ctk.CTkCheckBox(local_import_frame, text="Guardar en la misma carpeta que el original", command=self._on_save_in_same_folder_change)
         self.clear_local_file_button = ctk.CTkButton(local_import_frame, text="Limpiar y Volver a Modo URL", fg_color="gray", hover_color="#555555", command=self.reset_to_url_mode)
 
         download_frame = ctk.CTkFrame(self)
@@ -1050,7 +1244,95 @@ class MainWindow(ctk.CTk):
         error_help_label.pack(side="right")
         self.on_mode_change(self.mode_selector.get())
         self.on_profile_selection_change(self.recode_profile_menu.get())
+
+        # Vinculamos la lógica de auto-salto para el tiempo de INICIO
+        self.start_h.bind("<KeyRelease>", lambda e: (self._handle_time_input(e, self.start_h, self.start_m), self.update_download_button_state()))
+        self.start_m.bind("<KeyRelease>", lambda e: (self._handle_time_input(e, self.start_m, self.start_s), self.update_download_button_state()))
+        self.start_s.bind("<KeyRelease>", lambda e: (self._handle_time_input(e, self.start_s), self.update_download_button_state()))
+
+        # Vinculamos la lógica de auto-salto para el tiempo de FINAL
+        self.end_h.bind("<KeyRelease>", lambda e: (self._handle_time_input(e, self.end_h, self.end_m), self.update_download_button_state()))
+        self.end_m.bind("<KeyRelease>", lambda e: (self._handle_time_input(e, self.end_m, self.end_s), self.update_download_button_state()))
+        self.end_s.bind("<KeyRelease>", lambda e: (self._handle_time_input(e, self.end_s), self.update_download_button_state()))
+
+        # Aseguramos que el panel inicie oculto
+        self._toggle_fragment_panel()
+
         self._check_for_ui_requests()
+
+    def time_str_to_seconds(self, time_str):
+        """Convierte un string HH:MM:SS a segundos."""
+        if not time_str: return 0
+        parts = time_str.split(':')
+        seconds = 0
+        if len(parts) == 3:
+            seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        return seconds
+
+    def _get_compatible_audio_codecs(self, target_container):
+        """
+        Devuelve una lista de nombres de códecs de audio amigables que son
+        compatibles con un contenedor específico.
+        """
+        all_audio_codecs = self.ffmpeg_processor.available_encoders.get("CPU", {}).get("Audio", {})
+        if not target_container or target_container == "-":
+            return list(all_audio_codecs.keys()) or ["-"]
+
+        rules = self.COMPATIBILITY_RULES.get(target_container, {})
+        allowed_ffmpeg_codecs = rules.get("audio", [])
+        
+        compatible_friendly_names = []
+
+        for friendly_name, details in all_audio_codecs.items():
+            ffmpeg_codec_name = next((key for key in details if key != 'container'), None)
+            if ffmpeg_codec_name in allowed_ffmpeg_codecs:
+                compatible_friendly_names.append(friendly_name)
+        
+        # Si la lista está vacía después de filtrar, devuelve ["-"]
+        return compatible_friendly_names if compatible_friendly_names else ["-"]
+
+    def _toggle_fragment_panel(self):
+        """Muestra u oculta las opciones para cortar fragmentos."""
+        if self.fragment_checkbox.get() == 1:
+            self.fragment_options_frame.pack(fill="x", padx=10, pady=(0,5))
+        else:
+            self.fragment_options_frame.pack_forget()
+
+    def _handle_time_input(self, event, widget, next_widget=None):
+        """Valida la entrada de tiempo y salta al siguiente campo."""
+        text = widget.get()
+        cleaned_text = "".join(filter(str.isdigit, text))
+        final_text = cleaned_text[:2]
+        
+        if text != final_text:
+            widget.delete(0, "end")
+            widget.insert(0, final_text)
+
+        if len(final_text) == 2 and next_widget:
+            next_widget.focus()
+            next_widget.select_range(0, 'end')
+
+    def _get_formatted_time(self, h_widget, m_widget, s_widget):
+        """Lee los campos de tiempo segmentados y los formatea como HH:MM:SS."""
+        h = h_widget.get()
+        m = m_widget.get()
+        s = s_widget.get()
+
+        if not h and not m and not s:
+            return "" 
+
+        h = h.zfill(2) if h else "00"
+        m = m.zfill(2) if m else "00"
+        s = s.zfill(2) if s else "00"
+
+        return f"{h}:{m}:{s}"
+
+    def _clean_ansi_codes(self, text):
+        """Elimina los códigos de escape ANSI (colores) del texto."""
+        if not text:
+            return ""
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        return ansi_escape.sub('', text)
 
     def import_local_file(self):
         filetypes = [
@@ -1062,6 +1344,7 @@ class MainWindow(ctk.CTk):
         self.lift()
         self.focus_force()
         if filepath:
+            self.auto_save_thumbnail_check.pack_forget()
             self.cancellation_event.clear()
             self.progress_label.configure(text=f"Analizando archivo local: {os.path.basename(filepath)}...")
             self.progress_bar.start()
@@ -1072,6 +1355,7 @@ class MainWindow(ctk.CTk):
         info = self.ffmpeg_processor.get_local_media_info(filepath)
 
         def update_ui():
+            self.keep_original_on_clip_check.configure(state="disabled")
             self.progress_bar.stop()
             if not info:
                 self.progress_label.configure(text="Error: No se pudo analizar el archivo.")
@@ -1079,8 +1363,10 @@ class MainWindow(ctk.CTk):
                 return
             self.reset_ui_for_local_file()
             self.local_file_path = filepath
-            self.auto_save_thumbnail_check.configure(state="disabled")
-            self.auto_save_thumbnail_check.deselect()
+
+            self.keep_original_checkbox.select()
+            self.keep_original_checkbox.configure(state="disabled")
+            
             self.recode_main_frame._parent_canvas.yview_moveto(0)
             self.save_in_same_folder_check.pack(padx=10, pady=(5,0), anchor="w")
             self.save_in_same_folder_check.select()
@@ -1119,7 +1405,8 @@ class MainWindow(ctk.CTk):
                 _, ext_with_dot = os.path.splitext(filepath)
                 ext = ext_with_dot.lstrip('.')
                 self.video_formats = {v_label: {
-                    'format_id': 'local_video', 
+                    'format_id': 'local_video',
+                    'index': video_stream.get('index', 0), # <-- LÍNEA AÑADIDA
                     'width': self.original_video_width, 
                     'height': self.original_video_height, 
                     'vcodec': v_codec, 
@@ -1166,6 +1453,15 @@ class MainWindow(ctk.CTk):
                     default_selection = next((label for label in audio_labels if "(Default)" in label), audio_labels[0])
                     self.audio_quality_menu.set(default_selection)
 
+                    # Gestionar la visibilidad de la casilla para múltiples pistas de audio
+                    if hasattr(self, 'use_all_audio_tracks_check'):
+                        if len(audio_labels) > 1:
+                            self.use_all_audio_tracks_check.pack(padx=5, pady=(5,0), anchor="w")
+                            self.use_all_audio_tracks_check.deselect()
+                        else:
+                            self.use_all_audio_tracks_check.pack_forget()
+                        self.audio_quality_menu.configure(state="normal")
+
                 self._update_warnings()
 
             elif audio_stream:
@@ -1188,6 +1484,7 @@ class MainWindow(ctk.CTk):
             self.download_button.configure(text="Iniciar Proceso")
             self.update_estimated_size()
             self._validate_recode_compatibility()
+            self._on_save_in_same_folder_change()
         self.after(0, update_ui)
 
     def _format_bitrate(self, bitrate_str):
@@ -1222,6 +1519,7 @@ class MainWindow(ctk.CTk):
         self.clear_local_file_button.pack(fill="x", padx=10, pady=(0, 10))
 
     def reset_to_url_mode(self):
+        self.keep_original_on_clip_check.configure(state="normal")
         self.local_file_path = None
         self.url_entry.configure(state="normal")
         self.analyze_button.configure(state="normal")
@@ -1238,63 +1536,212 @@ class MainWindow(ctk.CTk):
         self.save_in_same_folder_check.pack_forget()
         self.download_button.configure(text=self.original_download_text)
         self.clear_local_file_button.pack_forget()
+        self.auto_save_thumbnail_check.pack(padx=20, pady=(0, 10), anchor="w", after=self.save_thumbnail_button)
+        self.auto_save_thumbnail_check.configure(state="normal")
+        self.keep_original_checkbox.configure(state="normal")
         self.update_download_button_state()
+        self.save_in_same_folder_check.deselect()
+        self._on_save_in_same_folder_change()
+        self.use_all_audio_tracks_check.pack_forget()
+
 
     def _execute_local_recode(self, options):
         """
         Función dedicada exclusivamente a la recodificación de un archivo local.
-        Maneja su propia lógica de conflictos y errores.
+        CORREGIDO: Reorganiza la construcción de parámetros para evitar ambigüedades.
         """
         source_path = self.local_file_path
         output_dir = self.output_path_entry.get()
         if self.save_in_same_folder_check.get() == 1:
             output_dir = os.path.dirname(source_path)
+        
         final_title = self.sanitize_filename(options['title']) + "_recoded"
         final_container = options["recode_container"]
-        final_recoded_path = None
+        if not options['recode_video_enabled'] and not options['recode_audio_enabled']:
+            # Obtenemos la extensión (ej: .mkv) del archivo original
+            _, original_extension = os.path.splitext(source_path)
+            final_container = original_extension
+        base_name_with_ext = f"{final_title}{final_container}"
+        base_name, ext = os.path.splitext(base_name_with_ext)
+
+        final_output_path = os.path.join(output_dir, base_name_with_ext)
+        temp_output_path = os.path.join(output_dir, f"{base_name}_temp{ext}")
+        backup_file_path = None
+
         try:
-            output_path_candidate = Path(output_dir) / f"{final_title}{final_container}"
+            # --- 1. Manejo de Conflicto de Archivos (Sin cambios) ---
+            output_path_candidate = Path(final_output_path)
             if output_path_candidate.exists():
                 self.ui_request_data = {"type": "ask_conflict_recode", "filename": output_path_candidate.name}
-                self.ui_request_event.set()
-                self.ui_response_event.wait()
-                self.ui_response_event.clear()
+                self.ui_request_event.set(); self.ui_response_event.wait(); self.ui_response_event.clear()
                 user_choice = self.ui_response_data.get("result", "cancel")
+
                 if user_choice == "cancel":
-                    raise UserCancelledError("Operación cancelada por el usuario en conflicto de archivo.")
+                    raise UserCancelledError("Operación cancelada por el usuario.")
                 elif user_choice == "rename":
                     base_title = self.sanitize_filename(options['title']) + "_recoded"
                     counter = 1
-                    while True:
-                        new_title_candidate = f"{base_title} ({counter})"
-                        new_path_candidate = Path(output_dir) / f"{new_title_candidate}{final_container}"
-                        if not new_path_candidate.exists():
-                            final_title = new_title_candidate
-                            break
+                    while Path(output_dir) / f"{base_title} ({counter}){final_container}".exists():
                         counter += 1
-            final_recoded_path = os.path.join(output_dir, f"{final_title}{final_container}")
+                    final_title = f"{base_title} ({counter})"
+                    final_output_path = os.path.join(output_dir, f"{final_title}{final_container}")
+                    temp_output_path = final_output_path + ".temp"
+                elif user_choice == "overwrite":
+                    backup_file_path = final_output_path + ".bak"
+                    if os.path.exists(backup_file_path): os.remove(backup_file_path)
+                    os.rename(final_output_path, backup_file_path)
+            
+            # --- 2. Construcción de Parámetros de FFmpeg (LÓGICA CORREGIDA) ---
             final_ffmpeg_params = []
-            if options["recode_video_enabled"]:
-                proc = options["recode_proc"]; codec_db = self.ffmpeg_processor.available_encoders[proc]["Video"]; codec_data = codec_db.get(options["recode_codec_name"])
-                ffmpeg_codec_name = list(filter(lambda k: k != 'container', codec_data.keys()))[0]; profile_params = codec_data[ffmpeg_codec_name].get(options["recode_profile_name"])
+
+            # Parámetros de Video
+            if options['mode'] != "Solo Audio" and options["recode_video_enabled"]:
+                final_ffmpeg_params.extend(["-metadata:s:v:0", "rotate=0"])
+                proc = options["recode_proc"]
+                codec_db = self.ffmpeg_processor.available_encoders[proc]["Video"]
+                codec_data = codec_db.get(options["recode_codec_name"])
+                ffmpeg_codec_name = next((k for k in codec_data if k != 'container'), None)
+                profile_params = codec_data[ffmpeg_codec_name].get(options["recode_profile_name"])
+                # ... (resto de la lógica de bitrate, filtros, etc. no cambia)
                 if "CUSTOM_BITRATE" in profile_params:
-                    bitrate_mbps = float(self.custom_bitrate_entry.get()); bitrate_k = int(bitrate_mbps * 1000)
-                    if "nvenc" in ffmpeg_codec_name: profile_params = f"-c:v {ffmpeg_codec_name} -preset p5 -rc vbr -b:v {bitrate_k}k -maxrate {bitrate_k}k"
-                    else: profile_params = f"-c:v {ffmpeg_codec_name} -b:v {bitrate_k}k -maxrate {bitrate_k}k -bufsize {bitrate_k*2}k -pix_fmt yuv420p"
-                final_ffmpeg_params.extend(profile_params.split())
-            else:
+                    bitrate_mbps = float(self.custom_bitrate_entry.get())
+                    bitrate_k = int(bitrate_mbps * 1000)
+                    if "nvenc" in ffmpeg_codec_name:
+                        profile_params = f"-c:v {ffmpeg_codec_name} -preset p5 -rc vbr -b:v {bitrate_k}k -maxrate {bitrate_k}k"
+                    else:
+                        profile_params = f"-c:v {ffmpeg_codec_name} -b:v {bitrate_k}k -maxrate {bitrate_k}k -bufsize {bitrate_k*2}k -pix_fmt yuv422p"
+                final_ffmpeg_params.extend(profile_params)
+                
+                video_filters = []
+                if options.get("fps_force_enabled") and options.get("fps_value"):
+                    video_filters.append(f'fps={options["fps_value"]}')
+                if options.get("resolution_change_enabled"):
+                    try:
+                        width, height = int(options["res_width"]), int(options["res_height"])
+                        if options.get("no_upscaling_enabled"):
+                            original_width, original_height = options.get("original_width", 0), options.get("original_height", 0)
+                            if original_width > 0 and width > original_width: width = original_width
+                            if original_height > 0 and height > original_height: height = original_height
+                        video_filters.append(f'scale={width}:{height}')
+                    except (ValueError, TypeError): pass
+                if video_filters:
+                    final_ffmpeg_params.extend(['-vf', ",".join(video_filters)])
+            elif options['mode'] != "Solo Audio":
                 final_ffmpeg_params.extend(["-c:v", "copy"])
-            if options["recode_audio_enabled"]:
-                audio_codec_db = self.ffmpeg_processor.available_encoders["CPU"]["Audio"]; audio_codec_data = audio_codec_db.get(options["recode_audio_codec_name"])
-                ffmpeg_audio_codec = list(filter(lambda k: k != 'container', audio_codec_data.keys()))[0]; audio_profile_params = audio_codec_data[ffmpeg_audio_codec].get(options["recode_audio_profile_name"])
-                if audio_profile_params: final_ffmpeg_params.extend(audio_profile_params.split())
+
+            # Parámetros de Audio (Lógica Corregida)
+            is_pro_video_format = False
+            if options["recode_video_enabled"]:
+                codec_name = options["recode_codec_name"]
+                if "ProRes" in codec_name or "DNxH" in codec_name:
+                    is_pro_video_format = True
+            
+            # --- Parámetros de Audio (Lógica Simplificada y Corregida) ---
+            recode_audio = options["recode_audio_enabled"]
+            is_pro_video_format = False
+
+            # Primero, determinamos si se está usando un códec de video profesional
+            if options['mode'] != "Solo Audio" and options["recode_video_enabled"]:
+                codec_name = options["recode_codec_name"]
+                if "ProRes" in codec_name or "DNxH" in codec_name:
+                    is_pro_video_format = True
+
+            # Ahora, decidimos qué hacer con el audio con reglas claras
+            if is_pro_video_format:
+                # Regla 1: Para códecs de video Pro, SIEMPRE se recodifica el audio a PCM para máxima compatibilidad.
+                final_ffmpeg_params.extend(["-c:a", "pcm_s16le"])
+            elif recode_audio:
+                # Regla 2: Si el usuario activó "Recodificar Audio", usamos su selección.
+                audio_codec_db = self.ffmpeg_processor.available_encoders["CPU"]["Audio"]
+                audio_codec_data = audio_codec_db.get(options["recode_audio_codec_name"])
+                ffmpeg_audio_codec = next((k for k in audio_codec_data if k != 'container'), None)
+                audio_profile_params = audio_codec_data[ffmpeg_audio_codec].get(options["recode_audio_profile_name"])
+                if audio_profile_params:
+                    final_ffmpeg_params.extend(audio_profile_params) # NOTA: Se cambió a .extend()
             else:
+                # Regla 3: Si ninguna de las anteriores es cierta, simplemente copiamos el audio original.
                 final_ffmpeg_params.extend(["-c:a", "copy"])
-            recode_opts = { "input_file": source_path, "output_file": final_recoded_path, "duration": self.video_duration, "ffmpeg_params": final_ffmpeg_params }
+
+            # Parámetros de Fragmento (pre_params)
+            pre_params = []
+            if options.get("fragment_enabled"):
+                if options.get("start_time"): pre_params.extend(['-ss', options.get("start_time")])
+                if options.get("end_time"): pre_params.extend(['-to', options.get("end_time")])
+            
+            # Selección de Pista de Audio
+            selected_audio_stream_index = None
+            if self.use_all_audio_tracks_check.get() == 1 and len(self.audio_formats) > 1:
+                selected_audio_stream_index = "all"
+            else:
+                selected_audio_info = self.audio_formats.get(self.audio_quality_menu.get(), {})
+                if selected_audio_info.get('format_id', '').startswith('local_audio_'):
+                    selected_audio_stream_index = int(selected_audio_info['format_id'].split('_')[-1])
+            
+            selected_video_label = self.video_quality_menu.get()
+            selected_video_info = self.video_formats.get(selected_video_label, {})
+            selected_video_stream_index = selected_video_info.get('index')
+
+            recode_opts = {
+                "input_file": source_path,
+                "output_file": temp_output_path,
+                "duration": self.video_duration,
+                "ffmpeg_params": final_ffmpeg_params,
+                "pre_params": pre_params,
+                "selected_audio_stream_index": selected_audio_stream_index,
+                "selected_video_stream_index": selected_video_stream_index, # <-- LÍNEA AÑADIDA
+                "mode": options['mode']
+            }
             self.ffmpeg_processor.execute_recode(recode_opts, self.update_progress, self.cancellation_event)
-            self.on_process_finished(True, "Recodificación local completada.", final_recoded_path)
+
+            if os.path.exists(temp_output_path):
+                os.rename(temp_output_path, final_output_path)
+            if backup_file_path and os.path.exists(backup_file_path):
+                os.remove(backup_file_path)
+
+            self.after(0, self.on_process_finished, True, "Recodificación local completada.", final_output_path)
         except (UserCancelledError, Exception) as e:
-            raise LocalRecodeFailedError(str(e), temp_filepath=final_recoded_path)
+            if os.path.exists(temp_output_path):
+                try: os.remove(temp_output_path)
+                except OSError as clean_e: print(f"ERROR: No se pudo eliminar el archivo temporal: {clean_e}")
+            if backup_file_path and os.path.exists(backup_file_path):
+                try: os.rename(backup_file_path, final_output_path)
+                except OSError as restore_e: print(f"ERROR CRÍTICO: No se pudo restaurar el respaldo: {restore_e}")
+            raise LocalRecodeFailedError(str(e), temp_filepath=temp_output_path)
+        
+    def _on_save_in_same_folder_change(self):
+        """
+        Actualiza el estado de la carpeta de salida según la casilla
+        'Guardar en la misma carpeta'.
+        """
+        # Comprueba si la casilla está marcada
+        if self.save_in_same_folder_check.get() == 1 and self.local_file_path:
+            # Si está marcada y hay un archivo local cargado:
+
+            # 1. Obtiene la ruta de la carpeta del archivo original
+            output_dir = os.path.dirname(self.local_file_path)
+
+            # 2. Habilita temporalmente la entrada para poder modificarla
+            self.output_path_entry.configure(state="normal")
+
+            # 3. Borra el contenido actual y muestra la nueva ruta
+            self.output_path_entry.delete(0, 'end')
+            self.output_path_entry.insert(0, output_dir)
+
+            # 4. Desactiva la entrada y el botón '...' para que no se puedan editar
+            self.output_path_entry.configure(state="disabled")
+            self.select_folder_button.configure(state="disabled")
+        else:
+            # Si la casilla está desmarcada o no estamos en modo local:
+
+            # 1. Habilita la entrada y el botón '...'
+            self.output_path_entry.configure(state="normal")
+            self.select_folder_button.configure(state="normal")
+
+            # 2. Restaura la última carpeta de salida que el usuario seleccionó
+            self.output_path_entry.delete(0, 'end')
+            self.output_path_entry.insert(0, self.default_download_path)
+            
+        self.update_download_button_state()
 
     def toggle_resolution_panel(self):
         if self.resolution_checkbox.get() == 1:
@@ -1344,15 +1791,24 @@ class MainWindow(ctk.CTk):
     def on_resolution_preset_change(self, preset):
         if preset == "Personalizado":
             self.resolution_manual_frame.grid()
+            if self.aspect_ratio_lock.get():
+                try:
+                    if hasattr(self, 'original_video_width') and self.original_video_width > 0:
+                        self.current_aspect_ratio = self.original_video_width / self.original_video_height
+                except (ValueError, ZeroDivisionError, AttributeError):
+                    self.current_aspect_ratio = None
         else:
             self.resolution_manual_frame.grid_remove()
             try:
                 dims = preset.split('(')[1].split(')')[0]
-                width, height = dims.split('x')
+                width_str, height_str = dims.split('x')
+                width, height = int(width_str), int(height_str)
                 self.width_entry.delete(0, 'end')
-                self.width_entry.insert(0, width)
+                self.width_entry.insert(0, width_str)
                 self.height_entry.delete(0, 'end')
-                self.height_entry.insert(0, height)
+                self.height_entry.insert(0, height_str)
+                if self.aspect_ratio_lock.get():
+                    self.current_aspect_ratio = width / height
             except Exception as e:
                 print(f"Error al parsear el preset de resolución: {e}")
 
@@ -1366,17 +1822,25 @@ class MainWindow(ctk.CTk):
         self.update_recode_container_label()
 
     def update_audio_codec_menu(self):
-        """Puebla el menú de códecs de audio disponibles."""
-        audio_codecs = list(self.ffmpeg_processor.available_encoders.get("CPU", {}).get("Audio", {}).keys())
-        if not audio_codecs:
-            audio_codecs = ["-"]
+        """Puebla el menú de códecs de audio, filtrando por compatibilidad con el contenedor de video."""
+        target_container = self.recode_container_label.cget("text")
         
-        self.recode_audio_codec_menu.configure(values=audio_codecs, state="normal" if audio_codecs[0] != "-" else "disabled")
+        # Obtenemos la lista de códecs compatibles usando nuestro nuevo motor
+        compatible_codecs = self._get_compatible_audio_codecs(target_container)
+        
+        if not compatible_codecs:
+            compatible_codecs = ["-"]
+
+        self.recode_audio_codec_menu.configure(values=compatible_codecs, state="normal" if compatible_codecs[0] != "-" else "disabled")
+        
         saved_codec = self.recode_settings.get("video_audio_codec")
-        if saved_codec and saved_codec in audio_codecs:
+        if saved_codec and saved_codec in compatible_codecs:
             self.recode_audio_codec_menu.set(saved_codec)
         else:
-            self.recode_audio_codec_menu.set(audio_codecs[0])
+            # Solo intenta acceder a [0] si la lista no está vacía.
+            if compatible_codecs:
+                self.recode_audio_codec_menu.set(compatible_codecs[0])
+            
         self.update_audio_profile_menu(self.recode_audio_codec_menu.get())
 
     def update_audio_profile_menu(self, selected_codec_name):
@@ -1488,6 +1952,7 @@ class MainWindow(ctk.CTk):
         self.update_estimated_size()
         self.save_settings()
         self._validate_recode_compatibility()
+        self.update_audio_codec_menu() 
 
     def update_download_button_state(self, *args):
         """
@@ -1498,6 +1963,26 @@ class MainWindow(ctk.CTk):
         else:
             self.analyze_button.configure(state="disabled")
         try:
+            # --- Validación de Tiempo de Fragmento ---
+            self.time_warning_label.configure(text="") # Oculta el mensaje por defecto
+            times_are_valid = True
+            if self.fragment_checkbox.get() == 1 and self.video_duration > 0:
+                start_str = self._get_formatted_time(self.start_h, self.start_m, self.start_s)
+                end_str = self._get_formatted_time(self.end_h, self.end_m, self.end_s)
+
+                start_seconds = self.time_str_to_seconds(start_str)
+                end_seconds = self.time_str_to_seconds(end_str)
+
+                if start_seconds >= self.video_duration:
+                    self.time_warning_label.configure(text="⚠ El tiempo de inicio no puede ser mayor a la duración.")
+                    times_are_valid = False
+                # Si hay un tiempo final, validarlo
+                elif end_seconds > 0 and end_seconds > self.video_duration:
+                    self.time_warning_label.configure(text="⚠ El tiempo final no puede ser mayor a la duración.")
+                    times_are_valid = False
+                elif end_seconds > 0 and start_seconds >= end_seconds:
+                    self.time_warning_label.configure(text="⚠ El tiempo de inicio debe ser menor que el final.")
+                    times_are_valid = False
             url_is_present = bool(self.url_entry.get())
             local_file_is_present = self.local_file_path is not None
             output_path_is_present = bool(self.output_path_entry.get())
@@ -1518,11 +2003,13 @@ class MainWindow(ctk.CTk):
                         bitrate_ok = False
                 if not processor_selected or not bitrate_ok:
                     recode_config_is_valid = False
-            action_is_selected_for_local_mode = True 
+            action_is_selected_for_local_mode = True
             if local_file_is_present:
-                if not is_video_recode_on and not is_audio_recode_on:
+                # Una acción es válida si se recodifica video, O se recodifica audio, O se corta un fragmento.
+                is_fragment_clip_on = self.fragment_checkbox.get() == 1
+                if not is_video_recode_on and not is_audio_recode_on and not is_fragment_clip_on:
                     action_is_selected_for_local_mode = False
-            if base_conditions_met and recode_config_is_valid and action_is_selected_for_local_mode and self.recode_compatibility_status in ["valid", "warning"]:
+            if base_conditions_met and recode_config_is_valid and action_is_selected_for_local_mode and self.recode_compatibility_status in ["valid", "warning"] and times_are_valid:
                 self.download_button.configure(state="normal")
             else:
                 self.download_button.configure(state="disabled")
@@ -1610,10 +2097,18 @@ class MainWindow(ctk.CTk):
         is_video_recode = self.recode_video_checkbox.get() == 1
         is_audio_recode = self.recode_audio_checkbox.get() == 1
         is_audio_only_mode = self.mode_selector.get() == "Solo Audio"
-        if is_video_recode or is_audio_recode:
-            self.keep_original_checkbox.configure(state="normal")
-        else:
+
+        if self.local_file_path:
+            # En modo local, la casilla siempre está marcada y deshabilitada para proteger el archivo.
+            self.keep_original_checkbox.select()
             self.keep_original_checkbox.configure(state="disabled")
+        else:
+            # En modo URL, la habilitación depende de si hay una recodificación activa.
+            if is_video_recode or is_audio_recode:
+                self.keep_original_checkbox.configure(state="normal")
+            else:
+                self.keep_original_checkbox.configure(state="disabled")
+
         if is_video_recode and not is_audio_only_mode:
             if not self.recode_options_frame.winfo_ismapped():
                 self.proc_type_var.set("")
@@ -1642,12 +2137,11 @@ class MainWindow(ctk.CTk):
 
     def _validate_recode_compatibility(self):
         """Valida la compatibilidad de las opciones de recodificación y actualiza la UI."""
+        self.recode_warning_frame.pack_forget()
         mode = self.mode_selector.get()
         is_video_recode = self.recode_video_checkbox.get() == 1 and mode == "Video+Audio"
         is_audio_recode = self.recode_audio_checkbox.get() == 1
 
-        # Limpiar y salir si no hay nada que validar
-        self.recode_warning_label.pack_forget()
         if not is_video_recode and not is_audio_recode:
             self.recode_compatibility_status = "valid"
             self.update_download_button_state()
@@ -1704,15 +2198,23 @@ class MainWindow(ctk.CTk):
                     status, message = "warning", f"⚠️ El video original ({original_vcodec}) no es estándar en {target_container}. Se recomienda recodificar."
 
         if status in ["valid", "warning"]:
-            if is_audio_recode:
-                ffmpeg_acodec = get_ffmpeg_codec_name(self.recode_audio_codec_menu.get(), "CPU", "Audio")
-                if ffmpeg_acodec and ffmpeg_acodec not in allowed_audio:
-                    status, message = "error", f"❌ El códec de audio ({self.recode_audio_codec_menu.get()}) no es compatible con {target_container}."
-            elif mode == "Video+Audio":
-                if original_acodec not in allowed_audio and original_acodec != 'none':
-                    status, message = "warning", f"⚠️ El audio original ({original_acodec}) no es compatible con {target_container}. Se recomienda recodificar."
+            is_pro_video_format = False
+            if is_video_recode:
+                codec_name = self.recode_codec_menu.get()
+                if "ProRes" in codec_name or "DNxH" in codec_name:
+                    is_pro_video_format = True
+            
+            if is_pro_video_format and not is_audio_recode and original_acodec in ['aac', 'mp3', 'opus', 'vorbis']:
+                status, message = "error", f"❌ Incompatible: No se puede copiar audio {original_acodec.upper()} a un video {codec_name}. Debes recodificar el audio a un formato sin compresión (ej: WAV)."
+            else:
+                if is_audio_recode:
+                    ffmpeg_acodec = get_ffmpeg_codec_name(self.recode_audio_codec_menu.get(), "CPU", "Audio")
+                    if ffmpeg_acodec and ffmpeg_acodec not in allowed_audio:
+                        status, message = "error", f"❌ El códec de audio ({self.recode_audio_codec_menu.get()}) no es compatible con {target_container}."
+                elif mode == "Video+Audio":
+                    if original_acodec not in allowed_audio and original_acodec != 'none':
+                        status, message = "warning", f"⚠️ El audio original ({original_acodec}) no es estándar en {target_container}. Se recomienda recodificar."
 
-        # --- LÓGICA DE VISUALIZACIÓN CORREGIDA ---
         self.recode_compatibility_status = status
         
         if status == "valid":
@@ -1721,8 +2223,22 @@ class MainWindow(ctk.CTk):
         else:
             color = "#E54B4B" if status == "error" else "#E5A04B"
             self.recode_warning_label.configure(text=message, text_color=color)
-        
-        self.recode_warning_label.pack(pady=5, padx=5) # Siempre mostramos la etiqueta
+
+        self.recode_warning_frame.pack(after=self.recode_toggle_frame, pady=5, padx=10, fill="x")
+
+        if hasattr(self, 'use_all_audio_tracks_check') and self.use_all_audio_tracks_check.winfo_ismapped():
+            is_multi_track_available = len(self.audio_formats) > 1
+
+            # Si el contenedor final es uno de los de pista única
+            if target_container in self.SINGLE_STREAM_AUDIO_CONTAINERS:
+                # Desactivamos la casilla y la deseleccionamos
+                self.use_all_audio_tracks_check.configure(state="disabled")
+                self.use_all_audio_tracks_check.deselect()
+                self.audio_quality_menu.configure(state="normal")
+            # Si el contenedor SÍ soporta múltiples pistas Y hay varias pistas disponibles
+            elif is_multi_track_available:
+                # La activamos
+                self.use_all_audio_tracks_check.configure(state="normal")
         self.update_download_button_state()
 
     def toggle_fps_panel(self):
@@ -1794,37 +2310,69 @@ class MainWindow(ctk.CTk):
         self.save_settings()
 
     def on_mode_change(self, mode):
+        # 1. Ocultamos todos los elementos para empezar con un lienzo limpio
         self.format_warning_label.pack_forget()
         self.video_quality_label.pack_forget()
         self.video_quality_menu.pack_forget()
-        self.audio_quality_label.pack_forget()
-        self.audio_quality_menu.pack_forget()
+        if hasattr(self, 'audio_options_frame'):
+            self.audio_options_frame.pack_forget()
+
+        # 2. Reseteamos las casillas Y la selección de procesador (CPU/GPU)
         self.recode_video_checkbox.deselect()
         self.recode_audio_checkbox.deselect()
+        self.proc_type_var.set("") # <-- ESTO ES CLAVE PARA EL RESETEO
+
+        # 3. Mostramos los widgets en el orden correcto según el modo seleccionado
         if mode == "Video+Audio":
-            self.video_quality_label.pack(fill="x", padx=5, pady=(10,0))
-            self.video_quality_menu.pack(fill="x", padx=5, pady=(0,5))
-            self.audio_quality_label.pack(fill="x", padx=5, pady=(10,0))
-            self.audio_quality_menu.pack(fill="x", padx=5, pady=(0,5))
-            self.format_warning_label.pack(fill="x", padx=5, pady=(5,5))
+            # Orden: Video, luego Audio, luego advertencias
+            self.video_quality_label.pack(fill="x", padx=5, pady=(10, 0))
+            self.video_quality_menu.pack(fill="x", padx=5, pady=(0, 5))
+            if hasattr(self, 'audio_options_frame'):
+                self.audio_options_frame.pack(fill="x")
+            self.format_warning_label.pack(fill="x", padx=5, pady=(5, 5))
+
             self.recode_video_checkbox.grid()
             self.recode_audio_checkbox.configure(text="Recodificar Audio")
             self.on_video_quality_change(self.video_quality_menu.get())
+
         elif mode == "Solo Audio":
-            self.audio_quality_label.pack(fill="x", padx=5, pady=(10,0))
-            self.audio_quality_menu.pack(fill="x", padx=5, pady=(0,5))
-            self.format_warning_label.pack(fill="x", padx=5, pady=(5,5))
+            # Aquí solo mostramos el contenedor de audio
+            if hasattr(self, 'audio_options_frame'):
+                self.audio_options_frame.pack(fill="x")
+            self.format_warning_label.pack(fill="x", padx=5, pady=(5, 5))
+
             self.recode_video_checkbox.grid_remove()
             self.recode_audio_checkbox.configure(text="Activar Recodificación para Audio")
             self._update_warnings()
+
+        # 4. Forzamos la actualización de la UI y los menús de recodificación
         self.recode_main_frame._parent_canvas.yview_moveto(0)
         self.recode_main_frame.pack_forget()
         self.recode_main_frame.pack(pady=(10, 0), padx=5, fill="both", expand=True)
         self._toggle_recode_panels()
+        self.update_codec_menu()
+        self.update_audio_codec_menu()
+
+    def _on_use_all_audio_tracks_change(self):
+        """Gestiona el estado del menú de audio cuando el checkbox cambia."""
+        if self.use_all_audio_tracks_check.get() == 1:
+            self.audio_quality_menu.configure(state="disabled")
+        else:
+            self.audio_quality_menu.configure(state="normal")
 
     def on_video_quality_change(self, selected_label):
+        # Busca la información del formato de video seleccionado
         selected_format_info = self.video_formats.get(selected_label)
+
         if selected_format_info:
+            # Si el video seleccionado es [Combinado], deshabilita el menú de audio.
+            if selected_format_info.get('is_combined'):
+                self.audio_quality_menu.configure(state="disabled")
+            # Si es un video-solo, habilita el menú de audio para que se pueda elegir uno.
+            else:
+                self.audio_quality_menu.configure(state="normal")
+
+            # Actualiza la resolución en el panel de recodificación
             new_width = selected_format_info.get('width')
             new_height = selected_format_info.get('height')
             if new_width and new_height and hasattr(self, 'width_entry'):
@@ -1834,6 +2382,8 @@ class MainWindow(ctk.CTk):
                 self.height_entry.insert(0, str(new_height))
                 if self.aspect_ratio_lock.get():
                     self.on_aspect_lock_change()
+
+        # Actualiza las advertencias y validaciones como siempre
         self._update_warnings()
         self._validate_recode_compatibility()
 
@@ -1896,16 +2446,28 @@ class MainWindow(ctk.CTk):
         filename = re.sub(r'[\\/:\*\?"<>|]', '', filename)
         return filename
 
-    def create_placeholder_label(self, text="Miniatura"):
+    def create_placeholder_label(self, text="Miniatura", font_size=14):
         if self.thumbnail_label: self.thumbnail_label.destroy()
-        self.thumbnail_label = ctk.CTkLabel(self.thumbnail_container, text=text)
+        font = ctk.CTkFont(size=font_size)
+        self.thumbnail_label = ctk.CTkLabel(self.thumbnail_container, text=text, font=font)
         self.thumbnail_label.pack(expand=True, fill="both")
         self.pil_image = None
         if hasattr(self, 'save_thumbnail_button'): self.save_thumbnail_button.configure(state="disabled")
-        if hasattr(self, 'auto_save_thumbnail_check'): self.auto_save_thumbnail_check.deselect()
+        if hasattr(self, 'auto_save_thumbnail_check'):
+            self.auto_save_thumbnail_check.deselect()
+            self.auto_save_thumbnail_check.configure(state="normal")
+
+    def _on_cookie_detail_change(self, event=None):
+        """Callback for when specific cookie details (path, browser, profile) change."""
+        print("DEBUG: Cookie details changed. Clearing analysis cache.")
+        self.analysis_cache.clear()
+        self.save_settings()
 
     def on_cookie_mode_change(self, mode):
         """Muestra u oculta las opciones de cookies según el modo seleccionado."""
+        print("DEBUG: Cookie mode changed. Clearing analysis cache.")
+        self.analysis_cache.clear()
+
         if mode == "Archivo Manual...":
             self.manual_cookie_frame.pack(fill="x", padx=10, pady=(0, 10))
             self.browser_options_frame.pack_forget()
@@ -1993,13 +2555,15 @@ class MainWindow(ctk.CTk):
             return f"{original_lang} (Trad. a {translated_lang})"
 
     def on_subtitle_selection_change(self, selected_type):
-        """Se ejecuta cuando el usuario selecciona un tipo/formato de subtítulo."""
+        """
+        Se ejecuta cuando el usuario selecciona un tipo/formato de subtítulo.
+        CORREGIDO: Ahora muestra la opción de conversión para CUALQUIER formato que no sea SRT.
+        """
         self.selected_subtitle_info = self.current_subtitle_map.get(selected_type)
-        karaoke_capable_formats = ['vtt', 'ass']
         should_show_option = False
         if self.selected_subtitle_info:
             subtitle_ext = self.selected_subtitle_info.get('ext')
-            if subtitle_ext in karaoke_capable_formats:
+            if subtitle_ext != 'srt':
                 should_show_option = True
         is_visible = self.clean_subtitle_check.winfo_ismapped()
         if should_show_option:
@@ -2060,27 +2624,34 @@ class MainWindow(ctk.CTk):
             try:
                 if save_path.lower().endswith((".jpg", ".jpeg")): self.pil_image.convert("RGB").save(save_path, quality=95)
                 else: self.pil_image.save(save_path)
+                self.last_download_path = save_path
+                self.open_folder_button.configure(state="normal")
                 self.update_progress(100, f"Miniatura guardada en {os.path.basename(save_path)}")
             except Exception as e: self.update_progress(0, f"Error al guardar miniatura: {e}")
 
     def _execute_subtitle_download_subprocess(self, url, subtitle_info, save_path):
         """
-        Descarga un subtítulo detectando el nuevo archivo creado en la carpeta,
-        evitando así todos los problemas de nombres y codificación.
+        Descarga un subtítulo detectando el nuevo archivo creado en la carpeta.
+        CORREGIDO: Se simplificó la construcción del comando para evitar errores.
         """
         try:
             output_dir = os.path.dirname(save_path)
             files_before = set(os.listdir(output_dir))
             lang_code = subtitle_info['lang']
-            sub_format = subtitle_info['ext']
-            output_template = os.path.join(output_dir, f"{self.sanitize_filename(self.title_entry.get())}.%(ext)s")
+            base_name_with_ext = os.path.basename(save_path)
+            base_name = os.path.splitext(base_name_with_ext)[0]
+            output_template = os.path.join(output_dir, f"{base_name}.%(ext)s")
             command = [
                 'yt-dlp', '--no-warnings', '--write-sub',
-                '--sub-format', sub_format,
                 '--sub-langs', lang_code,
                 '--skip-download', '--no-playlist',
                 '-o', output_template 
             ]
+            if self.clean_subtitle_check.winfo_ismapped() and self.clean_subtitle_check.get() == 1:
+                command.extend(['--sub-format', 'best/vtt/best'])
+                command.extend(['--convert-subs', 'srt'])
+            else:
+                command.extend(['--sub-format', subtitle_info['ext']])
             if subtitle_info.get('automatic', False):
                 command.append('--write-auto-sub')
             cookie_mode = self.cookie_mode_menu.get()
@@ -2091,30 +2662,40 @@ class MainWindow(ctk.CTk):
                 profile = self.browser_profile_entry.get()
                 if profile: browser_arg += f":{profile}"
                 command.extend(['--cookies-from-browser', browser_arg])
+            command.extend(['--ffmpeg-location', self.ffmpeg_processor.ffmpeg_path])    
             command.append(url)
             self.after(0, self.update_progress, 0, "Iniciando proceso de yt-dlp...")
             print(f"\n\nDEBUG: Comando final enviado a yt-dlp:\n{' '.join(command)}\n\n")
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='ignore', creationflags=creationflags)
-            for line in iter(process.stdout.readline, ''): print(line.strip())
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore', creationflags=creationflags)
+            stdout_lines = []
+            stderr_lines = []
+            def read_stream(stream, lines_buffer):
+                for line in iter(stream.readline, ''):
+                    lines_buffer.append(line.strip())
+            stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, stdout_lines))
+            stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_lines))
+            stdout_thread.start()
+            stderr_thread.start()
+            stdout_thread.join()
+            stderr_thread.join()
             process.wait()
             print("--- [yt-dlp finished] ---\n")
             if process.returncode != 0:
-                raise Exception("El proceso de yt-dlp falló (ver consola para detalles).")
+                full_error_output = "\n".join(stdout_lines) + "\n" + "\n".join(stderr_lines)
+                raise Exception(f"El proceso de yt-dlp falló:\n{full_error_output}")
             files_after = set(os.listdir(output_dir))
             new_files = files_after - files_before
             if not new_files:
-                raise FileNotFoundError("yt-dlp terminó, pero no se detectó ningún archivo nuevo en la carpeta.")
+                raise FileNotFoundError("yt-dlp terminó, pero no se detectó ningún archivo de subtítulo nuevo.")
             new_filename = new_files.pop()
             final_output_path = os.path.join(output_dir, new_filename)
-            if self.clean_subtitle_check.winfo_ismapped() and self.clean_subtitle_check.get() == 1:
-                self.after(0, self.update_progress, 90, "Revisando y convirtiendo formato...")
+            if final_output_path.lower().endswith('.srt'):
+                self.after(0, self.update_progress, 90, "Limpiando y estandarizando formato SRT...")
                 final_output_path = clean_and_convert_vtt_to_srt(final_output_path)
-            self.after(0, self.update_progress, 100, f"Subtítulo guardado en {os.path.basename(final_output_path)}")
+            self.after(0, self.on_process_finished, True, f"Subtítulo guardado en {os.path.basename(final_output_path)}", final_output_path)
         except Exception as e:
-            self.after(0, self.update_progress, 0, f"Error: {e}")
-        finally:
-            self.after(0, self._reset_buttons_to_original_state)
+            self.after(0, self.on_process_finished, False, f"Error al descargar subtítulo: {e}", None)
 
     def save_subtitle(self):
         """
@@ -2210,28 +2791,30 @@ class MainWindow(ctk.CTk):
             "res_height": self.height_entry.get(),
             "no_upscaling_enabled": self.no_upscaling_checkbox.get() == 1,
             "original_width": self.original_video_width,
-            "original_height": self.original_video_height
+            "original_height": self.original_video_height,
+            "fragment_enabled": self.fragment_checkbox.get() == 1,
+            "start_time": self._get_formatted_time(self.start_h, self.start_m, self.start_s),
+            "end_time": self._get_formatted_time(self.end_h, self.end_m, self.end_s),
+            "keep_original_on_clip": self.keep_original_on_clip_check.get() == 1 # <--- AÑADE ESTA LÍNEA
         }
         self.active_operation_thread = threading.Thread(target=self._execute_download_and_recode, args=(options,), daemon=True)
         self.active_operation_thread.start()
 
     def _execute_download_and_recode(self, options):
         if self.local_file_path:
-        # Si estamos en modo local, llamamos a la función especialista
             try:
                 self._execute_local_recode(options)
             except (LocalRecodeFailedError, UserCancelledError) as e:
-                # Si la función especialista falla, limpiamos los archivos temporales
                 if isinstance(e, LocalRecodeFailedError) and e.temp_filepath and os.path.exists(e.temp_filepath):
                     try:
                         os.remove(e.temp_filepath)
                         print(f"DEBUG: Archivo temporal de recodificación eliminado: {e.temp_filepath}")
                     except OSError as a:
                         print(f"ERROR: No se pudo eliminar el archivo temporal '{e.temp_filepath}': {a}")
-                self.on_process_finished(False, str(e), None)
+                self.after(0, self.on_process_finished, False, str(e), None)
             finally:
                 self.active_operation_thread = None
-            return # Terminamos aquí para el modo local
+            return
         process_successful = False
         downloaded_filepath = None
         recode_phase_started = False
@@ -2239,32 +2822,33 @@ class MainWindow(ctk.CTk):
         final_recoded_path = None
         cleanup_required = True
         user_facing_title = "" 
-
+        backup_file_path = None
+        audio_extraction_fallback = False
+        temp_video_for_extraction = None
         try:
+            if options["mode"] == "Solo Audio" and not self.audio_formats and self.video_formats:
+                audio_extraction_fallback = True
+                print("DEBUG: No hay pistas de audio dedicadas. Se activó el fallback de extracción desde el video.")
+                best_video_label = next(iter(self.video_formats))
+                options["video_format_label"] = best_video_label
             final_output_path_str = options["output_path"]
             user_facing_title = self.sanitize_filename(options['title'])
             output_path = Path(final_output_path_str)
             title_to_check = user_facing_title
-
             VIDEO_EXTS = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.flv', '.mts', '.m2ts']
             AUDIO_EXTS = ['.mp3', '.m4a', '.wav', '.flac', '.ogg', '.opus', '.aac']
             conflicting_file = None
             for f in output_path.iterdir():
-                # Comparamos el nombre del archivo sin la extensión
                 if f.is_file() and f.stem.lower() == title_to_check.lower():
-                    # Verificamos si la extensión corresponde a un video o audio
                     if f.suffix.lower() in VIDEO_EXTS or f.suffix.lower() in AUDIO_EXTS:
                         conflicting_file = f
                         break
-            
-            overwrite_allowed = False
             if conflicting_file:
                 self.ui_request_data = {"type": "ask_conflict", "filename": conflicting_file.name}
                 self.ui_response_event.clear()
                 self.ui_request_event.set()
                 self.ui_response_event.wait()
                 user_choice = self.ui_response_data.get("result", "cancel")
-
                 if user_choice == "cancel":
                     cleanup_required = False
                     raise UserCancelledError("Operación cancelada por el usuario en conflicto de archivo.")
@@ -2278,92 +2862,237 @@ class MainWindow(ctk.CTk):
                             break
                         counter += 1
                 elif user_choice == "overwrite":
-                    overwrite_allowed = True
-
-            if self.local_file_path:
-                self.after(0, self.update_progress, 0, "Usando archivo local como fuente...")
-                downloaded_filepath = self.local_file_path
-                cleanup_required = False
-                if self.save_in_same_folder_check.get() == 1:
-                    final_output_path_str = os.path.dirname(self.local_file_path)
+                    try:
+                        backup_file_path = str(conflicting_file) + ".bak"
+                        if os.path.exists(backup_file_path): os.remove(backup_file_path)
+                        os.rename(conflicting_file, backup_file_path)
+                    except OSError as e:
+                        raise Exception(f"No se pudo respaldar el archivo original: {e}")
+            self.after(0, self.update_progress, 0, "Iniciando descarga...")
+            cleanup_required = True
+            video_format_info = self.video_formats.get(options["video_format_label"], {})
+            audio_format_info = self.audio_formats.get(options["audio_format_label"], {})
+            mode = options["mode"]
+            output_template = os.path.join(options["output_path"], f"{user_facing_title}.%(ext)s")
+            precise_selector = ""
+            video_format_info = self.video_formats.get(options["video_format_label"], {})
+            audio_format_info = self.audio_formats.get(options["audio_format_label"], {})
+            video_format_id = video_format_info.get('format_id')
+            audio_format_id = audio_format_info.get('format_id')
+            if audio_extraction_fallback:
+                precise_selector = video_format_id
+                print(f"DEBUG: Fallback activado. Selector de descarga forzado: {precise_selector}")
+            elif options["mode"] == "Video+Audio":
+                is_combined = video_format_info.get('is_combined', False)
+                if is_combined and video_format_id:
+                    precise_selector = video_format_id
+                elif video_format_id and audio_format_id:
+                    precise_selector = f"{video_format_id}+{audio_format_id}"
+            elif options["mode"] == "Solo Audio":
+                precise_selector = audio_format_id
             else:
-                self.after(0, self.update_progress, 0, "Iniciando descarga...")
-                cleanup_required = True
-
-                video_format_id = self.video_formats.get(options["video_format_label"], {}).get('format_id')
-                audio_format_id = self.audio_formats.get(options["audio_format_label"], {}).get('format_id')
-                format_selector = ""
-                postprocessors = []
-                mode = options["mode"]
-                output_template = os.path.join(str(output_path), f"{user_facing_title}.%(ext)s")
-
+                video_format_id = video_format_info.get('format_id')
+                audio_format_id = audio_format_info.get('format_id')
                 if mode == "Video+Audio":
-                    format_selector = f"{video_format_id}+{audio_format_id}" if video_format_id and audio_format_id else video_format_id or audio_format_id
+                    is_combined = video_format_info.get('is_combined', False)
+                    if is_combined and video_format_id:
+                        precise_selector = video_format_id
+                    elif video_format_id and audio_format_id:
+                        precise_selector = f"{video_format_id}+{audio_format_id}"
                 elif mode == "Solo Audio":
-                    format_selector = audio_format_id
-
-                if getattr(sys, 'frozen', False):
-                    project_root = os.path.dirname(sys.executable)
-                else:
-                    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-                bin_dir = os.path.join(project_root, "bin")
-
-                ydl_opts = {
-                    'format': format_selector, 
-                    'outtmpl': output_template,
-                    'postprocessors': postprocessors, 
-                    'noplaylist': True,
-                    'ffmpeg_location': bin_dir,
-                    'retries': 5,
-                    'fragment_retries': 5,
-                }
-
-                if overwrite_allowed:
-                    ydl_opts['overwrites'] = True
-                if options["download_subtitles"] and options.get("selected_subtitle_info"):
-                    subtitle_info = options["selected_subtitle_info"]
-                    if subtitle_info:
-                        ydl_opts.update({
-                            'writesubtitles': True,
-                            'subtitleslangs': [subtitle_info['lang']],
-                            'subtitlesformat': subtitle_info.get('ext', 'best'),
-                            'writeautomaticsub': subtitle_info.get('automatic', False),
-                            'embedsubtitles': mode == "Video+Audio"
-                        })
-                if options["speed_limit"]:
-                    try: ydl_opts['ratelimit'] = float(options["speed_limit"]) * 1024 * 1024
-                    except ValueError: pass
-
-                cookie_mode = options["cookie_mode"]
-                if cookie_mode == "Archivo Manual..." and options["cookie_path"]: ydl_opts['cookiefile'] = options["cookie_path"]
-                elif cookie_mode != "No usar":
-                    browser_arg = options["selected_browser"]
-                    if options["browser_profile"]: browser_arg += f":{options['browser_profile']}"
-                    ydl_opts['cookiesfrombrowser'] = (browser_arg,)
-
+                    precise_selector = audio_format_id
+            if getattr(sys, 'frozen', False):
+                project_root = os.path.dirname(sys.executable)
+            else:
+                project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+            bin_dir = os.path.join(project_root, "bin")
+            ydl_opts = {
+                'outtmpl': output_template,
+                'postprocessors': [],
+                'noplaylist': True,
+                'ffmpeg_location': self.ffmpeg_processor.ffmpeg_path,
+                'retries': 2,
+                'fragment_retries': 2,
+                'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                'referer': options["url"],
+            }
+            if mode == "Solo Audio" and audio_format_info.get('extract_only'):
+                ydl_opts['postprocessors'] = [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }]
+            if options["download_subtitles"] and options.get("selected_subtitle_info"):
+                subtitle_info = options["selected_subtitle_info"]
+                if subtitle_info:
+                    ydl_opts.update({
+                        'writesubtitles': True,
+                        'subtitleslangs': [subtitle_info['lang']],
+                        'subtitlesformat': subtitle_info.get('ext', 'best'),
+                        'writeautomaticsub': subtitle_info.get('automatic', False),
+                        'embedsubtitles': mode == "Video+Audio"
+                    })
+            if options["speed_limit"]:
+                try: ydl_opts['ratelimit'] = float(options["speed_limit"]) * 1024 * 1024
+                except ValueError: pass
+            cookie_mode = options["cookie_mode"]
+            if cookie_mode == "Archivo Manual..." and options["cookie_path"]: ydl_opts['cookiefile'] = options["cookie_path"]
+            elif cookie_mode != "No usar":
+                browser_arg = options["selected_browser"]
+                if options["browser_profile"]: browser_arg += f":{options['browser_profile']}"
+                ydl_opts['cookiesfrombrowser'] = (browser_arg,)
+                
+            if audio_extraction_fallback:
+                precise_selector = video_format_info.get('format_id')
+                if not precise_selector:
+                    raise Exception("No se pudo determinar un formato de video para el fallback.")
+                ydl_opts['format'] = precise_selector
+                print(f"DEBUG: [FALLBACK] Intentando descarga directa del video combinado: {precise_selector}")
                 downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                temp_video_for_extraction = downloaded_filepath
+            else:
+                try:
+                    try:
+                        precise_selector = None
+                        video_format_id = video_format_info.get('format_id')
+                        audio_format_id = audio_format_info.get('format_id')
+                        if mode == "Video+Audio":
+                            if video_format_info.get('is_combined'):
+                                precise_selector = video_format_id
+                            elif video_format_id and audio_format_id:
+                                precise_selector = f"{video_format_id}+{audio_format_id}"
+                            elif video_format_id: 
+                                precise_selector = video_format_id
+                        elif mode == "Solo Audio":
+                            precise_selector = audio_format_id
+                        if not precise_selector:
+                            raise yt_dlp.utils.DownloadError("Selector preciso no válido o no se seleccionaron formatos.")
+                        ydl_opts['format'] = precise_selector
+                        print(f"DEBUG: PASO 1: Intentando con selector preciso: {precise_selector}")
+                        downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                        if audio_extraction_fallback:
+                            temp_video_for_extraction = downloaded_filepath
+                    except yt_dlp.utils.DownloadError as e:
+                        print(f"DEBUG: Falló la descarga directa. Error: {e}")
+                        print("DEBUG: PASO 1 FALLÓ. Pasando al Paso 2.")
+                        try:
+                            info_dict = self.analysis_cache.get(options["url"], {}).get('data', {})
+                            selected_audio_details = next((f for f in info_dict.get('formats', []) if f.get('format_id') == audio_format_id), None)
+                            language_code = selected_audio_details.get('language') if selected_audio_details else None
+                            
+                            strict_flexible_selector = ""
+                            if self.has_audio_streams:
+                                if mode == "Video+Audio":
+                                    height = video_format_info.get('height')
+                                    video_selector = f'bv[height={height}]' if height else 'bv' 
+                                    audio_selector = f'ba[lang={language_code}]' if language_code else 'ba'
+                                    strict_flexible_selector = f'{video_selector}+{audio_selector}'
+                                elif mode == "Solo Audio":
+                                    strict_flexible_selector = f'ba[lang={language_code}]' if language_code else 'ba'
+                            else: 
+                                height = video_format_info.get('height')
+                                strict_flexible_selector = f'bv[height={height}]' if height else 'bv'
+                            ydl_opts['format'] = strict_flexible_selector
+                            print(f"DEBUG: PASO 2: Intentando con selector estricto-flexible: {strict_flexible_selector}")
+                            downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                        except yt_dlp.utils.DownloadError:
+                            print("DEBUG: PASO 2 FALLÓ. Pasando al Paso 3.")
+                            details_ready_event = threading.Event()
+                            compromise_details = {"text": "Obteniendo detalles..."}
+                            def get_details_thread():
+                                """Este hilo ejecuta la simulación en segundo plano."""
+                                compromise_details["text"] = self._get_best_available_info(options["url"], options)
+                                details_ready_event.set() 
+                            self.after(0, self.update_progress, 50, "Calidad no disponible. Obteniendo detalles de alternativa...")
+                            threading.Thread(target=get_details_thread, daemon=True).start()
+                            details_ready_event.wait() 
+                            self.ui_request_data = {"type": "ask_compromise", "details": compromise_details["text"]}
+                            self.ui_response_event.clear()
+                            self.ui_request_event.set()
+                            self.ui_response_event.wait()
+                            user_choice = self.ui_response_data.get("result", "cancel")
+                            if user_choice == "accept":
+                                print("DEBUG: PASO 4: El usuario aceptó. Intentando con selector final.")
+                                final_selector = 'ba'
+                                if mode == "Video+Audio":
+                                    final_selector = 'bv+ba' if self.has_audio_streams else 'bv'
+                                ydl_opts['format'] = final_selector
+                                downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                            else:
+                                raise UserCancelledError("Descarga cancelada por el usuario en el diálogo de compromiso.")
+                except Exception as final_e:
+                        raise final_e
+                if not downloaded_filepath or not os.path.exists(downloaded_filepath):
+                        raise Exception("La descarga falló o el archivo no se encontró.")
+                is_fragment_mode = options.get("fragment_enabled") and (options.get("start_time") or options.get("end_time"))
+                if is_fragment_mode:
+                        self.after(0, self.update_progress, 98, "Descarga completa. Cortando fragmento con ffmpeg...")
+                        original_full_video_path = downloaded_filepath
+                        
+                        base_name, ext = os.path.splitext(os.path.basename(original_full_video_path))
+                        clipped_filename = f"{base_name}_fragmento{ext}"
+                        clipped_filepath = os.path.join(os.path.dirname(original_full_video_path), clipped_filename)
 
-            if self.clean_subtitle_check.get() and ydl_opts.get('writesubtitles'):
-                base_name = os.path.splitext(downloaded_filepath)[0]
-                lang_code = ydl_opts['subtitleslangs'][0]
-                vtt_path = f"{base_name}.{lang_code}.vtt" 
-                if os.path.exists(vtt_path):
-                    self.after(0, self.update_progress, 95, "Simplificando subtítulo...")
-                    clean_and_convert_vtt_to_srt(vtt_path)
+                        pre_params = []
+                        if options.get("start_time"): pre_params.extend(['-ss', options.get("start_time")])
+                        if options.get("end_time"): pre_params.extend(['-to', options.get("end_time")])
 
-            if not downloaded_filepath or not os.path.exists(downloaded_filepath):
-                raise Exception("La descarga falló o el archivo no se encontró.")
+                        clip_opts = {
+                            "input_file": original_full_video_path, "output_file": clipped_filepath,
+                            "ffmpeg_params": [], "pre_params": pre_params
+                        }
+                        self.ffmpeg_processor.execute_recode(clip_opts, lambda p, m: None, self.cancellation_event)
+                        downloaded_filepath = clipped_filepath # El nuevo archivo de trabajo es el fragmento
+                        try: # Limpiamos el archivo completo original
+                            # Solo borra el original si el usuario NO marcó la casilla para conservarlo
+                            if not options.get("keep_original_on_clip"):
+                                os.remove(original_full_video_path)
+                        except OSError as err:
+                            print(f"ADVERTENCIA: No se pudo eliminar el archivo completo original: {err}")
+                                  
             if self.cancellation_event.is_set():
                 raise UserCancelledError("Proceso cancelado por el usuario.")
-            
             self._save_thumbnail_if_enabled(downloaded_filepath)
-
+            if options.get("download_subtitles") and self.clean_subtitle_check.get() == 1:
+                self.after(0, self.update_progress, 99, "Limpiando subtítulo descargado...")
+                subtitle_info = options.get("selected_subtitle_info")
+                if subtitle_info:
+                    try:
+                        output_dir = os.path.dirname(downloaded_filepath)
+                        base_name = os.path.splitext(os.path.basename(downloaded_filepath))[0]
+                        expected_sub_path = os.path.join(output_dir, f"{base_name}.{subtitle_info['lang']}.{subtitle_info['ext']}")
+                        if not os.path.exists(expected_sub_path):
+                            expected_sub_path = os.path.join(output_dir, f"{base_name}.{subtitle_info['ext']}")
+                        if os.path.exists(expected_sub_path):
+                            print(f"DEBUG: Encontrado subtítulo para limpieza automática en: {expected_sub_path}")
+                            clean_and_convert_vtt_to_srt(expected_sub_path)
+                        else:
+                            print(f"ADVERTENCIA: No se encontró el archivo de subtítulo '{expected_sub_path}' para la limpieza automática.")
+                    except Exception as sub_e:
+                        print(f"ADVERTENCIA: Falló la limpieza automática del subtítulo: {sub_e}")
+            if audio_extraction_fallback:
+                self.after(0, self.update_progress, 95, "Extrayendo pista de audio...")
+                audio_ext = audio_format_info.get('ext', 'm4a')
+                final_audio_path = os.path.join(final_output_path_str, f"{user_facing_title}.{audio_ext}")
+                downloaded_filepath = self.ffmpeg_processor.extract_audio(
+                    input_file=temp_video_for_extraction,
+                    output_file=final_audio_path,
+                    duration=self.video_duration,
+                    progress_callback=self.update_progress,
+                    cancellation_event=self.cancellation_event
+                )
+                try:
+                    os.remove(temp_video_for_extraction)
+                    print(f"DEBUG: Video temporal '{temp_video_for_extraction}' eliminado.")
+                    temp_video_for_extraction = None 
+                except OSError as e:
+                    print(f"ADVERTENCIA: No se pudo eliminar el video temporal: {e}")
             if options.get("recode_video_enabled") or options.get("recode_audio_enabled"):
                 recode_phase_started = True
                 self.after(0, self.update_progress, 0, "Preparando recodificación...")
                 final_title = user_facing_title + "_recoded"
                 final_ffmpeg_params = []
-
+                final_ffmpeg_params.extend(["-metadata:s:v:0", "rotate=0"])
                 mode = options["mode"]
                 if mode == "Video+Audio":
                     if options["recode_video_enabled"]:
@@ -2371,11 +3100,9 @@ class MainWindow(ctk.CTk):
                         codec_db = self.ffmpeg_processor.available_encoders[proc]["Video"]
                         codec_data = codec_db.get(options["recode_codec_name"])
                         if not codec_data: raise Exception("Codec de video no encontrado.")
-
                         ffmpeg_codec_name = list(filter(lambda k: k != 'container', codec_data.keys()))[0]
                         profile_params = codec_data[ffmpeg_codec_name].get(options["recode_profile_name"])
                         if not profile_params: raise Exception("Perfil de recodificación de video no válido.")
-
                         if "CUSTOM_BITRATE" in profile_params:
                             try:
                                 bitrate_mbps = float(self.custom_bitrate_entry.get())
@@ -2391,13 +3118,10 @@ class MainWindow(ctk.CTk):
                                 profile_params = f"-c:v {ffmpeg_codec_name} -quality balanced -rc {rc_mode} -b:v {bitrate_k}k -maxrate {bitrate_k}k"
                             else:
                                 profile_params = f"-c:v {ffmpeg_codec_name} -b:v {bitrate_k}k -maxrate {bitrate_k}k -bufsize {bitrate_k*2}k -pix_fmt yuv420p"
-
-                        final_ffmpeg_params.extend(profile_params.split())
-
+                        final_ffmpeg_params.extend(profile_params)
                         video_filters = []
                         if options.get("fps_force_enabled") and options.get("fps_value"):
                             video_filters.append(f'fps={options["fps_value"]}')
-
                         if options.get("resolution_change_enabled"):
                             try:
                                 width, height = int(options["res_width"]), int(options["res_height"])
@@ -2407,111 +3131,153 @@ class MainWindow(ctk.CTk):
                                     if original_height > 0 and height > original_height: height = original_height
                                 video_filters.append(f'scale={width}:{height}')
                             except (ValueError, TypeError): pass
-
                         if video_filters:
                             final_ffmpeg_params.extend(['-vf', ",".join(video_filters)])
                     else:
                         final_ffmpeg_params.extend(["-c:v", "copy"])
-
                 if options["recode_audio_enabled"]:
                     audio_codec_db = self.ffmpeg_processor.available_encoders["CPU"]["Audio"]
                     audio_codec_data = audio_codec_db.get(options["recode_audio_codec_name"])
                     if audio_codec_data:
                         ffmpeg_audio_codec = list(filter(lambda k: k != 'container', audio_codec_data.keys()))[0]
                         audio_profile_params = audio_codec_data[ffmpeg_audio_codec].get(options["recode_audio_profile_name"])
-                        if audio_profile_params: final_ffmpeg_params.extend(audio_profile_params.split())
+                        if audio_profile_params:
+                            final_ffmpeg_params.extend(audio_profile_params)
                 elif mode == "Video+Audio":
                     final_ffmpeg_params.extend(["-c:a", "copy"])
-
                 final_container = options["recode_container"]
                 final_recoded_path = os.path.join(final_output_path_str, f"{final_title}{final_container}")
-
                 recode_opts = {
                     "input_file": downloaded_filepath,
                     "output_file": final_recoded_path,
                     "duration": self.video_duration,
                     "ffmpeg_params": final_ffmpeg_params
                 }
-
                 final_path_from_recode = self.ffmpeg_processor.execute_recode(recode_opts, self.update_progress, self.cancellation_event)
-
                 if not options.get("keep_original_file", False):
                     if os.path.exists(downloaded_filepath):
                         os.remove(downloaded_filepath)
-
-                self.on_process_finished(True, "Recodificación completada", final_path_from_recode)
+                self.after(0, self.on_process_finished, True, "Recodificación completada", final_path_from_recode)
                 process_successful = True
             else: 
-                self.on_process_finished(True, "Descarga completada", downloaded_filepath)
+                self.after(0, self.on_process_finished, True, "Descarga completada", downloaded_filepath)
                 process_successful = True
-
-        except (UserCancelledError, Exception) as e:
-            is_cancel = isinstance(e, UserCancelledError)
-            error_message = str(e) if is_cancel else f"Ocurrió un error inesperado: {e}"
-            should_ask_user = recode_phase_started and not options.get("keep_original_file", False) and not self.is_shutting_down
-
-            if should_ask_user:
+        except UserCancelledError as e:
+            error_message = str(e)
+            should_ask_to_keep_file = recode_phase_started and not options.get("keep_original_file", False) and not self.is_shutting_down
+            if should_ask_to_keep_file:
                 self.ui_request_data = {
                     "type": "ask_yes_no", "title": "Fallo en la Recodificación",
-                    "message": "La descarga del archivo original se completó, pero la recodificación falló o fue cancelada.\n\n¿Deseas conservar el archivo original descargado?"
+                    "message": "La descarga del archivo original se completó, pero la recodificación fue cancelada.\n\n¿Deseas conservar el archivo original descargado?"
                 }
                 self.ui_response_event.clear()
                 self.ui_request_event.set()
                 self.ui_response_event.wait()
-                
                 if self.ui_response_data.get("result", False):
                     keep_file_on_cancel = downloaded_filepath
-                    self.on_process_finished(False, "Recodificación cancelada. Archivo original conservado.", None)
+                    self.after(0, self.on_process_finished, False, "Recodificación cancelada. Archivo original conservado.", keep_file_on_cancel, False)
                 else:
-                    self.on_process_finished(False, error_message, None)
+                    self.after(0, self.on_process_finished, False, error_message, downloaded_filepath, False, show_dialog=False)
             else:
-                if recode_phase_started and options.get("keep_original_file", False):
+                self.on_process_finished(False, error_message, downloaded_filepath, show_dialog=False)
+        except Exception as e:
+            cleaned_message = self._clean_ansi_codes(str(e))
+            self.after(0, self.on_process_finished, False, cleaned_message, downloaded_filepath, True)
+            should_ask_user = recode_phase_started and not options.get("keep_original_file", False) and not self.is_shutting_down
+            if should_ask_user:
+                self.ui_request_data = {
+                    "type": "ask_yes_no", "title": "Fallo en la Recodificación",
+                    "message": "La descarga del archivo original se completó, pero la recodificación falló.\n\n¿Deseas conservar el archivo original descargado?"
+                }
+                self.ui_response_event.clear()
+                self.ui_request_event.set()
+                self.ui_response_event.wait()
+
+                if self.ui_response_data.get("result", False):
                     keep_file_on_cancel = downloaded_filepath
-                    self.on_process_finished(False, "Recodificación cancelada. Archivo original conservado.", None)
-                else:
-                    self.on_process_finished(False, error_message, None)
         finally:
-            self.active_subprocess_pid = None
-            if not process_successful and cleanup_required:
-                try:
-                    gc.collect()
-                    time.sleep(1) 
-                    base_title_for_cleanup = user_facing_title.replace("_recoded", "")
-                    for filename in os.listdir(options["output_path"]):
-                        if not filename.startswith(base_title_for_cleanup):
-                            continue
-                        file_path_to_check = os.path.join(options["output_path"], filename)
-                        should_preserve = False
-                        if keep_file_on_cancel:
-                            normalized_preserved_path = os.path.normpath(keep_file_on_cancel)
-                            normalized_path_to_check = os.path.normpath(file_path_to_check)
-                            if normalized_path_to_check == normalized_preserved_path:
-                                should_preserve = True
-                            else:
-                                base_preserved_name = os.path.splitext(os.path.basename(keep_file_on_cancel))[0]
-                                known_sidecar_exts = ('.srt', '.vtt', '.ass', '.ssa', '.json3', '.srv1', '.srv2', '.srv3', '.ttml', '.smi', '.tml', '.lrc', '.xml', '.jpg', '.jpeg', '.png')
-                                if filename.startswith(base_preserved_name) and filename.lower().endswith(known_sidecar_exts):
+            if not process_successful and not self.local_file_path:
+                if recode_phase_started and final_recoded_path and os.path.exists(final_recoded_path):
+                    try:
+                        gc.collect()
+                        time.sleep(0.5) 
+                        print(f"DEBUG: Limpiando archivo de recodificación temporal por fallo (Modo URL): {final_recoded_path}")
+                        os.remove(final_recoded_path)
+                    except OSError as e:
+                        print(f"ERROR: No se pudo limpiar el archivo de recodificación temporal (Modo URL): {e}")
+                if temp_video_for_extraction and os.path.exists(temp_video_for_extraction):
+                    try:
+                        print(f"DEBUG: Limpiando video temporal por fallo (Modo URL): {temp_video_for_extraction}")
+                        os.remove(temp_video_for_extraction)
+                    except OSError as e:
+                        print(f"ERROR: No se pudo limpiar el video temporal (Modo URL): {e}")
+                if backup_file_path and os.path.exists(backup_file_path):
+                    print("AVISO: La descarga falló. Restaurando el archivo original desde el respaldo (Modo URL).")
+                    try:
+                        original_path = backup_file_path.removesuffix(".bak")
+                        if os.path.exists(original_path) and os.path.normpath(original_path) != os.path.normpath(backup_file_path):
+                            os.remove(original_path)
+                        os.rename(backup_file_path, original_path)
+                        print(f"ÉXITO: Respaldo restaurado a: {original_path}")
+                    except OSError as err:
+                        print(f"ERROR CRÍTICO: No se pudo restaurar el respaldo: {err}")
+                elif cleanup_required:
+                    print("DEBUG: Iniciando limpieza general por fallo de operación.")
+                    try:
+                        gc.collect()
+                        time.sleep(1) 
+                        base_title_for_cleanup = user_facing_title.replace("_recoded", "")
+                        for filename in os.listdir(options["output_path"]):
+                            if not filename.startswith(base_title_for_cleanup):
+                                continue
+                            file_path_to_check = os.path.join(options["output_path"], filename)
+                            should_preserve = False
+                            known_sidecar_exts = ('.srt', '.vtt', '.ass', '.ssa', '.json3', '.srv1', '.srv2', '.srv3', '.ttml', '.smi', '.tml', '.lrc', '.xml', '.jpg', '.jpeg', '.png')                            
+                            if keep_file_on_cancel:
+                                normalized_preserved_path = os.path.normpath(keep_file_on_cancel)
+                                if os.path.normpath(file_path_to_check) == normalized_preserved_path:
                                     should_preserve = True
-                        if should_preserve:
-                            print(f"DEBUG: Conservando archivo solicitado o asociado: {file_path_to_check}")
-                            continue
-                        else:
-                            print(f"DEBUG: Eliminando archivo temporal, parcial o no deseado: {file_path_to_check}")
-                            os.remove(file_path_to_check)
-                except Exception as cleanup_e:
-                    print(f"ERROR: Falló el proceso de limpieza de archivos: {cleanup_e}")
+                                else:
+                                    base_preserved_name = os.path.splitext(os.path.basename(keep_file_on_cancel))[0]
+                                    if filename.startswith(base_preserved_name) and filename.lower().endswith(known_sidecar_exts):
+                                        should_preserve = True                            
+                            elif options.get("keep_original_file", False) and downloaded_filepath:
+                                normalized_original_path = os.path.normpath(downloaded_filepath)
+                                if os.path.normpath(file_path_to_check) == normalized_original_path:
+                                    should_preserve = True
+                                else:
+                                    base_original_name = os.path.splitext(os.path.basename(downloaded_filepath))[0]
+                                    if filename.startswith(base_original_name) and filename.lower().endswith(known_sidecar_exts):
+                                        should_preserve = True
+                            if should_preserve:
+                                print(f"DEBUG: Conservando archivo solicitado o asociado: {file_path_to_check}")
+                                continue
+                            else:
+                                print(f"DEBUG: Eliminando archivo no deseado: {file_path_to_check}")
+                                os.remove(file_path_to_check)
+                    except Exception as cleanup_e:
+                        print(f"ERROR: Falló el proceso de limpieza de archivos: {cleanup_e}")
+            elif process_successful and backup_file_path and os.path.exists(backup_file_path):
+                try:
+                    os.remove(backup_file_path)
+                    print("DEBUG: Proceso exitoso, respaldo eliminado.")
+                except OSError as err:
+                    print(f"AVISO: No se pudo eliminar el archivo de respaldo: {err}")
+            self.active_subprocess_pid = None
             self.active_operation_thread = None
 
     def _reset_buttons_to_original_state(self):
-        """ Restablece los botones de analizar y descargar a su estado original (texto, comando y color). """
+        """ Restablece los botones a su estado original, considerando el modo actual (URL o Local). """
         self.analyze_button.configure(
             text=self.original_analyze_text,
             fg_color=self.original_analyze_fg_color,
             command=self.original_analyze_command,
             state="normal"
         )
+        button_text = "Iniciar Proceso" if self.local_file_path else self.original_download_text
+
         self.download_button.configure(
-            text=self.original_download_text,
+            text=button_text,
             fg_color=self.original_download_fg_color,
             command=self.original_download_command
         )
@@ -2522,44 +3288,74 @@ class MainWindow(ctk.CTk):
         """Guarda la miniatura si la opción está activada, usando la ruta del archivo base."""
         if self.auto_save_thumbnail_check.get() == 1 and self.pil_image and base_filepath:
             try:
-                # Actualiza la UI desde el hilo de trabajo
                 self.after(0, self.update_progress, 98, "Guardando miniatura...")
-                
                 output_directory = os.path.dirname(base_filepath)
-                # Usa el nombre del archivo descargado para mayor consistencia
                 clean_title = os.path.splitext(os.path.basename(base_filepath))[0]
-                
-                # Si es un archivo recodificado, quita el sufijo para que coincida con el original
                 if clean_title.endswith("_recoded"):
                     clean_title = clean_title.rsplit('_recoded', 1)[0]
-
                 thumb_path = os.path.join(output_directory, f"{clean_title}.jpg")
                 self.pil_image.convert("RGB").save(thumb_path, quality=95)
                 print(f"DEBUG: Miniatura guardada automáticamente en {thumb_path}")
             except Exception as e:
                 print(f"ADVERTENCIA: No se pudo guardar la miniatura automáticamente: {e}")
 
-    def on_process_finished(self, success, message, filepath):
-        """Callback unificado para el final del proceso. Se ejecuta en el hilo principal."""
-        def _update_ui():
-            self.last_download_path = filepath
-            self.progress_label.configure(text=message)
-
-            if self.local_file_path:
-                self.download_button.configure(text="Iniciar Proceso", state="normal", command=self.original_download_command, fg_color=self.original_download_fg_color)
-                self.analyze_button.configure(state="disabled")
-            else:
-                self._reset_buttons_to_original_state()
-
-            self.ui_request_event.clear()
-            self.ui_response_event.clear()
-
-            if success:
-                self.progress_bar.set(1)
+    def on_process_finished(self, success, message, final_filepath, show_dialog=True):
+        """
+        Callback UNIFICADO para el final de CUALQUIER proceso.
+        CORREGIDO: Ahora muestra un mensaje genérico en la UI si se abre un diálogo de error.
+        """
+        self.last_download_path = final_filepath
+        self.progress_bar.stop()
+        self.progress_bar.set(1 if success else 0)
+        final_message = self._clean_ansi_codes(message)
+        if success:
+            self.progress_label.configure(text=final_message)
+            if final_filepath:
                 self.open_folder_button.configure(state="normal")
+        else:
+            if show_dialog:
+                self.progress_label.configure(text="❌ Error en la operación. Ver detalles.")
+                
+                lowered_message = final_message.lower()
+                dialog_message = final_message 
+
+                if "timed out" in lowered_message or "timeout" in lowered_message:
+                    dialog_message = ("Falló la conexión (Timeout).\n\n"
+                                    "Causas probables:\n"
+                                    "• Conexión a internet lenta o inestable.\n"
+                                    "• Un antivirus o firewall está bloqueando la aplicación.")
+                elif "429" in lowered_message or "too many requests" in lowered_message:
+                    dialog_message = (
+                        "Demasiadas Peticiones (Error 429).\n\n"
+                        "Has realizado demasiadas solicitudes en poco tiempo.\n\n"
+                        "**Sugerencias:**\n"
+                        "1. Desactiva la descarga automática de subtítulos y miniaturas.\n"
+                        "2. Usa la opción de 'Cookies' si el problema persiste.\n"
+                        "3. Espera unos minutos antes de volver a intentarlo."
+                    )
+                elif any(keyword in lowered_message for keyword in ["age-restricted", "login required", "sign in", "private video", "premium", "members only"]):
+                    dialog_message = (
+                        "La descarga falló. El contenido parece ser privado, tener restricción de edad o requerir una suscripción.\n\n"
+                        "Por favor, intenta configurar las 'Cookies' en la aplicación y vuelve a analizar la URL."
+                    )
+                elif "cannot parse data" in lowered_message and "facebook" in lowered_message:
+                    dialog_message = (
+                        "Falló el análisis de Facebook.\n\n"
+                        "Este error usualmente ocurre con videos privados o con restricción de edad. "
+                        "Intenta configurar las 'Cookies' para solucionarlo."
+                    )
+                elif "ffmpeg not found" in lowered_message:
+                    dialog_message = (
+                        "Error Crítico: FFmpeg no encontrado.\n\n"
+                        "yt-dlp necesita FFmpeg para realizar la conversión de subtítulos.\n\n"
+                        "Asegúrate de que FFmpeg esté correctamente instalado en la carpeta 'bin' de la aplicación."
+                    )
+
+                dialog = self.SimpleMessageDialog(self, "Error en la Operación", dialog_message)
+                self.wait_window(dialog)
             else:
-                self.progress_bar.set(0)
-        self.after(0, _update_ui)
+                 self.progress_label.configure(text=final_message)
+        self._reset_buttons_to_original_state()
 
     def update_progress(self, percentage, message):
         """Actualiza la barra de progreso y el texto. Se llama desde cualquier hilo."""
@@ -2606,20 +3402,22 @@ class MainWindow(ctk.CTk):
 
     def _run_analysis_subprocess(self, url):
         """
-        Ejecuta yt-dlp como un subproceso con un timeout para analizar la URL,
-        proporcionando feedback más granular al usuario.
+        Ejecuta yt-dlp como un subproceso para analizar la URL, separando de forma
+        inteligente la salida JSON de la lista de subtítulos en texto plano.
         """
-        full_stdout = ""
         try:
-            self.after(0, self.update_progress, 0, "Analizando URL...")
+            self.after(0, self.update_progress, 0, "Iniciando análisis de URL...")
             command = [
                 'yt-dlp', '-j', url, '--no-warnings',
                 '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
                 '--referer', url,
                 '--no-playlist',
+                '--playlist-items', '1',
                 '--list-subs',
-                '--write-auto-subs' 
+                '--write-auto-subs'
             ]
+            
+            # El resto de la construcción del comando (cookies, etc.) se mantiene igual
             cookie_mode = self.cookie_mode_menu.get()
             if cookie_mode == "Archivo Manual..." and self.cookie_path_entry.get():
                 command.extend(['--cookies', self.cookie_path_entry.get()])
@@ -2629,6 +3427,7 @@ class MainWindow(ctk.CTk):
                 if profile:
                     browser_arg += f":{profile}"
                 command.extend(['--cookies-from-browser', browser_arg])
+            
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             process = subprocess.Popen(
                 command,
@@ -2639,100 +3438,207 @@ class MainWindow(ctk.CTk):
                 errors='ignore',
                 creationflags=creationflags
             )
-            self.active_subprocess_pid = process.pid 
-            json_output_lines = []
-            info_received = False
+            self.active_subprocess_pid = process.pid
 
+            # --- Lógica de parseo mejorada ---
+            json_lines = []
+            other_lines = []
+            in_json_block = False
+            brace_level = 0
+            
+            # Leemos tanto stdout como stderr para dar feedback al usuario
+            # y capturar todo el output.
+            stream_readers = [process.stdout, process.stderr]
             start_time = time.time()
-            while True:
+
+            while process.poll() is None:
                 if self.cancellation_event.is_set():
-                    print("DEBUG: Análisis detectó señal de cancelación. Terminando proceso.")
                     process.terminate()
                     raise UserCancelledError("Análisis cancelado por el usuario.")
+
                 if time.time() - start_time > 60:
                     process.terminate()
                     raise subprocess.TimeoutExpired(cmd=command, timeout=60)
+                
+                # Leemos una línea de stdout o stderr
                 line = process.stdout.readline() or process.stderr.readline()
                 if not line:
-                    if process.poll() is not None:
-                        break
                     time.sleep(0.1)
                     continue
+
                 line_stripped = line.strip()
-                if "[youtube]" in line_stripped or "[extractors]" in line_stripped:
-                    self.after(0, self.update_progress, 0.1, "Estableciendo conexión y buscando extractores...")
+                
+                # Actualiza el feedback de la UI
+                if "[youtube]" in line_stripped:
+                    self.after(0, self.update_progress, 0.1, "Estableciendo conexión...")
                 elif "[info]" in line_stripped:
-                    self.after(0, self.update_progress, 0.3, "Extrayendo metadatos del video...")
-                elif "[download]" in line_stripped:
-                    self.after(0, self.update_progress, 0.5, "Procesando información de descarga...")
-                if line_stripped.startswith('{') or line_stripped.startswith('['):
-                    json_output_lines.append(line_stripped)
-                    info_received = True 
-                elif info_received: 
-                    json_output_lines.append(line_stripped)
-                self.after(0, self.update_progress, 0.05, f"Analizando... {line_stripped[:80]}...")
-            stdout, stderr = process.communicate()
-            full_stdout = "".join(json_output_lines) + stdout 
-            full_stderr = stderr
-            if process.returncode != 0:
-                error_output = full_stderr.strip() or "Error desconocido de yt-dlp."
-                raise Exception(f"yt-dlp error: {error_output}")
-            info = json.loads(full_stdout)
-            if info.get('is_live', False) or (info.get('duration') in [None, 0] and info.get('live_status') in ['is_live', 'was_live', 'post_live']):
-                self.after(0, self.on_analysis_complete, None, "AVISO: La URL apunta a una transmisión en vivo o a contenido no-video estándar. Las opciones de descarga podrían ser limitadas o no estar disponibles para un video VOD.")
+                    self.after(0, self.update_progress, 0.3, "Extrayendo metadatos...")
+                
+                # Lógica para encontrar el bloque JSON
+                if line_stripped.startswith('{'):
+                    in_json_block = True
+                
+                if in_json_block:
+                    json_lines.append(line)
+                    brace_level += line.count('{') - line.count('}')
+                    if brace_level == 0 and json_lines:
+                        in_json_block = False # Fin del bloque JSON
+                else:
+                    other_lines.append(line_stripped)
+            
+            # Aseguramos leer cualquier resto en los buffers
+            stdout_rem, stderr_rem = process.communicate()
+            other_lines.extend(stdout_rem.strip().splitlines())
+            other_lines.extend(stderr_rem.strip().splitlines())
+            
+            if process.returncode != 0 and not json_lines:
+                error_output = "\n".join(other_lines)
+                raise Exception(f"yt-dlp falló: {error_output[:500]}")
+
+            json_string = "".join(json_lines)
+            info = json.loads(json_string)
+
+            # Ahora, parseamos las 'other_lines' para encontrar subtítulos si es necesario
+            if 'subtitles' not in info and 'automatic_captions' not in info:
+                info['subtitles'], info['automatic_captions'] = self._parse_subtitle_lines_from_text(other_lines)
+
+            if info.get('is_live'):
+                self.after(0, self.on_analysis_complete, None, "AVISO: La URL apunta a una transmisión en vivo.")
                 return
+
             self.after(0, self.on_analysis_complete, info)
+
         except subprocess.TimeoutExpired:
-            self.after(0, self.on_analysis_complete, None, "ERROR: La operación de análisis de la URL ha excedido el tiempo límite (45s). Intenta de nuevo o verifica la URL.")
-        except json.JSONDecodeError as e:
-            self.after(0, self.on_analysis_complete, None, f"ERROR: yt-dlp no devolvió una respuesta JSON válida. ({e}). La salida fue: {full_stdout[:500]}...")
+            self.after(0, self.on_analysis_complete, None, "ERROR: El análisis de la URL tardó demasiado (Timeout).")
+        except json.JSONDecodeError:
+            error_context = "".join(other_lines)
+            self.after(0, self.on_analysis_complete, None, f"ERROR: Fallo al decodificar el JSON. Contexto: {error_context[:300]}")
         except UserCancelledError:
-            pass
+            pass # La cancelación ya fue manejada
         except Exception as e:
-            self.after(0, self.on_analysis_complete, None, f"ERROR: Fallo al analizar la URL: {e}.")
+            self.after(0, self.on_analysis_complete, None, f"ERROR: {e}")
         finally:
             self.active_subprocess_pid = None
 
+    def _parse_subtitle_lines_from_text(self, lines):
+        """
+        Parsea una lista de líneas de texto (salida de --list-subs) y la convierte
+        en diccionarios de subtítulos manuales y automáticos.
+        """
+        subtitles = {}
+        auto_captions = {}
+        current_section = None # Puede ser 'subs' o 'auto'
+
+        for line in lines:
+            if "Available subtitles for" in line:
+                current_section = 'subs'
+                continue
+            if "Available automatic captions for" in line:
+                current_section = 'auto'
+                continue
+            
+            # Ignora las cabeceras de las tablas
+            if line.startswith("Language") or line.startswith("ID") or line.startswith('---'):
+                continue
+
+            parts = re.split(r'\s+', line.strip())
+            if len(parts) < 3:
+                continue
+
+            lang_code = parts[0]
+            # Formatos pueden ser múltiples, ej: vtt, ttml, srv3...
+            formats = [p.strip() for p in parts[1:-1] if p.strip()]
+
+            if current_section == 'subs':
+                target_dict = subtitles
+            elif current_section == 'auto':
+                target_dict = auto_captions
+            else:
+                continue
+
+            if lang_code not in target_dict:
+                target_dict[lang_code] = []
+            
+            # yt-dlp lista formatos en una sola línea, creamos una entrada para cada uno
+            for fmt in formats:
+                target_dict[lang_code].append({
+                    'ext': fmt,
+                    'url': None, 
+                    'name': ''
+                })
+                
+        return subtitles, auto_captions
+
     def on_analysis_complete(self, info, error_message=None):
-        self.progress_bar.stop() 
-        if info and not error_message:
-            self.progress_bar.set(1) 
-        else:
-            self.progress_bar.set(0) 
-        if info and not error_message:
+        try:
+            # --- NUEVA LÓGICA INTELIGENTE PARA PLAYLISTS ---
+            if info and info.get('_type') in ('playlist', 'multi_video'):
+                # Verifica si la playlist contiene videos (entradas)
+                if info.get('entries') and len(info['entries']) > 0:
+                    print("DEBUG: Playlist detectada. Extrayendo información del primer video.")
+                    # Reemplaza la info de la playlist con la info del primer video
+                    info = info['entries'][0]
+                else:
+                    # Si es una playlist pero no tiene videos, la rechaza.
+                    print("DEBUG: Se detectó una playlist vacía o no válida.")
+                    error_message = "La URL corresponde a una lista vacía o no válida."
+                    info = None
+            
+            self.progress_bar.stop()
+            if not info or error_message:
+                self.progress_bar.set(0)
+                final_error_message = error_message or "ERROR: No se pudo obtener la información."
+                print(f"Error en el análisis de la URL: {final_error_message}")
+                self.title_entry.delete(0, 'end')
+                self.title_entry.insert(0, final_error_message)
+                self.create_placeholder_label("Fallo el análisis")
+                self._clear_subtitle_menus()
+                return
+
+            self.progress_bar.set(1)
             url = self.url_entry.get()
-            self.analysis_cache[url] = {
-                'data': info,
-                'timestamp': time.time()
-            }
+            self.analysis_cache[url] = {'data': info, 'timestamp': time.time()}
             print(f"DEBUG: Resultado para '{url}' guardado en caché.")
-        self.create_placeholder_label("Miniatura")
-        self.title_entry.delete(0, 'end') 
-        if info:
+            if info.get('extractor_key', '').lower().startswith('twitch'):
+                print("DEBUG: Detectada URL de Twitch, eliminando datos de rechat y deshabilitando menús.")
+                # Eliminamos los datos del rechat para que no se procesen después.
+                info['subtitles'] = {}
+                info['automatic_captions'] = {}
+                self._clear_subtitle_menus()
+            self.title_entry.delete(0, 'end')
             self.title_entry.insert(0, info.get('title', 'Sin título'))
             self.video_duration = info.get('duration', 0)
-            self.video_id = info.get('id', None)
-            self.original_video_width = info.get('width', 0)
-            self.original_video_height = info.get('height', 0)
-            if hasattr(self, 'width_entry'):
-                self.width_entry.delete(0, 'end')
-                self.width_entry.insert(0, str(self.original_video_width))
-            if hasattr(self, 'height_entry'):
-                self.height_entry.delete(0, 'end')
-                self.height_entry.insert(0, str(self.original_video_height))
-            self.populate_format_menus(info)
+            
+            # --- CLASIFICACIÓN DEL CONTENIDO ---
+            formats = info.get('formats', [])
+            self.has_video_streams = any(f.get('height') for f in formats)
+            self.has_audio_streams = any(f.get('acodec') != 'none' or (not f.get('height') and f.get('vcodec') == 'none') for f in formats)
+            
+            # --- LÓGICA DE MINIATURA ---
+            thumbnail_url = info.get('thumbnail')
+            if thumbnail_url:
+                threading.Thread(target=self.load_thumbnail, args=(thumbnail_url,), daemon=True).start()
+            elif self.has_audio_streams and not self.has_video_streams:
+                self.create_placeholder_label("🎵", font_size=80) # Icono de música para audio-only
+                self.save_thumbnail_button.configure(state="disabled")
+                self.auto_save_thumbnail_check.deselect()
+                self.auto_save_thumbnail_check.configure(state="disabled")
+            else:
+                self.create_placeholder_label("Miniatura")
+
+            # Poblamos los menús con la nueva lógica consciente del contenido
+            self.populate_format_menus(info, self.has_video_streams, self.has_audio_streams)
+
             self._update_warnings()
             self.update_download_button_state()
-            if thumbnail_url := info.get('thumbnail'):
-                threading.Thread(target=self.load_thumbnail, args=(thumbnail_url,), daemon=True).start()
             self.update_estimated_size()
-        else:
-            self.title_entry.insert(0, error_message or "ERROR: No se pudo obtener la información.")
-            self.create_placeholder_label("Fallo el análisis")
-            self._clear_subtitle_menus()
-        self._reset_buttons_to_original_state()
-        self.toggle_manual_subtitle_button() 
-        self._validate_recode_compatibility()
+            self.update_progress(100, "Análisis completado. ✅ Listo para descargar.")
+
+        finally:
+            print("DEBUG: Ejecutando bloque 'finally' de on_analysis_complete para resetear la UI.")
+            self._reset_buttons_to_original_state()
+            self.toggle_manual_subtitle_button()
+            self._validate_recode_compatibility()
 
     def load_thumbnail(self, path_or_url, is_local=False):
         try:
@@ -2763,133 +3669,135 @@ class MainWindow(ctk.CTk):
             print(f"Error al cargar la miniatura: {e}")
             self.after(0, self.create_placeholder_label, "Error de miniatura")
 
-    def populate_format_menus(self, info):
+    def _classify_format(self, f):
+        """
+        Clasifica un formato de yt-dlp como 'VIDEO', 'AUDIO' o 'UNKNOWN'
+        siguiendo un estricto conjunto de reglas jerárquicas (v2.2 FINAL).
+        """
+        if f.get('height') or f.get('width'):
+            return 'VIDEO'
+        format_id_raw = f.get('format_id')
+        format_note_raw = f.get('format_note')
+        format_id = format_id_raw.lower() if format_id_raw else ''
+        format_note = format_note_raw.lower() if format_note_raw else ''
+        if 'audio' in format_id or 'audio' in format_note:
+            return 'AUDIO'
+        vcodec = f.get('vcodec')
+        acodec = f.get('acodec')
+        if (vcodec == 'none' or not vcodec) and (acodec and acodec != 'none'):
+            return 'AUDIO'
+        if f.get('ext') in self.AUDIO_EXTENSIONS:
+            return 'AUDIO'
+        if f.get('ext') in self.VIDEO_EXTENSIONS:
+            return 'VIDEO'
+        if vcodec == 'none':
+            return 'AUDIO'
+        return 'UNKNOWN'
+
+
+    def populate_format_menus(self, info, has_video, has_audio):
         formats = info.get('formats', [])
         video_entries, audio_entries = [], []
+        self.video_formats.clear()
+        self.audio_formats.clear()
+
         for f in formats:
+            format_type = self._classify_format(f)
+            size_mb_str = "Tamaño desc."
+            size_sort_priority = 0
             filesize = f.get('filesize') or f.get('filesize_approx')
-            size_mb = f"{filesize / (1024*1024):.2f} MB" if filesize else "Tamaño desc."
+            if filesize:
+                size_mb_str = f"{filesize / (1024*1024):.2f} MB"; size_sort_priority = 2
+            else:
+                bitrate = f.get('tbr') or f.get('vbr') or f.get('abr')
+                if bitrate and self.video_duration:
+                    estimated_bytes = (bitrate*1000/8)*self.video_duration; size_mb_str=f"Aprox. {estimated_bytes/(1024*1024):.2f} MB"; size_sort_priority = 1
+            
+            vcodec_raw = f.get('vcodec'); acodec_raw = f.get('acodec')
+            vcodec = vcodec_raw.split('.')[0] if vcodec_raw else 'none'
+            acodec = acodec_raw.split('.')[0] if acodec_raw else 'none'
             ext = f.get('ext', 'N/A')
-            if f.get('vcodec') != 'none':
-                vcodec = f.get('vcodec', 'N/A').split('.')[0]
-                acodec = f.get('acodec', 'none').split('.')[0]
-                height = f.get('height', 0)
-                fps = f.get('fps', 0)
 
-                # Lógica para determinar si es lento (sin cambios)
-                is_slow = False
-                if vcodec in self.SLOW_FORMAT_CRITERIA["video_codecs"] and height >= self.SLOW_FORMAT_CRITERIA["min_height_for_slow"]:
-                    is_slow = True
-                elif height >= self.SLOW_FORMAT_CRITERIA["min_height_for_slow"] and fps >= self.SLOW_FORMAT_CRITERIA["min_fps_for_slow"]:
-                    is_slow = True
-                elif height >= 3840:
-                    is_slow = True
+            if format_type == 'VIDEO':
+                is_combined = acodec != 'none' and acodec is not None
+                fps = f.get('fps')
+                fps_tag = f"{fps:.0f}" if fps else ""
+                label_base = f"{f.get('height', 'Video')}p{fps_tag} ({ext}"
+                label_codecs = f", {vcodec}+{acodec}" if is_combined else f", {vcodec}"
+                label_tag = " [Combinado]" if is_combined else ""
+                note = f.get('format_note') or ''
+                note_tag = ""  
+                informative_keywords = ['hdr', 'premium', 'dv', 'hlg', 'storyboard']
+                if any(keyword in note.lower() for keyword in informative_keywords):
+                    note_tag = f" [{note}]"
 
-                # Construcción de la etiqueta con la lógica corregida
-                if acodec != 'none':
-                    label = f"{f.get('height', 0)}p ({ext}, {vcodec}+{acodec}) - {size_mb}"
-                else:
-                    label = f"{f.get('height', 0)}p ({ext}, {vcodec}) - {size_mb}"
+                protocol = f.get('protocol', '')
+                protocol_tag = " [Streaming]" if 'm3u8' in protocol else ""
 
-                compatibility_issues, unknown_issues = self._get_format_compatibility_issues(f)
+                label = f"{label_base}{label_codecs}){label_tag}{note_tag}{protocol_tag} - {size_mb_str}"
 
-                tags = []
-                if is_slow:
-                    tags.append("⚠️ Lento")
-
-                # La lógica ahora considera ambas listas de problemas
-                if not compatibility_issues and not unknown_issues and not is_slow:
-                    tags.append("✨ Ideal")
+                tags = []; compatibility_issues, unknown_issues = self._get_format_compatibility_issues(f)
+                if f.get('vcodec') in self.SLOW_FORMAT_CRITERIA["video_codecs"]: tags.append("⚠️")
+                if not compatibility_issues and not unknown_issues: tags.append("✨")
                 elif compatibility_issues or unknown_issues:
-                    tags.append("⚠️ Recodificar")
+                    tags.append("⚠️")
+                if tags: label += f" ({' '.join(tags)})"
+                video_entries.append({'label': label, 'format': f, 'is_combined': is_combined, 'sort_priority': size_sort_priority})
 
-                if tags:
-                    label += f" ({' y '.join(tags)})"
-
-                video_entries.append({'label': label, 'format': f, 'has_audio': acodec != 'none'})
-            if f.get('acodec') != 'none' and f.get('vcodec') == 'none':
-                abr = f.get('abr')
-                acodec = f.get('acodec', 'N/A').split('.')[0]
-                language_code = f.get('language')
-                format_note = f.get('format_note', '').lower()
+            elif format_type == 'AUDIO':
+                abr = f.get('abr') or f.get('tbr')
+                lang_code = f.get('language')
                 lang_name = "Idioma Desconocido"
-                if language_code:
-                    normalized_lang_code = language_code.replace('_', '-')
-                    full_code_match = self.LANG_CODE_MAP.get(normalized_lang_code.lower())
-                    if full_code_match:
-                        lang_name = full_code_match
-                    else:
-                        primary_code = normalized_lang_code.split('-')[0].lower()
-                        lang_name = self.LANG_CODE_MAP.get(primary_code, language_code)
-                if lang_name == 'Español':
-                    if 'latino' in format_note or 'latin' in format_note:
-                        lang_name = 'Español (Latinoamérica)'
-                    elif 'castellano' in format_note or 'españa' in format_note or 'spain' in format_note:
-                        lang_name = 'Español (España)'
-                lang_prefix = f"{lang_name} - "
-                if abr and abr > 0:
-                    label = f"{lang_prefix}{abr:.0f}kbps ({acodec}, {ext}) - {size_mb}"
-                else:
-                    label = f"{lang_prefix}Audio ({acodec}, {ext}) - {size_mb}"
+                if lang_code:
+                    norm_code = lang_code.replace('_', '-').lower()
+                    lang_name = self.LANG_CODE_MAP.get(norm_code, self.LANG_CODE_MAP.get(norm_code.split('-')[0], lang_code))
+                
+                lang_prefix = f"{lang_name} - " if lang_code else ""
+                
+                note = f.get('format_note') or ''
+                drc_tag = " (DRC)" if 'DRC' in note else ""
 
-                # Añadir etiqueta de compatibilidad
-                if acodec in self.EDITOR_FRIENDLY_CRITERIA["compatible_acodecs"]:
-                    label += " ✨"
-                else:
-                    label += " ⚠️"
+                protocol = f.get('protocol', '')
+                protocol_tag = " [Streaming]" if 'm3u8' in protocol else ""
+                label = f"{lang_prefix}{abr:.0f}kbps ({acodec}, {ext}){drc_tag}{protocol_tag}" if abr else f"{lang_prefix}Audio ({acodec}, {ext}){drc_tag}{protocol_tag}"
 
-                audio_entries.append({'label': label, 'format': f})
-
-        def custom_video_sort_key(entry):
-            f = entry['format']
-            size_is_known = 0 if "Tamaño desc." in entry['label'] else 1
-            height = f.get('height') or 0
-            fps = f.get('fps') or 0
-            return (size_is_known, height, fps)
-
+                if acodec in self.EDITOR_FRIENDLY_CRITERIA["compatible_acodecs"]: label += " ✨"
+                else: label += " ⚠️"
+                audio_entries.append({'label': label, 'format': f, 'sort_priority': size_sort_priority})
+        
+        # --- El resto de la función no necesita cambios ---
+        video_entries.sort(key=lambda e: (e['format'].get('height') or 0, e['format'].get('tbr') or 0), reverse=True)
         def custom_audio_sort_key(entry):
             f = entry['format']
             lang_code_raw = f.get('language') or ''
-            normalized_lang_code = lang_code_raw.replace('_', '-')
-            lang_priority = self.LANGUAGE_ORDER.get(normalized_lang_code, -1) 
-            if lang_priority == -1:
-                primary_lang_code = normalized_lang_code.split('-')[0]
-                lang_priority = self.LANGUAGE_ORDER.get(primary_lang_code, self.DEFAULT_PRIORITY)
-            quality = f.get('abr') or 0
+            norm_code = lang_code_raw.replace('_', '-')
+            lang_priority = self.LANGUAGE_ORDER.get(norm_code, self.LANGUAGE_ORDER.get(norm_code.split('-')[0], self.DEFAULT_PRIORITY))
+            quality = f.get('abr') or f.get('tbr') or 0
             return (lang_priority, -quality)
-        video_entries.sort(key=custom_video_sort_key, reverse=True)
         audio_entries.sort(key=custom_audio_sort_key)
-        self.video_formats = {entry['label']: {
-            'format_id': entry['format'].get('format_id'), 
-            'has_audio': entry.get('has_audio', False), 
-            'vcodec': entry['format'].get('vcodec'), 
-            'ext': entry['format'].get('ext'),
-            'width': entry['format'].get('width'),    
-            'height': entry['format'].get('height')  
-        } for entry in video_entries}
-        self.audio_formats = {
-            entry['label']: {
-                'format_id': entry['format'].get('format_id'),
-                'acodec': (acodec_val.split('.')[0] if (acodec_val := entry['format'].get('acodec')) else 'none'),
-                'ext': entry['format'].get('ext')
-            } for entry in audio_entries
-        }
-        v_opts = list(self.video_formats.keys()) or ["-"]
-        a_opts = list(self.audio_formats.keys()) or ["-"]
-        self.video_quality_menu.configure(state="normal" if v_opts[0] != "-" else "disabled", values=v_opts)
-        self.video_quality_menu.set(v_opts[0])
-        self.on_video_quality_change(v_opts[0])
-        self.audio_quality_menu.configure(state="normal" if a_opts[0] != "-" else "disabled", values=a_opts)
-        self.audio_quality_menu.set(a_opts[0])
-
+        
+        self.video_formats = {e['label']: {k: e['format'].get(k) for k in ['format_id', 'vcodec', 'acodec', 'ext', 'width', 'height']} | {'is_combined': e.get('is_combined', False)} for e in video_entries}
+        self.audio_formats = {e['label']: {k: e['format'].get(k) for k in ['format_id', 'acodec', 'ext']} for e in audio_entries}
+        
+        has_video_found = bool(video_entries)
+        has_audio_found = bool(audio_entries)
+        if not has_video_found and has_audio_found:
+            self.mode_selector.set("Solo Audio")
+            self.mode_selector.configure(state="disabled", values=["Solo Audio"])
+        else:
+            current_mode = self.mode_selector.get()
+            self.mode_selector.configure(state="normal", values=["Video+Audio", "Solo Audio"])
+            self.mode_selector.set(current_mode)
+        
+        self.on_mode_change(self.mode_selector.get())
+        v_opts = list(self.video_formats.keys()) or ["- Sin Formatos de Video -"]; a_opts = list(self.audio_formats.keys()) or ["- Sin Pistas de Audio -"]
+        self.video_quality_menu.configure(state="normal" if self.video_formats else "disabled", values=v_opts); self.video_quality_menu.set(v_opts[0])
+        self.audio_quality_menu.configure(state="normal" if self.audio_formats else "disabled", values=a_opts); self.audio_quality_menu.set(a_opts[0])
+        
         self.all_subtitles = {}
         
         def process_sub_list(sub_list, is_auto):
-            lang_code_map_3_to_2 = {
-                'spa': 'es', 'eng': 'en', 'jpn': 'ja', 
-                'fra': 'fr', 'deu': 'de', 'por': 'pt',
-                'ita': 'it', 'kor': 'ko', 'rus': 'ru'
-            }
+            lang_code_map_3_to_2 = {'spa': 'es', 'eng': 'en', 'jpn': 'ja', 'fra': 'fr', 'deu': 'de', 'por': 'pt', 'ita': 'it', 'kor': 'ko', 'rus': 'ru'}
             for lang_code, subs in sub_list.items():
                 primary_part = lang_code.replace('_', '-').split('-')[0].lower()
                 grouped_lang_code = lang_code_map_3_to_2.get(primary_part, primary_part)
@@ -2901,10 +3809,6 @@ class MainWindow(ctk.CTk):
         process_sub_list(info.get('automatic_captions', {}), is_auto=True)
         
         def custom_language_sort_key(lang_code):
-            """
-            Función de ordenamiento que prioriza los idiomas en LANGUAGE_ORDER
-            y luego ordena el resto alfabéticamente.
-            """
             priority = self.LANGUAGE_ORDER.get(lang_code, self.DEFAULT_PRIORITY)
             return (priority, lang_code)
         available_languages = sorted(self.all_subtitles.keys(), key=custom_language_sort_key)
