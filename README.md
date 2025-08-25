@@ -9,7 +9,7 @@ Es una GUI para **`yt-dlp`** y **`ffmpeg`** hecha con **`Python`** y sirve para 
 </div>
 
 ## Instalación
-- Obvio ocupan [Python](https://www.python.org/downloads/) 
+- Necesitan [Python](https://www.python.org/downloads/) y asegúrense de que marcan las casillas para poner Python en el PATH y ejecutarlo siempre como administrador.
 - Solo abran el `main.py` y este ya se encargará de descargar e instalar las dependencias y todo lo necesario, pero por si algún motivo no lo hace usen el:
 
   ```bash
