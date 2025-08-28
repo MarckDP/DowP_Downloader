@@ -202,6 +202,3 @@ Actívalo con el botón **"Importar Archivo Local para Recodificar"** al final d
 
 Aquí dejo esta cosa jaja. En algún futuro lejano haré actualizaciones... si no muero antes.
 
----
-
-**¿Problemas?** Abre un issue o busca ayuda en la comunidad. ¡El programa está en constante mejora!
