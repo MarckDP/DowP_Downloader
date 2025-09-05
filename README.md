@@ -12,11 +12,15 @@ Es una GUI para **`yt-dlp`** y **`ffmpeg`** hecha con **`Python`**. Sirve para d
 
 ## Instalación
 
-### Requisitos
-- [Python](https://www.python.org/downloads/) - **IMPORTANTE**: Marcar las casillas para poner Python en el PATH y ejecutarlo siempre como administrador
+### Requisitos previos
+- [Python](https://www.python.org/downloads/) - **IMPORTANTE**: Marcar las casillas para poner Python en el PATH del sistema. Para verificar la instalación, abre CMD/Terminal y ejecuta:
+  ```bash
+  python --version
+  ```
+  Debe devolver la versión instalada.
 
 ### Pasos
-1. **Instalación automática**: Solo abre `main.py` y este se encargará de descargar e instalar las dependencias y todo lo necesario.
+1. **Instalación automática**: Solo abre `main.py` o ejecuta `run_dowp.bat` y se encargará de descargar e instalar las dependencias y todo lo necesario.
 
 2. **Instalación manual** (si la automática falla):
    ```bash
@@ -38,55 +42,28 @@ DowP cuenta con dos modos principales: **Modo URL** y **Recodificación Local**.
 
 En este modo puedes analizar cualquier URL compatible con yt-dlp para obtener toda la información de video y audio disponible.
 
-### Interfaz Principal
-<div align="center">
-<img width="820" height="34" alt="URL Interface" src="https://github.com/user-attachments/assets/cdd2f258-772e-4951-a4df-15fefb8d8dc4" />
-</div>
-
-Arriba del todo tienes la sección para pegar la **URL** y a su derecha el botón **"Analizar"**.
-
 ### Panel Izquierdo
 
 #### 🖼️ Miniatura
-<div align="center">
-<img width="340" height="271" alt="Thumbnail Section" src="https://github.com/user-attachments/assets/d60e1914-e79b-40ee-aa9f-263a407cd3e0" />
-</div>
-
 - **Zona de miniatura**: Muestra la miniatura del video/archivo a descargar
 - **"Descargar Miniatura..."**: Descarga solo la miniatura
 - **"Descargar miniatura con el video"**: Descarga ambos al usar "Iniciar Descarga"
 
+#### ✂️ Segmentar
+Selecciona un segmento específico del video o audio indicando la hora, minuto y segundo de inicio y final. Incluye una casilla para descargar también el video completo.
+
 #### 📝 Subtítulos
-<div align="center">
-<img width="291" height="194" alt="Subtitles Section" src="https://github.com/user-attachments/assets/e0cdab08-463d-4996-91c1-a4d3ed71d94b" />
-</div>
-
+Muestra los subtítulos disponibles de la URL analizada:
 - **Idioma**: Selecciona entre todos los idiomas disponibles
-  <div align="center">
-  <img width="182" height="437" alt="Language Options" src="https://github.com/user-attachments/assets/9ad843e5-8617-44e8-86fc-fcb8cc62a5f8" />
-  </div>
-
 - **Formato**: Muestra formatos disponibles para el idioma seleccionado
   - "Manual": Subidos por el creador del video
   - "Automático": Generados automáticamente por la plataforma
-  <div align="center">
-  <img width="288" height="174" alt="Format Options" src="https://github.com/user-attachments/assets/0398dd49-3e78-42e5-8cc7-261de24eba1a" />
-  </div>
-
 - **Opciones de descarga**: 
   - "Descargar Subtítulos" (individual)
   - "Descargar subtítulos con el video" (al usar "Iniciar Descarga")
-
 - **Simplificación VTT**: Para archivos `.vtt`, aparece la opción **"Simplificar a formato estándar (SRT)"**
-  <div align="center">
-  <img width="258" height="33" alt="VTT Simplify" src="https://github.com/user-attachments/assets/cd068f72-3d71-4187-be61-44cb6f580ebb" />
-  </div>
 
 #### 🍪 Cookies
-<div align="center">
-<img width="284" height="81" alt="Cookies Section" src="https://github.com/user-attachments/assets/bafa644a-9ff1-415f-93a6-da7eadbea522" />
-</div>
-
 Para descargar contenido que requiere login (restricciones de edad, videos privados, etc.):
 - **"Archivo Manual..."**: Usa un archivo de cookies descargado
 - **"Desde el Navegador"**: Extrae cookies del navegador seleccionado
@@ -95,62 +72,68 @@ Para descargar contenido que requiere login (restricciones de edad, videos priva
 > **Recomendaciones para cookies:**
 > - Para **"Archivo Manual"**: Usa [Get Cookies LOCALLY](https://github.com/kairi003/Get-cookies.txt-LOCALLY)
 > - Para **"Desde el Navegador"**: Los navegadores basados en Chromium (Chrome, Edge, Opera, Brave) tienen problemas de seguridad. **Se recomienda usar Firefox** e iniciar sesión en las páginas necesarias.
+> - **Importante**: Nunca compartas tu archivo cookies.txt. Contiene tokens de sesión que permiten acceder a tu cuenta.
 
 #### 🔧 Mantenimiento
-<div align="center">
-<img width="295" height="128" alt="Maintenance Section" src="https://github.com/user-attachments/assets/75ef1c3d-da35-4ed2-bbd9-e7e395a52f3f" />
-</div>
-
-Por el momento solo sirve para actualizar FFmpeg si se necesita después de negar las actualizaciones automáticas.
+Actualiza FFmpeg si es necesario después de negar las actualizaciones automáticas.
 
 ### Panel Derecho
 
 #### 📋 Título
 - Muestra el título de la URL analizada
 - Permite cambiar el nombre final del archivo a descargar/recodificar
-- Soporta cualquier carácter (o eso espero :,v)
+- Soporta cualquier carácter
 
 #### 🎥 Opciones de Modo
-<div align="center">
-<img width="473" height="260" alt="Mode Options" src="https://github.com/user-attachments/assets/069e1253-3fc8-441e-a970-eee342c0ffef" />
-</div>
-
 - **"Video+Audio"** vs **"Solo Audio"**
 - Cada modo incluye menús de **Calidades** para Video y Audio
 - Las calidades de audio muestran idiomas disponibles (funciona en YouTube)
 
-> [!NOTE]
-> **Indicadores de compatibilidad**: Cada menú de calidad tiene iconos que muestran si el stream es compatible con Adobe Premiere Pro. Si seleccionas las opciones ideales, no necesitarás recodificar.
+#### 📊 Calidades
+Muestra todas las calidades disponibles con información detallada: resolución, FPS, Kbps, códec, formato/contenedor, tamaño aproximado.
 
-<div align="center">
-<img width="315" height="331" alt="Compatibility Indicators" src="https://github.com/user-attachments/assets/3d696248-6388-4381-955f-ded48a57aa88" />
-</div>
+**Indicadores de compatibilidad:**
+
+| Icono/Mensaje | Significado |
+|---------------|-------------|
+| ✨ | Ideal para Adobe Premiere o After Effects |
+| ⚠️ | Problemático con Ae o Pr por códec o contenedor |
+| `[Streaming]` | Mejor calidad pero más restrictivo, recomendable usar cookies |
+| `[Combinado]` | Video y audio en el mismo archivo, sin opción de calidad de audio separada |
+| `[Premium]` | Contenido premium, requiere cookies |
+
+> [!NOTE]
+> Si seleccionas las opciones ideales (✨), no necesitarás recodificar.
 
 #### ⚠️ Advertencias de Compatibilidad
-<div align="center">
-<img width="369" height="39" alt="Compatibility Warnings" src="https://github.com/user-attachments/assets/a8ce25cb-3823-4ad6-829f-a1c2ce52cb4a" />
-</div>
-
 Muestra advertencias sobre compatibilidad con Adobe Premiere Pro y qué hacer en la recodificación.
 
 ---
 
 ## 🎬 Opciones de Recodificación
 
-Esta es la parte más interesante. Aquí puedes recodificar videos (descargados o locales) para que sean compatibles con Adobe Premiere Pro u otros editores.
+Esta es la parte más interesante. Aquí puedes recodificar videos (descargados o locales) para que sean compatibles con Adobe Premiere Pro u otros editores. Estas opciones dependerán del modo en el que te encuentres:
 
 ### Modo "Video+Audio"
 
 #### Opciones Básicas
 - **Recodificar Video**: Marca para recodificar solo el video
-- **Recodificar Audio**: Marca para recodificar solo el audio
+- **Recodificar Audio**: Marca para recodificar solo el audio  
 - **"Mantener los Archivos originales"**: Conserva o elimina archivos originales
 
 > [!WARNING]
 > Si desactivas "Mantener Archivos originales", se eliminarán **TODOS** los archivos originales (video, miniatura, subtítulos). ¡Ten cuidado!
 
+#### **Advertencias de recodificación**
+Muestra alertas sobre compatibilidad de códecs:
+- **Verde**: Combinación correcta
+- **Amarillo**: Posiblemente incompatible (bajo tu riesgo)
+- **Rojo**: Directamente incompatible (no permitirá procesar)
+
 #### Opciones de Video
 - **Códecs CPU/GPU**: Es importante que sepas cuál es tu GPU (el programa no detecta hardware automáticamente)
+  - **GPU**: Permiten aceleración por hardware (H264, H265, AV1, VP9) - Dependen de tu GPU (Nvidia, AMD, Intel)
+  - **CPU**: Códecs profesionales (Apple ProRes, DNxHD/HR, GoPro Cineform, etc.)
   - **Códec**: Todos los códecs disponibles para tu selección
   - **Perfil/Calidad**: Depende del códec. Para H264, H265, AV1, etc., aparecen opciones de Bitrate (CBR/VBR)
   - **Contenedor**: Formato final (mp4, mov, webm, etc.)
@@ -166,13 +149,13 @@ Esta es la parte más interesante. Aquí puedes recodificar videos (descargados 
 > Cambiar resolución **estira** el video, no lo recorta. Puede distorsionar si no respetas la relación de aspecto original.
 
 #### Opciones de Audio
-- **Códec de Audio**: Todos los códecs disponibles (siempre procesado por CPU)
+- **Códec de Audio**: Todos los códecs disponibles (siempre procesado por CPU). Muestran únicamente códecs compatibles con el video seleccionado
 - **Perfil de Audio**: Opciones específicas según el códec seleccionado
 
 ### Modo "Solo Audio"
 
 - Convierte video a audio o extrae audio de videos
-- **"Activar la Recodificación para Audio"**: Habilita opciones de recodificación
+- **"Activar la Recodificación para Audio"**: Habilita opciones de recodificación. Al activar la recodificación, aparecen TODOS los códecs de audio disponibles
 - **"Mantener los Archivos Originales"**: Misma función que antes
 
 > [!TIP]
@@ -185,11 +168,13 @@ Esta es la parte más interesante. Aquí puedes recodificar videos (descargados 
 Actívalo con el botón **"Importar Archivo Local para Recodificar"** al final de las opciones de recodificación.
 
 ### Cambios en la Interfaz
-- **Miniatura**: Muestra fotograma inicial del video (o ícono de audio)
+- **Miniatura**: Muestra un fotograma inicial del video (o icono 🎵 para audio)
 - **Secciones deshabilitadas**: Descarga de Miniatura y Subtítulos
 - **Título**: Funciona igual que en modo URL
-- **Modo**: Misma función, se pone automáticamente en "Solo Audio" si importas audio
+- **Modo**: Misma función, se pone automáticamente en "Solo Audio" si importas audio. Permiten convertir formato (ej: video con audio → solo audio)
 - **Menús de Calidades**: Ahora son informativos (muestran info del archivo importado)
+- **Múltiples pistas de audio**: Se pueden seleccionar individualmente para procesar
+- **Nueva opción**: "Guardar en la misma carpeta que el original"
 - **Nuevo botón**: **"Limpiar y Volver a Modo URL"** para regresar fácilmente
 
 ### Regreso al Modo URL
@@ -198,7 +183,39 @@ Actívalo con el botón **"Importar Archivo Local para Recodificar"** al final d
 
 ---
 
+## 📤 Opciones de Salida
+
+- **Carpeta de salida**: Selecciona con "..." o escribe la ruta directamente
+- **Botón 📂**: Se activa después de completar operaciones para abrir la carpeta de destino
+- **Límite**: (Solo modo URL) Limita la velocidad de descarga para evitar rechazos por "TOO MANY REQUEST"
+- **Botón de acción**: "Iniciar Descarga" (URL) o "Iniciar Proceso" (Local), cambia a "Cancelar" durante operaciones
+
+---
+
+## 🔧 Solución de Problemas
+
+### Errores de Descarga
+
+Los errores más comunes ocurren durante las descargas. Para mitigarlos:
+
+1. **Usa cookies**: Especialmente para archivos con restricciones o descargas masivas
+2. **Subtítulos automáticos**: Son más restrictivos, prefiere subtítulos manuales del creador
+3. **Límite de descarga**: Ayuda a "engañar" a las webs que rechazan muchas peticiones
+
+### Sistema de Reintentos Automáticos
+
+Si DowP no puede descargar, intentará automáticamente:
+1. **Primer intento**: Según configuración solicitada
+2. **Segundo intento**: Calidad similar pero menos restrictiva (esto cambiará el idioma de audio que hayas escogido, si es que escogiste alguno)
+3. **Tercer intento**: Método bv+ba (mejor video + mejor audio disponible) como último recurso ignorando todo lo que hayan pedido pero priorizando una descarga sí o sí
+4. Si falla todo, mostrará error con recomendaciones
+
+### Problemas con Playlists
+
+Para URLs con playlists de sitios poco comunes que muestren error "No se puede encontrar la ruta del archivo", verifica que uses la URL correcta del video/audio individual. En ocasiones con URLs con playlist de sitios poco comunes, puede llegar a fallar en determinar qué archivo descargar, y DowP no está hecho para descargar archivos en cola (por ahora). Las descargas en cola se implementarán en futuras actualizaciones.
+
+---
+
 ## 🚀 ¿Y ahora qué?
 
 Aquí dejo esta cosa jaja. En algún futuro lejano haré actualizaciones... si no muero antes.
-
