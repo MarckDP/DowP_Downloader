@@ -31,12 +31,9 @@ Es una GUI para **`yt-dlp`** y **`ffmpeg`** hecha con **`Python`**. Sirve para d
    - Descarga [FFmpeg](https://www.gyan.dev/ffmpeg/builds/)
    - Instálalo en el **PATH** de tu sistema, o
    - Copia la carpeta `bin` a la carpeta del script
-
 ## Características Principales
 
 DowP cuenta con dos modos principales: **Modo URL** y **Recodificación Local**. Las opciones de recodificación son las mismas en ambos casos.
-
----
 
 ## 🌐 Modo URL
 
