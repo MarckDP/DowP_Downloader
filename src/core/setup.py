@@ -6,9 +6,9 @@ import sys
 import tarfile
 import zipfile
 import requests
+from packaging import version
+from main import PROJECT_ROOT, BIN_DIR
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-BIN_DIR = os.path.join(PROJECT_ROOT, "bin")
 FFMPEG_VERSION_FILE = os.path.join(BIN_DIR, "ffmpeg_version.txt")
 
 def check_and_install_python_dependencies(progress_callback):
@@ -19,6 +19,8 @@ def check_and_install_python_dependencies(progress_callback):
         import PIL
         import requests
         import yt_dlp
+        import flask_socketio
+        import gevent
         progress_callback("Dependencias de Python verificadas.", 15)
         return True
     except ImportError:
@@ -126,9 +128,6 @@ def check_environment_status(progress_callback):
     try:
         if not check_and_install_python_dependencies(progress_callback):
             return {"status": "error", "message": "Fallo crítico: No se pudieron instalar las dependencias de Python."}
-        progress_callback("Actualizando yt-dlp...", 20)
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp[impersonate]", "-q"])
-        progress_callback("yt-dlp está actualizado.", 30)
         latest_tag, download_url = get_latest_ffmpeg_info(progress_callback)
         if not latest_tag or not download_url:
             ffmpeg_path = os.path.join(BIN_DIR, "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg")
@@ -150,3 +149,45 @@ def check_environment_status(progress_callback):
         }
     except Exception as e:
         return {"status": "error", "message": f"Error en la verificación del entorno: {e}"}
+    
+def check_app_update(current_version_str):
+    """Consulta GitHub para ver si hay una nueva versión de la app."""
+    print(f"INFO: Verificando actualizaciones para la versión actual: {current_version_str}")
+    try:
+        api_url = "https://api.github.com/repos/MarckDP/DowP_Downloader/releases"
+        
+        response = requests.get(api_url, timeout=10)
+        response.raise_for_status()
+        
+        releases = response.json()
+        
+        if not releases:
+            return {"update_available": False}
+        
+        latest_release = releases[0] 
+        
+        latest_version_str = latest_release.get("tag_name", "0.0.0").lstrip('v')
+
+        release_url = latest_release.get("html_url")
+
+        current_v = version.parse(current_version_str)
+        latest_v = version.parse(latest_version_str)
+
+        if latest_v > current_v:
+                print(f"INFO: ¡Actualización encontrada! Nueva versión: {latest_version_str}")
+                return {
+                    "update_available": True,
+                    "latest_version": latest_version_str,
+                    "release_url": release_url,
+                    "is_prerelease": latest_release.get("prerelease", False) 
+                }
+        else:
+            print("INFO: La aplicación está actualizada.")
+            return {"update_available": False}
+
+    except requests.RequestException as e:
+        print(f"ERROR: No se pudo verificar la actualización de la app (error de red): {e}")
+        return {"error": "No se pudo conectar para verificar."}
+    except Exception as e:
+        print(f"ERROR: Ocurrió un error inesperado al verificar la actualización: {e}")
+        return {"error": "Ocurrió un error inesperado."}

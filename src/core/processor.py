@@ -7,6 +7,7 @@ import re
 import sys
 import time
 from .exceptions import UserCancelledError
+from main import BIN_DIR
 
 CODEC_PROFILES = {
     "Video": {
@@ -181,6 +182,15 @@ CODEC_PROFILES = {
                 "Bitrate Personalizado (CBR)": "CUSTOM_BITRATE_CBR"
             }, "container": ".mp4"
         },
+        "GIF (animado)": {
+            "gif": { 
+                "Baja Calidad (Rápido)": ['-vf', 'fps=15,scale=480:-1'],
+                "Calidad Web (480p, 15fps)": ['-filter_complex', '[0:v] fps=15,scale=480:-1,split [a][b];[a] palettegen [p];[b][p] paletteuse'],
+                "Calidad Media (540p, 24fps)": ['-filter_complex', '[0:v] fps=24,scale=540:-1,split [a][b];[a] palettegen [p];[b][p] paletteuse'],
+                "Calidad Alta (720p, 30fps)": ['-filter_complex', '[0:v] fps=30,scale=720:-1,split [a][b];[a] palettegen [p];[b][p] paletteuse'],
+                "Personalizado": "CUSTOM_GIF" 
+            }, "container": ".gif"
+        },
         "XDCAM HD422": {
             "mpeg2video": {
                 "1080i50 (50 Mbps)": ['-c:v', 'mpeg2video', '-pix_fmt', 'yuv422p', '-b:v', '50M', '-flags', '+ildct+ilme', '-top', '1', '-minrate', '50M', '-maxrate', '50M'],
@@ -207,7 +217,7 @@ CODEC_PROFILES = {
             }, "container": ".mov"
         },
         "QT Animation (qtrle)": { "qtrle": { "Estándar": ['-c:v', 'qtrle'] }, "container": ".mov" },
-        "HAP": { "hap": { "Estándar": ['-c:v', 'hap'] }, "container": ".mov" }
+        "HAP": { "hap": { "Estándar": ['-c:v', 'hap'] }, "container": ".mov" },
     },
     "Audio": {
         "AAC": {
@@ -274,13 +284,9 @@ CODEC_PROFILES = {
 
 class FFmpegProcessor:
     def __init__(self):
-        if getattr(sys, 'frozen', False):
-            project_root = os.path.dirname(sys.executable)
-        else:
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-        bin_dir = os.path.join(project_root, "bin")
         ffmpeg_exe_name = "ffmpeg.exe" if os.name == 'nt' else "ffmpeg"
-        self.ffmpeg_path = os.path.join(bin_dir, ffmpeg_exe_name)
+        self.ffmpeg_path = os.path.join(BIN_DIR, ffmpeg_exe_name)
+
         self.gpu_vendor = None
         self.is_detection_complete = False
         self.available_encoders = {"CPU": {"Video": {}, "Audio": {}}, "GPU": {"Video": {}}}
@@ -305,20 +311,36 @@ class FFmpegProcessor:
     def _detect_encoders(self, callback):
         try:
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            subprocess.check_output([self.ffmpeg_path, '-version'], stderr=subprocess.STDOUT, creationflags=creationflags)
-            all_encoders_output = subprocess.check_output([self.ffmpeg_path, '-encoders'], text=True, encoding='utf-8', stderr=subprocess.STDOUT, creationflags=creationflags)
+            
+            subprocess.check_output(
+                [self.ffmpeg_path, '-version'], 
+                stderr=subprocess.STDOUT, 
+                creationflags=creationflags,
+                cwd=os.path.dirname(self.ffmpeg_path) 
+            )
+            
+            all_encoders_output = subprocess.check_output(
+                [self.ffmpeg_path, '-encoders'], 
+                text=True, 
+                encoding='utf-8', 
+                stderr=subprocess.STDOUT, 
+                creationflags=creationflags,
+                cwd=os.path.dirname(self.ffmpeg_path)
+            )
+            
             try:
                 if getattr(sys, 'frozen', False):
                     base_path = os.path.dirname(sys.executable)
                 else:
                     base_path = os.path.dirname(os.path.abspath(__file__))
-                log_path = os.path.join(base_path, "..", "..", "ffmpeg_encoders_log.txt")
+                log_path = os.path.join(base_path, "ffmpeg_encoders_log.txt")
                 with open(log_path, "w", encoding="utf-8") as f:
                     f.write("--- ENCODERS DETECTADOS POR FFmpeg ---\n")
                     f.write(all_encoders_output)
                 print(f"DEBUG: Se ha guardado un registro de los códecs de FFmpeg en {log_path}")
             except Exception as e:
                 print(f"ADVERTENCIA: No se pudo escribir el log de códecs de FFmpeg: {e}")
+                
             for category, codecs in CODEC_PROFILES.items():
                 for friendly_name, details in codecs.items():
                     ffmpeg_codec_name = next((key for key in details if key != 'container'), None)
@@ -335,8 +357,10 @@ class FFmpegProcessor:
                         target_category = self.available_encoders[proc_type].get(category, {})
                         target_category[friendly_name] = details
                         self.available_encoders[proc_type][category] = target_category
+                        
             self.is_detection_complete = True
             callback(True, "Detección completada.")
+            
         except (FileNotFoundError, subprocess.CalledProcessError) as e:
             self.is_detection_complete = True
             callback(False, "Error: ffmpeg no está instalado o no se encuentra en el PATH.")
@@ -356,10 +380,10 @@ class FFmpegProcessor:
 
             command = [
                 self.ffmpeg_path, '-y', '-nostdin', '-progress', '-', '-i', input_file,
-                '-vn',  # Ignorar video
-                '-c:a', 'copy',  # Copiar el stream de audio directamente
-                '-map_metadata', '-1', # Limpiar metadatos del video
-                '-acodec', 'copy', # Redundante pero seguro para forzar la copia
+                '-vn',  
+                '-c:a', 'copy',  
+                '-map_metadata', '-1', 
+                '-acodec', 'copy',
                 output_file
             ]
 
@@ -375,33 +399,24 @@ class FFmpegProcessor:
             )
             self.current_process = process
 
-            # Hilos para leer la salida y el progreso (reutilizando la lógica existente)
             def read_stream_into_buffer(stream, buffer):
                 for line in iter(stream.readline, ''):
                     buffer.append(line.strip())
-
             stdout_thread = threading.Thread(target=self._read_stdout_for_progress, args=(process.stdout, progress_callback, cancellation_event, duration), daemon=True)
             stderr_thread = threading.Thread(target=read_stream_into_buffer, args=(process.stderr, error_output_buffer), daemon=True)
             stdout_thread.start()
             stderr_thread.start()
-
-            # Esperar a que el proceso termine mientras se verifica la cancelación
             while process.poll() is None:
                 if cancellation_event.is_set():
                     self.cancel_current_process()
                     raise UserCancelledError("Extracción de audio cancelada por el usuario.")
                 time.sleep(0.1)
-
             stdout_thread.join()
             stderr_thread.join()
-
             if process.returncode != 0:
                 raise Exception(f"FFmpeg falló al extraer audio: {' '.join(error_output_buffer)}")
-
             return output_file
-
         except UserCancelledError as e:
-            # La cancelación ya se manejó, solo la relanzamos
             raise e
         except Exception as e:
             self.cancel_current_process()
@@ -419,23 +434,23 @@ class FFmpegProcessor:
                 raise UserCancelledError("Recodificación cancelada por el usuario antes de iniciar.")
             input_file = options['input_file']
             output_file = os.path.normpath(options['output_file'])
+            try:
+                media_info = self.get_local_media_info(input_file)
+                actual_duration = float(media_info['format']['duration'])
+            except (Exception, KeyError, TypeError):
+                actual_duration = options.get('duration', 0) 
+            
+            command = [self.ffmpeg_path, '-y', '-nostdin', '-progress', '-']
             duration = options.get('duration', 0)
             command = [self.ffmpeg_path, '-y', '-nostdin', '-progress', '-']
-            # Añadir pre-parámetros (como -ss) ANTES del input para eficiencia
             pre_params = options.get('pre_params', [])
             if pre_params:
                 command.extend(pre_params)
-                
-            # --- ESTRUCTURA DE COMANDO CORREGIDA ---
             final_params = options['ffmpeg_params']
             video_idx = options.get('selected_video_stream_index')
             audio_idx = options.get('selected_audio_stream_index')
             mode = options.get('mode')
-
-            # 1. Añade el archivo de entrada
             command.extend(['-i', input_file])
-
-            # 2. Añade los comandos de mapeo INMEDIATAMENTE DESPUÉS
             if mode == "Video+Audio":
                 if video_idx is not None:
                     command.extend(['-map', f'0:{video_idx}'])
@@ -445,12 +460,9 @@ class FFmpegProcessor:
                     command.extend(['-map', f'0:{audio_idx}'])
             elif mode == "Solo Audio":
                 if audio_idx == "all":
-                    # Si se seleccionaron 'todas', usamos el comando correcto '-map 0:a'
                     command.extend(['-map', '0:a'])
                 elif audio_idx is not None:
-                    # Si se seleccionó una pista específica, la usamos
                     command.extend(['-map', f'0:{audio_idx}'])
-
             command.extend(final_params)
             command.append(output_file)
             print("--- Comando FFmpeg a ejecutar ---")
@@ -465,7 +477,7 @@ class FFmpegProcessor:
                 """Lee línea por línea de un stream y lo guarda en una lista."""
                 for line in iter(stream.readline, ''):
                     buffer.append(line.strip())
-            stdout_reader_thread = threading.Thread(target=self._read_stdout_for_progress, args=(process.stdout, progress_callback, cancellation_event, duration), daemon=True)
+            stdout_reader_thread = threading.Thread(target=self._read_stdout_for_progress, args=(process.stdout, progress_callback, cancellation_event, actual_duration), daemon=True)
             stderr_reader_thread = threading.Thread(target=read_stream_into_buffer, args=(process.stderr, error_output_buffer), daemon=True)
             stdout_reader_thread.start()
             stderr_reader_thread.start()
@@ -478,7 +490,6 @@ class FFmpegProcessor:
             if process.returncode != 0 and not cancellation_event.is_set():
                 full_error_log = " ".join(error_output_buffer)
                 print(f"\n--- ERROR DETALLADO DE FFmpeg ---\n{full_error_log}\n---------------------------------\n")
-                # Y lanzamos una excepción con un mensaje simple para la UI
                 raise Exception(f"FFmpeg falló (ver consola para detalles técnicos).")
             if cancellation_event.is_set():
                 raise UserCancelledError("Recodificación cancelada por el usuario.")
@@ -526,12 +537,9 @@ class FFmpegProcessor:
             '-show_streams',
             input_file
         ]
-        
         print(f"DEBUG: Ejecutando comando ffprobe con Popen: {' '.join(command)}")
-
         try:
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            
             process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
@@ -541,7 +549,6 @@ class FFmpegProcessor:
                 errors='ignore',
                 creationflags=creationflags
             )
-            
             stdout, stderr = process.communicate(timeout=60)
             if process.returncode != 0:
                 print("--- ERROR DETALLADO DE FFPROBE (Popen) ---")
@@ -550,38 +557,43 @@ class FFmpegProcessor:
                 print(f"Salida de error (stderr):\n{stderr}")
                 print("-----------------------------------------")
                 return None
-                
             return json.loads(stdout)
-
         except subprocess.TimeoutExpired:
             print("--- ERROR: TIMEOUT DE FFPROBE ---")
             print("La operación de análisis del archivo local tardó demasiado (más de 60s) y fue cancelada.")
             if 'process' in locals() and process:
-                process.kill() # Aseguramos que el proceso colgado muera
-                process.communicate() # Limpiamos los buffers
+                process.kill() 
+                process.communicate()
             print("---------------------------------")
             return None
         except (FileNotFoundError, json.JSONDecodeError) as e:
             print(f"ERROR: No se pudo obtener información de '{input_file}' con ffprobe: {e}")
             return None
 
-    def get_frame_from_video(self, input_file, at_time='00:00:05'):
+    def get_frame_from_video(self, input_file, duration=0):
         """
-        Extrae un único fotograma de un video y lo guarda en un archivo temporal.
-        Devuelve la ruta al archivo de imagen temporal.
+        Extrae un fotograma de un video en un punto de tiempo seguro.
+        CORREGIDO: Usa el orden de argumentos más robusto para FFmpeg.
         """
+        if duration > 0:
+            seek_time_seconds = min(duration / 2, 5.0)
+            at_time = f"{seek_time_seconds:.3f}"
+        else:
+            at_time = '00:00:01' 
+
         temp_dir = tempfile.gettempdir()
         output_path = os.path.join(temp_dir, f"dowp_thumbnail_{os.path.basename(input_file)}.jpg")
-
+        
         command = [
             self.ffmpeg_path,
             '-y',
-            '-i', input_file,
-            '-ss', at_time,  # Extrae el frame a los 5 segundos (puedes hacerlo aleatorio)
+            '-i', input_file,    
+            '-ss', at_time,      
             '-vframes', '1',
-            '-q:v', '2', # Buena calidad
+            '-q:v', '2',
             output_path
         ]
+        
         try:
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             subprocess.run(command, check=True, capture_output=True, creationflags=creationflags)
@@ -597,65 +609,48 @@ def clean_and_convert_vtt_to_srt(srt_path):
     Sobrescribe el archivo si se realizan cambios.
     """
     try:
-        # La función ahora asume que el archivo de entrada ya es la ruta final.
-        # Si no es srt, no hacemos nada (yt-dlp ya debió convertirlo).
         if not srt_path.lower().endswith('.srt'):
             print(f"DEBUG: Se omitió la limpieza de {os.path.basename(srt_path)} porque no es un archivo SRT.")
             return srt_path
-
         with open(srt_path, 'r', encoding='utf-8') as f:
             content = f.read()
-
-        # Si no contiene ninguna de las etiquetas a limpiar, no hay nada que hacer.
         if '<c>' not in content and '<v' not in content and 'X-word-ms' not in content and 'WEBVTT' not in content:
             print(f"DEBUG: El archivo '{os.path.basename(srt_path)}' ya es SRT estándar. No se requiere limpieza.")
             return srt_path
-
         print(f"DEBUG: Detectado formato no estándar en '{srt_path}'. Limpiando a SRT puro...")
-        
         lines = content.splitlines()
         srt_content = []
         cue_index = 1
         current_cue_text = []
-
-        # La lógica de parseo y limpieza se mantiene, es robusta.
         for i, line in enumerate(lines):
             if '-->' in line:
                 if current_cue_text:
                     srt_content.append("\n".join(current_cue_text))
                     srt_content.append("")
                     current_cue_text = []
-
                 srt_content.append(str(cue_index))
                 timestamps = line.split('-->')
                 start_time = timestamps[0].strip().replace('.', ',')
                 end_time = timestamps[1].strip().split(' ')[0].replace('.', ',')
                 srt_content.append(f"{start_time} --> {end_time}")
                 cue_index += 1
-            
             elif line.strip() and '-->' not in line and 'WEBVTT' not in line:
-                # La línea clave: elimina CUALQUIER etiqueta HTML/XML.
                 clean_line = re.sub(r'<[^>]+>', '', line).strip()
                 if clean_line:
                     current_cue_text.append(clean_line)
-            
             elif not line.strip() and current_cue_text:
                 srt_content.append("\n".join(current_cue_text))
                 srt_content.append("")
                 current_cue_text = []
-        
         if current_cue_text:
             srt_content.append("\n".join(current_cue_text))
             srt_content.append("")
-
         if not srt_content:
             return srt_path 
         with open(srt_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(srt_content))
-
         print(f"DEBUG: Subtítulo limpiado exitosamente en '{srt_path}'")
         return srt_path
-
     except Exception as e:
         print(f"ERROR: Falló la limpieza de subtítulo en '{srt_path}': {e}")
         return srt_path 

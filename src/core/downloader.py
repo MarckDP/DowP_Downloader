@@ -69,3 +69,4 @@ def download_media(url, ydl_opts, progress_callback, cancellation_event: threadi
     except Exception as e:
         print(f"Error en el proceso de descarga de yt-dlp: {e}")
         raise e
+    
