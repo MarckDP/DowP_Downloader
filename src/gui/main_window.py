@@ -28,6 +28,14 @@ from src.core.processor import FFmpegProcessor, CODEC_PROFILES
 from src.core.exceptions import UserCancelledError, LocalRecodeFailedError
 from src.core.processor import clean_and_convert_vtt_to_srt
 from contextlib import redirect_stdout
+def resource_path(relative_path):
+    """ Obtiene la ruta absoluta al recurso, funciona para desarrollo y para PyInstaller """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 from main import PROJECT_ROOT
 
 flask_app = Flask(__name__)
@@ -796,6 +804,7 @@ class MainWindow(ctk.CTk):
         self.is_shutting_down = False
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.title("DowP")
+        self.iconbitmap(resource_path("DowP-icon.ico"))
         win_width = 835
         win_height = 900
         screen_width = self.winfo_screenwidth()
