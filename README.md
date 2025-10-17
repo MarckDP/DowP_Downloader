@@ -11,26 +11,18 @@ Es una GUI para **`yt-dlp`** y **`ffmpeg`** hecha con **`Python`**. Sirve para d
 </div>
 
 ## Instalación
+1. Solo descarga el [DowP.exe](https://github.com/MarckDP/DowP_Downloader/releases)
 
-### Requisitos previos
-- [Python](https://www.python.org/downloads/) - **IMPORTANTE**: Marcar las casillas para poner Python en el PATH del sistema. Para verificar la instalación, abre CMD/Terminal y ejecuta:
-  ```bash
-  python --version
-  ```
-  Debe devolver la versión instalada.
+2. **Usarlo en codigo**
 
-### Pasos
-1. **Instalación automática**: Solo abre `main.py` o ejecuta `run_dowp.bat` y se encargará de descargar e instalar las dependencias y todo lo necesario.
-
-2. **Instalación manual** (si la automática falla):
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **FFmpeg**: Se instala automáticamente con `main.py`. Si no funciona, instálalo manualmente:
+3. **FFmpeg**: Se instala automáticamente pero si no funciona, instálalo manualmente:
    - Descarga [FFmpeg](https://www.gyan.dev/ffmpeg/builds/)
    - Instálalo en el **PATH** de tu sistema, o
-   - Copia la carpeta `bin` a la carpeta del script
+   - Copia la carpeta `bin` a la carpeta donde tengas el DowP.exe
 ## Características Principales
 
 DowP cuenta con dos modos principales: **Modo URL** y **Recodificación Local**. Las opciones de recodificación son las mismas en ambos casos.
