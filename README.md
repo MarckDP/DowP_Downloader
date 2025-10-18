@@ -16,6 +16,8 @@ Solo descarga el [DowP.exe](https://github.com/MarckDP/DowP_Downloader/releases)
 
 1. Instala las dependensias.
 
+Pero si quieres en codigo: 
+
    ```bash
    pip install -r requirements.txt
    ```
