@@ -12,9 +12,9 @@ Es una GUI para **`yt-dlp`** y **`ffmpeg`** hecha con **`Python`**. Sirve para d
 </div>
 
 ## Instalación
-1. Solo descarga el [DowP.exe](https://github.com/MarckDP/DowP_Downloader/releases)
+Solo descarga el [DowP.exe](https://github.com/MarckDP/DowP_Downloader/releases) y ya.
 
-2. **Usarlo en codigo**
+1. Instala las dependensias.
 
    ```bash
    pip install -r requirements.txt
