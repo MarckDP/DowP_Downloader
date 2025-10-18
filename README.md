@@ -5,9 +5,10 @@
 Es una GUI para **`yt-dlp`** y **`ffmpeg`** hecha con **`Python`**. Sirve para descargar videos y/o recodificar videos tanto al descargar como al importar archivos locales en el mismo programa. Lo pensé para editores de video, principalmente para **Adobe Premiere Pro**.
 
 <div align="center">
-  <img width="300" height="451" alt="DowP Interface 1" src="https://github.com/user-attachments/assets/64227026-4731-4985-bc30-dcbb1937cf0e"/>
-  <img width="300" height="451" alt="DowP Interface 2" src="https://github.com/user-attachments/assets/f04c45a3-2882-41d2-8576-9f0ab23a28a0" />
-  <img width="300" height="451" alt="DowP Interface 3" src="https://github.com/user-attachments/assets/48b0f02c-1f9c-48cd-8f26-74270affd9e8" />
+  <img width="300" height="451" alt="image" src="https://github.com/user-attachments/assets/ac367935-bc6e-43ef-be37-fd9cb7e01d31" />
+  <img width="300" height="451" alt="image" src="https://github.com/user-attachments/assets/fa4c0c7d-83c4-49e1-abd9-b215d6adb021" />
+  <img width="300" height="451" alt="image" src="https://github.com/user-attachments/assets/c089d6fb-034b-4bb6-8b12-d2edc19063d3" />
+
 </div>
 
 ## Instalación
