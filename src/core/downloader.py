@@ -52,6 +52,10 @@ def download_media(url, ydl_opts, progress_callback, cancellation_event: threadi
             raise yt_dlp.utils.DownloadError("yt-dlp reportó un error durante la descarga.")
     ydl_opts['progress_hooks'] = [hook]
     ydl_opts.setdefault('downloader', 'native')
+    if 'outtmpl' in ydl_opts:
+        # Asegurar que yt-dlp use el template exacto sin variaciones
+        ydl_opts['restrictfilenames'] = True 
+    
     try:
         if cancellation_event.is_set():
             raise UserCancelledError("Descarga cancelada por el usuario antes de iniciar.")
