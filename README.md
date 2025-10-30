@@ -14,7 +14,6 @@ Es una GUI para **`yt-dlp`** y **`ffmpeg`** hecha con **`Python`**. Sirve para d
 ## Instalación
 Solo descarga el [DowP.exe](https://github.com/MarckDP/DowP_Downloader/releases) y ya.
 
-1. Instala las dependensias.
 
 Pero si quieres en codigo: 
 
