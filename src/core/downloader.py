@@ -1,5 +1,5 @@
 import yt_dlp
-from .exceptions import UserCancelledError
+from .exceptions import UserCancelledError, PlaylistDownloadError
 import threading 
 
 def get_video_info(url):
@@ -38,13 +38,25 @@ def download_media(url, ydl_opts, progress_callback, cancellation_event: threadi
         if cancellation_event.is_set():
             raise UserCancelledError("Descarga cancelada por el usuario.")
         status = d.get('status', 'N/A')
+
         if status == 'downloading':
             total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
             downloaded_bytes = d.get('downloaded_bytes', 0)
             if total_bytes > 0:
                 percentage = (downloaded_bytes / total_bytes) * 100
                 speed = d.get('speed')
-                speed_str = f"{speed / 1024:.1f} KB/s" if speed else "N/A"
+                
+                # --- INICIO DE MODIFICACIÓN (Velocidad Dinámica) ---
+                if speed:
+                    speed_mb = speed / 1024 / 1024
+                    if speed_mb >= 1.0:
+                        speed_str = f"{speed_mb:.1f} MB/s"
+                    else:
+                        speed_kb = speed / 1024
+                        speed_str = f"{speed_kb:.0f} KB/s" # KB/s sin decimales
+                else:
+                    speed_str = "N/A"
+
                 progress_callback(percentage, f"Descargando... {percentage:.1f}% a {speed_str}")
         elif status == 'finished':
             progress_callback(100, "Descarga completada. Fusionando archivos si es necesario...")
@@ -61,11 +73,14 @@ def download_media(url, ydl_opts, progress_callback, cancellation_event: threadi
             raise UserCancelledError("Descarga cancelada por el usuario antes de iniciar.")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
+            
         final_filepath = info_dict.get('filepath')
         if not final_filepath and 'requested_downloads' in info_dict:
             final_filepath = info_dict['requested_downloads'][0].get('filepath')
+            
         if not final_filepath:
-            raise Exception("No se pudo determinar la ruta del archivo descargado después del proceso.")
+            raise PlaylistDownloadError("No se pudo determinar la ruta del archivo descargado después del proceso.")
+            
         return final_filepath
     except UserCancelledError as e:
         print(f"DEBUG: Operación de descarga interrumpida: {e}")

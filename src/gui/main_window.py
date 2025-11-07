@@ -30,7 +30,7 @@ from src.core.processor import clean_and_convert_vtt_to_srt
 from contextlib import redirect_stdout
 from .batch_download_tab import BatchDownloadTab
 from .single_download_tab import SingleDownloadTab
-from .dialogs import ConflictDialog, LoadingWindow, CompromiseDialog, SimpleMessageDialog, SavePresetDialog
+from .dialogs import ConflictDialog, LoadingWindow, CompromiseDialog, SimpleMessageDialog, SavePresetDialog, PlaylistErrorDialog
 from src.core.constants import (
     VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, SINGLE_STREAM_AUDIO_CONTAINERS,
     FORMAT_MUXER_MAP, LANG_CODE_MAP, LANGUAGE_ORDER, DEFAULT_PRIORITY,
@@ -46,7 +46,8 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
 
     return os.path.join(base_path, relative_path)
-from main import PROJECT_ROOT
+
+from main import PROJECT_ROOT, BIN_DIR
 
 flask_app = Flask(__name__)
 socketio = SocketIO(flask_app, async_mode='gevent', cors_allowed_origins='*')
@@ -80,20 +81,30 @@ def handle_register(data):
     """
     Cuando un cliente se registra, comprobamos si es el que lanzó la app
     para enlazarlo automáticamente.
+    
+    CORREGIDO: Ahora valida si el cliente ya está registrado para evitar duplicados.
     """
     global ACTIVE_TARGET_SID, AUTO_LINK_DONE
     app_id = data.get('appIdentifier')
     
     if app_id:
-        CLIENTS[request.sid] = app_id
-        print(f"INFO: Cliente SID {request.sid} registrado como '{app_id}'.")
-        
-        if main_app_instance and not AUTO_LINK_DONE and app_id == main_app_instance.launch_target:
-            ACTIVE_TARGET_SID = request.sid
-            AUTO_LINK_DONE = True 
-            print(f"INFO: Auto-enlace exitoso con '{app_id}' (SID: {request.sid}).")
-            socketio.emit('active_target_update', {'activeTarget': CLIENTS[ACTIVE_TARGET_SID]})
+        # ✅ NUEVA VALIDACIÓN: Solo registra si es la primera vez
+        if request.sid not in CLIENTS:
+            CLIENTS[request.sid] = app_id
+            print(f"INFO: Cliente SID {request.sid} registrado como '{app_id}'.")
+            
+            # Solo intenta auto-enlace si es la primera vez
+            if main_app_instance and not AUTO_LINK_DONE and app_id == main_app_instance.launch_target:
+                ACTIVE_TARGET_SID = request.sid
+                AUTO_LINK_DONE = True 
+                print(f"INFO: Auto-enlace exitoso con '{app_id}' (SID: {request.sid}).")
+                socketio.emit('active_target_update', {'activeTarget': CLIENTS[ACTIVE_TARGET_SID]})
+            else:
+                active_app = CLIENTS.get(ACTIVE_TARGET_SID)
+                socketio.emit('active_target_update', {'activeTarget': active_app}, to=request.sid)
         else:
+            # ✅ OPCIONAL: Si ya estaba registrado, solo envía el estado actual
+            # Sin imprimir nada (evita spam en logs)
             active_app = CLIENTS.get(ACTIVE_TARGET_SID)
             socketio.emit('active_target_update', {'activeTarget': active_app}, to=request.sid)
 
@@ -186,42 +197,122 @@ class MainWindow(ctk.CTk):
         
     def _get_best_available_info(self, url, options):
         """
-        Ejecuta una simulación usando la API de yt-dlp, incluyendo toda la lógica de cookies.
+        Ejecuta una simulación usando la API de yt-dlp para obtener información
+        sobre el mejor formato disponible cuando la selección del usuario falla.
         """
         try:
+            mode = options.get("mode", "Video+Audio")
+            
             ydl_opts = {
                 'no_warnings': True,
                 'noplaylist': True,
-                'format': 'ba' if options.get("mode") == "Solo Audio" else 'bv+ba',
+                'quiet': True,
                 'ffmpeg_location': self.ffmpeg_processor.ffmpeg_path
             }
+            
+            # Determinar el selector según el modo
+            if mode == "Solo Audio":
+                ydl_opts['format'] = 'ba/best'
+            else:
+                # Intentar con audio si está disponible, sino solo video
+                ydl_opts['format'] = 'bv+ba/bv/best'
 
+            # Configurar cookies
             cookie_mode = options.get("cookie_mode")
             if cookie_mode == "Archivo Manual..." and options.get("cookie_path"):
                 ydl_opts['cookiefile'] = options["cookie_path"]
             elif cookie_mode != "No usar":
-                browser_arg = options.get("selected_browser")
+                browser_arg = options.get("selected_browser", "chrome")
                 if options.get("browser_profile"):
                     browser_arg += f":{options['browser_profile']}"
                 ydl_opts['cookiesfrombrowser'] = (browser_arg,)
 
+            # Extraer información
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
 
-            if options.get("mode") == "Solo Audio":
-                abr = info.get('abr', 0)
-                acodec = info.get('acodec', 'N/A').split('.')[0]
-                return f"Audio: ~{abr:.0f} kbps ({acodec})"
+            if not info:
+                return "No se pudo obtener información del video."
+
+            # Construir mensaje detallado según el modo
+            if mode == "Solo Audio":
+                abr = info.get('abr') or info.get('tbr', 0)
+                acodec = info.get('acodec', 'desconocido')
+                if acodec and acodec != 'none':
+                    acodec = acodec.split('.')[0].upper()
+                
+                ext = info.get('ext', 'N/A')
+                filesize = info.get('filesize') or info.get('filesize_approx')
+                
+                message = f"🎵 Mejor audio disponible:\n\n"
+                message += f"• Bitrate: ~{abr:.0f} kbps\n"
+                message += f"• Códec: {acodec}\n"
+                message += f"• Formato: {ext}\n"
+                
+                if filesize:
+                    size_mb = filesize / (1024 * 1024)
+                    message += f"• Tamaño: ~{size_mb:.1f} MB\n"
+                
+                return message
             
-            vcodec = info.get('vcodec', 'N/A').split('.')[0]
-            resolution = f"{info.get('width')}x{info.get('height')}"
-            abr = info.get('abr', 0)
-            acodec = info.get('acodec', 'N/A').split('.')[0]
-            return f"Video: {resolution} ({vcodec})  |  Audio: ~{abr:.0f} kbps ({acodec})"
+            else:  # Video+Audio
+                # Información de video
+                width = info.get('width', 'N/A')
+                height = info.get('height', 'N/A')
+                vcodec = info.get('vcodec', 'desconocido')
+                if vcodec and vcodec != 'none':
+                    vcodec = vcodec.split('.')[0].upper()
+                
+                fps = info.get('fps', 'N/A')
+                vext = info.get('ext', 'N/A')
+                
+                # Información de audio
+                acodec = info.get('acodec', 'desconocido')
+                if acodec and acodec != 'none':
+                    acodec = acodec.split('.')[0].upper()
+                else:
+                    acodec = "Sin audio"
+                
+                abr = info.get('abr') or info.get('tbr', 0)
+                
+                # Tamaño
+                filesize = info.get('filesize') or info.get('filesize_approx')
+                
+                message = f"🎬 Mejor calidad disponible:\n\n"
+                message += f"📹 Video:\n"
+                message += f"   • Resolución: {width}x{height}\n"
+                message += f"   • Códec: {vcodec}\n"
+                
+                if fps != 'N/A':
+                    message += f"   • FPS: {fps}\n"
+                
+                message += f"   • Formato: {vext}\n\n"
+                
+                message += f"🔊 Audio:\n"
+                message += f"   • Códec: {acodec}\n"
+                
+                if acodec != "Sin audio":
+                    message += f"   • Bitrate: ~{abr:.0f} kbps\n"
+                
+                if filesize:
+                    size_mb = filesize / (1024 * 1024)
+                    message += f"\n📦 Tamaño estimado: ~{size_mb:.1f} MB"
+                
+                return message
 
         except Exception as e:
-            print(f"ERROR: Falló la simulación de descarga (API Completa): {e}")
-            return "No se pudieron obtener los detalles."
+            error_msg = str(e)
+            print(f"ERROR: Falló la simulación de descarga: {error_msg}")
+            
+            # Mensaje más amigable para el usuario
+            return (
+                "❌ No se pudieron obtener los detalles del formato alternativo.\n\n"
+                f"Razón: {error_msg[:100]}...\n\n"
+                "Puedes intentar:\n"
+                "• Verificar la URL\n"
+                "• Configurar cookies si el video es privado\n"
+                "• Intentar más tarde si hay límite de peticiones"
+            )
 
     def __init__(self, launch_target=None):
         super().__init__()
@@ -253,7 +344,7 @@ class MainWindow(ctk.CTk):
         self.title("DowP")
         self.iconbitmap(resource_path("DowP-icon.ico"))
         win_width = 835
-        win_height = 915
+        win_height = 950
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         pos_x = (screen_width // 2) - (win_width // 2)
@@ -280,9 +371,11 @@ class MainWindow(ctk.CTk):
         self.cookies_mode_saved = "No usar"
         self.selected_browser_saved = "firefox"
         self.browser_profile_saved = ""
-        self.auto_download_subtitle_saved = False
         self.ffmpeg_update_snooze_until = None
         self.custom_presets = []
+        self.batch_playlist_analysis_saved = True
+        self.batch_auto_import_saved = True
+        self.quick_preset_saved = ""
         self.recode_settings = {}
         self.apply_quick_preset_checkbox_state = False
         self.keep_original_quick_saved = True
@@ -299,8 +392,10 @@ class MainWindow(ctk.CTk):
                     self.cookies_mode_saved = settings.get("cookies_mode", self.cookies_mode_saved)
                     self.selected_browser_saved = settings.get("selected_browser", self.selected_browser_saved)
                     self.browser_profile_saved = settings.get("browser_profile", self.browser_profile_saved)
-                    self.auto_download_subtitle_saved = settings.get("auto_download_subtitle", self.auto_download_subtitle_saved)
                     snooze_str = settings.get("ffmpeg_update_snooze_until")
+                    self.batch_playlist_analysis_saved = settings.get("batch_playlist_analysis", self.batch_playlist_analysis_saved)
+                    self.batch_auto_import_saved = settings.get("batch_auto_import", self.batch_auto_import_saved)
+                    self.quick_preset_saved = settings.get("quick_preset_saved", self.quick_preset_saved)
                     if snooze_str:
                         self.ffmpeg_update_snooze_until = datetime.fromisoformat(snooze_str)
                     self.recode_settings = settings.get("recode_settings", self.recode_settings)
@@ -318,62 +413,110 @@ class MainWindow(ctk.CTk):
         self.tab_view = ctk.CTkTabview(self, anchor="nw")
         self.tab_view.pack(expand=True, fill="both", padx=5, pady=5)
         
-        # Añadir la pestaña de Descarga Única
         # (Cargará la clase de nuestro nuevo archivo)
-        self.tab_view.add("Descarga Única")
-        self.single_tab = SingleDownloadTab(master=self.tab_view.tab("Descarga Única"), app=self)
+        self.tab_view.add("Proceso Único")
+        self.single_tab = SingleDownloadTab(master=self.tab_view.tab("Proceso Único"), app=self)
         
         # Añadir la pestaña de Lotes (como placeholder)
-        self.tab_view.add("Descarga por Lotes")
-        self.batch_tab = BatchDownloadTab(master=self.tab_view.tab("Descarga por Lotes"), app=self)
+        self.tab_view.add("Proceso por Lotes")
+        self.batch_tab = BatchDownloadTab(master=self.tab_view.tab("Proceso por Lotes"), app=self)
 
         self.run_initial_setup()
         self._check_for_ui_requests()
+        self._last_clipboard_check = "" 
+        self.bind("<FocusIn>", self._on_app_focus)
     
     def run_initial_setup(self):
         """
         Inicia la aplicación, configura la UI y lanza una comprobación de
-        FFmpeg en segundo plano.
+        FFmpeg en segundo plano (solo si es necesario).
         """
         print("INFO: Configurando UI y lanzando comprobación de FFmpeg en segundo plano...")
 
+        # 1. Comprobación de actualización de la app (esto se queda igual)
         from src.core.setup import check_app_update
         threading.Thread(
             target=lambda: self.on_update_check_complete(check_app_update(self.single_tab.APP_VERSION)), # CORREGIDO
             daemon=True
         ).start()
-
+        
         from src.core.setup import check_environment_status
-        threading.Thread(
-            target=lambda: self.on_status_check_complete(check_environment_status(lambda text, val: None)), # CORREGIDO
-            daemon=True
-        ).start()
-
+        
+        # 2. Definir la ruta de FFmpeg
+        ffmpeg_exe_name = "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
+        ffmpeg_path = os.path.join(BIN_DIR, ffmpeg_exe_name)
+        
+        # 3. Comprobar si FFmpeg existe
+        if not os.path.exists(ffmpeg_path):
+            # 4a. NO EXISTE: Es la primera vez. Ejecutar el check completo para descargarlo.
+            print("INFO: FFmpeg no detectado. Ejecutando comprobador de entorno completo...")
+            threading.Thread(
+                target=lambda: self.on_status_check_complete(check_environment_status(lambda text, val: None)),
+                daemon=True
+            ).start()
+        else:
+            # 4b. SÍ EXISTE: Cargar solo la versión local, sin llamar a la API.
+            print("INFO: FFmpeg detectado localmente. Omitiendo la comprobación de API de GitHub.")
+            local_version = "Desconocida"
+            version_file = os.path.join(BIN_DIR, "ffmpeg_version.txt")
+            if os.path.exists(version_file):
+                try:
+                    with open(version_file, 'r') as f:
+                        local_version = f.read().strip()
+                except Exception as e:
+                    print(f"ADVERTENCIA: No se pudo leer el archivo de versión de FFmpeg: {e}")
+            
+            # 5. Actualizar la UI directamente con la info local
+            self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Instalado)")
+            self.single_tab.update_ffmpeg_button.configure(state="normal", text="Buscar Actualizaciones de FFmpeg")
+        
+        # 6. Detección de códecs (esto se ejecuta siempre, pero es local, no usa API)
         self.ffmpeg_processor.run_detection_async(self.on_ffmpeg_detection_complete) # CORREGIDO
 
     def on_update_check_complete(self, update_info):
-        """Callback que se ejecuta cuando la comprobación de versión termina."""
+        """Callback que se ejecuta cuando la comprobación de versión termina. Ahora inicia la descarga."""
         if update_info.get("update_available"):
             latest_version = update_info.get("latest_version")
-            self.single_tab.release_page_url = update_info.get("release_url") # CORREGIDO
-            
+            self.single_tab.release_page_url = update_info.get("release_url") # Guardamos por si acaso
+
             is_prerelease = update_info.get("is_prerelease", False)
-            if is_prerelease:
-                status_text = f"¡Nueva Pre-release {latest_version} disponible!"
+            version_type = "Pre-release" if is_prerelease else "versión"
+            status_text = f"¡Nueva {version_type} {latest_version} disponible!"
+
+            self.single_tab.app_status_label.configure(text=status_text, text_color="#52a2f2")
+
+            # --- CAMBIO: INICIA EL PROCESO DE ACTUALIZACIÓN ---
+            installer_url = update_info.get("installer_url")
+            if installer_url:
+                # Preguntar al usuario si quiere actualizar AHORA
+                user_response = messagebox.askyesno(
+                    "Actualización Disponible",
+                    f"Hay una nueva {version_type} ({latest_version}) de DowP disponible.\n\n"
+                    "¿Deseas descargarla e instalarla ahora?\n\n"
+                    "(DowP se cerrará para completar la instalación)"
+                )
+                self.lift() # Asegura que la ventana principal esté al frente
+                self.focus_force()
+
+                if user_response:
+                    # Llamar a la nueva función para descargar y ejecutar
+                    # Pasamos la URL y la versión para mostrar en el progreso
+                    self._iniciar_auto_actualizacion(installer_url, latest_version)
+                else:
+                    # El usuario dijo NO, solo configuramos el botón para que pueda hacerlo manualmente
+                    self.single_tab.update_app_button.configure(text=f"Descargar v{latest_version}", state="normal", fg_color=self.single_tab.DOWNLOAD_BTN_COLOR)
             else:
-                status_text = f"¡Nueva versión {latest_version} disponible!"
-            
-            self.single_tab.app_status_label.configure(text=status_text, text_color="#52a2f2") # CORREGIDO
-            
-            self.single_tab.update_app_button.configure(text=f"Descargar v{latest_version}", state="normal", fg_color=self.single_tab.DOWNLOAD_BTN_COLOR) # CORREGIDO
+                # No se encontró el .exe, solo habilitar el botón para ir a la página
+                print("ADVERTENCIA: Se detectó una nueva versión pero no se encontró el instalador .exe en los assets.")
+                self.single_tab.update_app_button.configure(text=f"Ir a Descargas (v{latest_version})", state="normal", fg_color=self.single_tab.DOWNLOAD_BTN_COLOR)
+
 
         elif "error" in update_info:
-            self.single_tab.app_status_label.configure(text=f"DowP v{self.single_tab.APP_VERSION} - Error al verificar", text_color="orange") # CORREGIDO
-            self.single_tab.update_app_button.configure(text="Reintentar", state="normal", fg_color="gray") # CORREGIDO
-
-        else: 
-            self.single_tab.app_status_label.configure(text=f"DowP v{self.single_tab.APP_VERSION} - Estás al día ✅") # CORREGIDO
-            self.single_tab.update_app_button.configure(text="Sin actualizaciones", state="disabled") # CORREGIDO
+            self.single_tab.app_status_label.configure(text=f"DowP v{self.single_tab.APP_VERSION} - Error al verificar", text_color="orange")
+            self.single_tab.update_app_button.configure(text="Reintentar", state="normal", fg_color="gray")
+        else:
+            self.single_tab.app_status_label.configure(text=f"DowP v{self.single_tab.APP_VERSION} - Estás al día ✅")
+            self.single_tab.update_app_button.configure(text="Sin actualizaciones", state="disabled")
 
 
     def on_status_check_complete(self, status_info, force_check=False):
@@ -403,8 +546,11 @@ class MainWindow(ctk.CTk):
         else:
             update_available = local_version != latest_version
             snoozed = self.ffmpeg_update_snooze_until and datetime.now() < self.ffmpeg_update_snooze_until
+                        
+            # La condición "(not snoozed or force_check)" se ha cambiado a "force_check"
+            # Ahora el pop-up solo saldrá si el usuario presionó el botón (force_check=True)
+            if update_available and force_check:
             
-            if update_available and (not snoozed or force_check):
                 user_response = messagebox.askyesno(
                     "Actualización Disponible",
                     f"Hay una nueva versión de FFmpeg disponible.\n\n"
@@ -412,27 +558,28 @@ class MainWindow(ctk.CTk):
                     f"Versión Nueva: {latest_version}\n\n"
                     "¿Deseas actualizar ahora?"
                 )
-                self.lift() # CORREGIDO
+                self.lift() 
                 if user_response:
                     should_download = True
                     self.ffmpeg_update_snooze_until = None 
                 else:
                     self.ffmpeg_update_snooze_until = datetime.now() + timedelta(days=15)
-                    self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualización pospuesta)") # CORREGIDO
-                self.single_tab.save_settings() # CORREGIDO
+                    self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualización pospuesta)") 
+                self.single_tab.save_settings()
+                self.batch_tab.save_settings()
                 
             elif update_available and snoozed:
                 print(f"DEBUG: Actualización de FFmpeg omitida. Snooze activo hasta {self.ffmpeg_update_snooze_until}.")
-                self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualización pospuesta)") # CORREGIDO
+                self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualización pospuesta)") 
             else:
-                self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualizado)") # CORREGIDO
+                self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualizado)") 
 
         if should_download:
             if not download_url:
                 messagebox.showerror("Error", "No se pudo obtener la URL de descarga para FFmpeg.")
                 return
 
-            self.single_tab.update_progress(0, f"Iniciando descarga de FFmpeg {latest_version}...") # CORREGIDO
+            self.single_tab.update_progress(0, f"Iniciando descarga de FFmpeg {latest_version}...") 
             from src.core.setup import download_and_install_ffmpeg
             
             def download_task():
@@ -476,6 +623,87 @@ class MainWindow(ctk.CTk):
             self.single_tab.apply_quick_preset_checkbox.configure(text="Recodificación no disponible (Error FFmpeg)", state="disabled") # CORREGIDO
             self.single_tab.apply_quick_preset_checkbox.deselect() # CORREGIDO
 
+    def _iniciar_auto_actualizacion(self, installer_url, version_str):
+        """
+        Descarga el instalador de la nueva versión en un hilo separado,
+        lo ejecuta y cierra la aplicación actual.
+        """
+        print(f"INFO: Iniciando descarga de la actualización v{version_str} desde {installer_url}")
+
+        # Deshabilitar botones mientras se descarga
+        self.single_tab.update_app_button.configure(text=f"Descargando v{version_str}...", state="disabled")
+        self.single_tab.update_ffmpeg_button.configure(state="disabled") # Opcional: deshabilitar también este
+        self.single_tab.download_button.configure(state="disabled") # Deshabilitar descarga/proceso principal
+
+        # Mostrar progreso inicial
+        self.single_tab.update_progress(0, f"Descargando actualización v{version_str}...")
+
+        def download_and_run():
+            temp_dir = None # Inicializar fuera del try
+            try:
+                # --- Descargar el instalador ---
+                import tempfile # Importar aquí para mantenerlo local
+                import requests # Ya deberías tenerlo importado arriba
+                import subprocess # Ya deberías tenerlo importado arriba
+                import os # Ya deberías tenerlo importado arriba
+
+                # Crear un directorio temporal seguro
+                temp_dir = tempfile.mkdtemp(prefix="dowp_update_")
+                installer_filename = os.path.basename(installer_url) # Ej: DowP_v1.2.1_setup.exe
+                installer_path = os.path.join(temp_dir, installer_filename)
+
+                # Descargar con progreso (similar a como se descarga FFmpeg)
+                last_reported_progress = -1
+                with requests.get(installer_url, stream=True, timeout=180) as r: # Timeout más largo por si acaso
+                    r.raise_for_status()
+                    total_size = int(r.headers.get('content-length', 0))
+                    downloaded_size = 0
+                    with open(installer_path, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192 * 4): # Chunk más grande
+                            if not chunk: continue
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                            if total_size > 0:
+                                progress_percent = (downloaded_size / total_size) * 100
+                                # Actualiza la UI desde el hilo principal usando 'after'
+                                self.after(0, self.single_tab.update_progress, progress_percent / 100.0,
+                                           f"Descargando: {downloaded_size / (1024*1024):.1f} / {total_size / (1024*1024):.1f} MB")
+                                last_reported_progress = int(progress_percent)
+
+                self.after(0, self.single_tab.update_progress, 1.0, "Descarga completa. Iniciando instalador...")
+                print(f"INFO: Instalador descargado en: {installer_path}")
+
+                # --- Ejecutar el instalador y cerrar DowP ---
+                # Usamos Popen para que no espere a que termine
+                # CREATE_NEW_PROCESS_GROUP es para que el instalador no se cierre si cerramos la consola
+                creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
+                subprocess.Popen([installer_path], creationflags=creationflags)
+
+                print("INFO: Instalador iniciado. Cerrando DowP para permitir la actualización...")
+                # Programar el cierre de la ventana principal desde el hilo principal
+                self.after(500, self.destroy) # Espera medio segundo antes de cerrar
+
+            except Exception as e:
+                print(f"ERROR: Falló el proceso de auto-actualización: {e}")
+                # Si falla, informa al usuario y reactiva los botones
+                self.after(0, lambda: messagebox.showerror("Error de Actualización",
+                                                           f"No se pudo completar la actualización automática:\n\n{e}\n\n"
+                                                           "Puedes intentar descargarla manualmente desde la página de releases."))
+                # Reactivar botones en la UI desde el hilo principal
+                self.after(0, self._reset_buttons_to_original_state) # Reutiliza tu función de reseteo
+                self.after(0, lambda: self.single_tab.update_progress(0, "❌ Falló la actualización automática."))
+                # Limpiar directorio temporal si se creó y falló
+                if temp_dir and os.path.exists(temp_dir):
+                    try:
+                        import shutil
+                        shutil.rmtree(temp_dir)
+                        print(f"DEBUG: Directorio temporal de actualización eliminado: {temp_dir}")
+                    except Exception as clean_e:
+                        print(f"ADVERTENCIA: No se pudo eliminar el directorio temporal {temp_dir}: {clean_e}")
+
+        # Iniciar la descarga en un hilo separado para no bloquear la UI
+        threading.Thread(target=download_and_run, daemon=True).start()
+
     def _check_for_ui_requests(self):
         """
         Verifica si un hilo secundario ha solicitado una acción de UI.
@@ -506,34 +734,84 @@ class MainWindow(ctk.CTk):
                 self.ui_response_event.set() # CORREGIDO
                 
             elif request_type == "ask_compromise":
-                details = self.ui_request_data.get("details", "Detalles no disponibles.") # CORREGIDO
+                details = self.ui_request_data.get("details", "Detalles no disponibles.") 
                 dialog = CompromiseDialog(self, details)
-                self.wait_window(dialog) # CORREGIDO
-                self.lift() # CORREGIDO
-                self.focus_force() # CORREGIDO
-                self.ui_response_data["result"] = dialog.result # CORREGIDO
-                self.ui_response_event.set() # CORREGIDO
+                self.wait_window(dialog) 
+                self.lift() 
+                self.focus_force() 
+                self.ui_response_data["result"] = dialog.result 
+                self.ui_response_event.set() 
+            
+            elif request_type == "ask_playlist_error":
+                url_fragment = self.ui_request_data.get("filename", "esta URL")
+                dialog = PlaylistErrorDialog(self, url_fragment)
+                
+                self.wait_window(dialog)
+                self.lift()
+                self.focus_force()
+                self.ui_response_data["result"] = dialog.result
+                self.ui_response_event.set()
                 
         self.after(100, self._check_for_ui_requests) # CORREGIDO
+
+    def save_settings(self):
+        """
+        Recopila todos los ajustes de la app y los guarda en app_settings.json.
+        Esta es la ÚNICA función que debe escribir en el archivo.
+        """
+        
+        # 1. Recopilar ajustes de la Pestaña Individual
+        # (Estos son actualizados en la app por la propia pestaña)
+        
+        # 2. Recopilar ajustes de la Pestaña de Lotes
+        # (Estos son actualizados en la app por la propia pestaña)
+
+        # 3. Crear el diccionario de configuración final
+        settings_to_save = {
+            "default_download_path": self.default_download_path,
+            "ffmpeg_update_snooze_until": self.ffmpeg_update_snooze_until.isoformat() if self.ffmpeg_update_snooze_until else None,
+            "custom_presets": self.custom_presets,
+
+            # Cookies
+            "cookies_path": self.cookies_path,
+            "cookies_mode": self.cookies_mode_saved,
+            "selected_browser": self.selected_browser_saved,
+            "browser_profile": self.browser_profile_saved,
+
+            # Pestaña Individual (Modo Rápido)
+            "apply_quick_preset_enabled": self.apply_quick_preset_checkbox_state,
+            "keep_original_quick_enabled": self.keep_original_quick_saved,
+            "quick_preset_saved": self.quick_preset_saved,
+
+            # Pestaña Individual (Modo Manual)
+            "recode_settings": self.recode_settings,
+
+            # Pestaña de Lotes
+            "batch_playlist_analysis": self.batch_playlist_analysis_saved,
+            "batch_auto_import": self.batch_auto_import_saved
+        }
+
+        # 4. Escribir en el archivo
+        try:
+            with open(self.SETTINGS_FILE, 'w') as f:
+                json.dump(settings_to_save, f, indent=4)
+        except IOError as e:
+            print(f"ERROR: Fallo al guardar configuración central: {e}")
 
     def on_closing(self):
         """
         Se ejecuta cuando el usuario intenta cerrar la ventana.
         Gestiona la cancelación, limpieza y confirmación de forma robusta.
         """
-        # CORREGIDO: (Ahora apunta a self.single_tab.active_operation_thread)
         if self.single_tab.active_operation_thread and self.single_tab.active_operation_thread.is_alive():
             if messagebox.askokcancel("Confirmar Salida", "Hay una operación en curso. ¿Estás seguro de que quieres salir?"):
-                self.is_shutting_down = True # CORREGIDO: (self, no self.app)
+                self.is_shutting_down = True 
                 self.attributes("-disabled", True)
-                # CORREGIDO: (Apunta a self.single_tab.progress_label)
                 self.single_tab.progress_label.configure(text="Cancelando y limpiando, por favor espera...")
                 self.cancellation_event.set()
-                # CORREGIDO: (self.after, no self.app.after)
                 self.after(100, self._wait_for_thread_to_finish_and_destroy)
         else:
-            # CORREGIDO: (La función save_settings() vive en la pestaña)
-            self.single_tab.save_settings()
+            self.save_settings() 
             self.destroy()
 
     def _wait_for_thread_to_finish_and_destroy(self):
@@ -541,11 +819,62 @@ class MainWindow(ctk.CTk):
         Vigilante que comprueba si el hilo de trabajo ha terminado.
         Una vez que termina (después de su limpieza), cierra la ventana.
         """
-        # CORREGIDO: (Apunta a self.single_tab.active_operation_thread)
         if self.single_tab.active_operation_thread and self.single_tab.active_operation_thread.is_alive():
-            # CORREGIDO: (self.after, no self.app.after)
             self.after(100, self._wait_for_thread_to_finish_and_destroy)
         else:
-            # CORREGIDO: (La función save_settings() vive en la pestaña)
-            self.single_tab.save_settings()
+            self.save_settings() 
             self.destroy()
+
+    # --- AÑADIR ESTA NUEVA FUNCIÓN (disparador con retraso) ---
+    def _on_app_focus(self, event=None):
+        """
+        Se llama cuando la ventana de la aplicación gana el foco.
+        Espera 50ms para que la UI (como el cambio de pestaña) se estabilice
+        antes de comprobar el portapapeles.
+        """
+        self.after(50, self._check_clipboard_and_paste)
+
+    # --- ESTA ES LA FUNCIÓN ANTERIOR RENOMBRADA ---
+    def _check_clipboard_and_paste(self):
+        """
+        Comprueba el portapapeles y pega automáticamente si es una URL.
+        """
+        try:
+            clipboard_content = self.clipboard_get()
+        except (tkinter.TclError, Exception):
+            clipboard_content = "" # Portapapeles vacío o con datos no-texto
+
+        # 1. Evitar re-pegar si el contenido no ha cambiado
+        if not clipboard_content or clipboard_content == self._last_clipboard_check:
+            return
+        
+        # 2. Actualizar el contenido "visto"
+        self._last_clipboard_check = clipboard_content
+
+        # 3. Validar si es una URL (regex simple)
+        url_regex = re.compile(r'^(https|http)://[^\s/$.?#].[^\s]*$')
+        if not url_regex.match(clipboard_content):
+            return # No es una URL válida
+
+        # 4. Determinar qué pestaña está activa (AHORA SÍ FUNCIONA)
+        active_tab_name = self.tab_view.get()
+        target_entry = None
+
+        if active_tab_name == "Proceso Único":
+            target_entry = self.single_tab.url_entry
+        elif active_tab_name == "Proceso por Lotes":
+            target_entry = self.batch_tab.url_entry
+
+        # 5. Pegar la URL, REEMPLAZANDO el contenido
+        if target_entry:
+            # Si el texto ya es el mismo, no hacer nada (evita re-pegar)
+            if target_entry.get() == clipboard_content:
+                return
+
+            print(f"DEBUG: URL detectada en portapapeles. Reemplazando en '{active_tab_name}'.")
+            target_entry.delete(0, 'end') # BORRAR contenido actual
+            target_entry.insert(0, clipboard_content) # INSERTAR nuevo contenido
+            
+            # Actualizar el estado del botón en la pestaña individual
+            if active_tab_name == "Proceso Único":
+                self.single_tab.update_download_button_state()

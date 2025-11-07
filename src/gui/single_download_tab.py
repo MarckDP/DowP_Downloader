@@ -26,9 +26,9 @@ from datetime import datetime, timedelta
 # Importar nuestros otros módulos
 from src.core.downloader import get_video_info, download_media
 from src.core.processor import FFmpegProcessor, CODEC_PROFILES
-from src.core.exceptions import UserCancelledError, LocalRecodeFailedError
+from src.core.exceptions import UserCancelledError, LocalRecodeFailedError, PlaylistDownloadError # <-- MODIFICAR
 from src.core.processor import clean_and_convert_vtt_to_srt
-from .dialogs import ConflictDialog, LoadingWindow, CompromiseDialog, SimpleMessageDialog, SavePresetDialog
+from .dialogs import ConflictDialog, LoadingWindow, CompromiseDialog, SimpleMessageDialog, SavePresetDialog, PlaylistErrorDialog, Tooltip
 from src.core.constants import (
     VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, SINGLE_STREAM_AUDIO_CONTAINERS,
     FORMAT_MUXER_MAP, LANG_CODE_MAP, LANGUAGE_ORDER,
@@ -44,13 +44,12 @@ def resource_path(relative_path):
 from main import PROJECT_ROOT
 # -------------------------------------------------
 
-
 class SingleDownloadTab(ctk.CTkFrame):
     """
     Esta clase contendrá TODA la UI y la lógica de la
     pestaña de descarga única.
     """
-    APP_VERSION = "1.2.1"
+    APP_VERSION = "1.2.3"
 
 
     DOWNLOAD_BTN_COLOR = "#28A745"       
@@ -91,6 +90,8 @@ class SingleDownloadTab(ctk.CTkFrame):
 
         # (Omitimos 'geometry', 'minsize', 'ctk', 'server_thread'...)
 
+        self.combined_variants = {}  # 🆕 Diccionario para variantes multiidioma
+        self.combined_audio_map = {}  # 🆕 Mapeo de idiomas seleccionados
         self.video_formats = {}
         self.audio_formats = {}
         self.subtitle_formats = {} 
@@ -110,6 +111,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.current_subtitle_map = {}
         self.apply_quick_preset_checkbox_state = False
         self.keep_original_quick_saved = True
+        self.analysis_was_playlist = False
 
         # (Omitimos 'ui_request_event' y las otras, se quedan en 'app')
 
@@ -132,6 +134,7 @@ class SingleDownloadTab(ctk.CTkFrame):
 
     def _initialize_ui_settings(self):
 
+        self.output_path_entry.delete(0, 'end')
         self.output_path_entry.insert(0, self.app.default_download_path)
         self.cookie_mode_menu.set(self.app.cookies_mode_saved) 
         if self.app.cookies_path: 
@@ -142,10 +145,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.browser_profile_entry.insert(0, self.app.browser_profile_saved)
         self.on_cookie_mode_change(self.app.cookies_mode_saved)
 
-        if self.app.auto_download_subtitle_saved: 
-            self.auto_download_subtitle_check.select()
-        else: 
-            self.auto_download_subtitle_check.deselect()
+        self.auto_download_subtitle_check.deselect()
 
         if self.app.apply_quick_preset_checkbox_state: 
             self.apply_quick_preset_checkbox.select()
@@ -169,8 +169,13 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.recode_audio_checkbox.deselect()
         self._toggle_recode_panels()
         self._populate_preset_menu()
+        
+        # 🆕 CRÍTICO: Forzar la visibilidad del panel de recodificación al inicio
+        self.recode_main_frame.pack(pady=(10, 0), padx=5, fill="both", expand=True)
+        print("DEBUG: Panel de recodificación forzado a mostrarse en inicialización")
+        
         self.app.after(100, self._update_save_preset_visibility)
-    
+        
     def _create_widgets(self):
         url_frame = ctk.CTkFrame(self)
         url_frame.pack(pady=10, padx=10, fill="x")
@@ -255,11 +260,19 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.auto_download_subtitle_check.pack(padx=10, pady=5, anchor="w")
         self.clean_subtitle_check = ctk.CTkCheckBox(subtitle_options_frame, text="Convertir y estandarizar a formato SRT")
         self.clean_subtitle_check.pack(padx=10, pady=(0, 5), anchor="w")
+
         ctk.CTkLabel(options_scroll_frame, text="Cookies", font=ctk.CTkFont(weight="bold")).pack(fill="x", padx=10, pady=(5, 2))
         cookie_options_frame = ctk.CTkFrame(options_scroll_frame)
         cookie_options_frame.pack(fill="x", padx=5, pady=(0, 10))
-        self.cookie_mode_menu = ctk.CTkOptionMenu(cookie_options_frame, values=["No usar", "Archivo Manual...", "Desde Navegador"], command=self.on_cookie_mode_change)
+
+        # 🔧 MODIFICADO: Agregar opción de ayuda al menú
+        self.cookie_mode_menu = ctk.CTkOptionMenu(
+            cookie_options_frame, 
+            values=["No usar", "Archivo Manual...", "Desde Navegador", "¿Cómo obtener cookies?"], 
+            command=self.on_cookie_mode_change
+        )
         self.cookie_mode_menu.pack(fill="x", padx=10, pady=(0, 5))
+
         self.manual_cookie_frame = ctk.CTkFrame(cookie_options_frame, fg_color="transparent")
         self.cookie_path_entry = ctk.CTkEntry(self.manual_cookie_frame, placeholder_text="Ruta al archivo cookies.txt...")
         self.cookie_path_entry.pack(fill="x")
@@ -333,9 +346,6 @@ class SingleDownloadTab(ctk.CTkFrame):
         )
         self.recode_main_frame = ctk.CTkScrollableFrame(details_frame)
 
-
-
-
         ctk.CTkLabel(self.recode_main_frame, text="Opciones de Recodificación", font=ctk.CTkFont(weight="bold")).pack(pady=(5,10))
 
         recode_mode_frame = ctk.CTkFrame(self.recode_main_frame, fg_color="transparent")
@@ -362,6 +372,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         def on_preset_change(selection):
             self.update_download_button_state()
             self._update_export_button_state()
+            self.save_settings()
         
         self.recode_preset_menu = ctk.CTkOptionMenu(self.quick_recode_options_frame, values=["- Aún no disponible -"], command=on_preset_change)
         self.recode_preset_menu.pack(pady=10, padx=10, fill="x")
@@ -545,10 +556,22 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.select_folder_button.pack(side="left", padx=(0, 5))
         self.open_folder_button = ctk.CTkButton(download_frame, text="📂", width=40, font=ctk.CTkFont(size=16), command=self.open_last_download_folder, state="disabled")
         self.open_folder_button.pack(side="left", padx=(0, 5))
-        ctk.CTkLabel(download_frame, text="Límite (MB/s):").pack(side="left", padx=(10, 5))
+
+        # Asignar la etiqueta a una variable para añadirle el tooltip
+        speed_label = ctk.CTkLabel(download_frame, text="Límite (MB/s):")
+        speed_label.pack(side="left", padx=(10, 5))
+        
         self.speed_limit_entry = ctk.CTkEntry(download_frame, width=50)
+        
+        # --- AÑADIR TOOLTIP
+        tooltip_text = "Limita la velocidad de descarga (en MB/s).\nÚtil si las descargas fallan por 'demasiadas peticiones'."
+        Tooltip(speed_label, tooltip_text, delay_ms=1000)
+        Tooltip(self.speed_limit_entry, tooltip_text, delay_ms=1000)
+        # --- FIN TOOLTIP ---
+        
         self.speed_limit_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.speed_limit_entry))
         self.speed_limit_entry.pack(side="left", padx=(0, 10))
+
         self.download_button = ctk.CTkButton(download_frame, text=self.original_download_text, state="disabled", command=self.original_download_command, 
                                      fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER,
                                      text_color_disabled=self.DISABLED_TEXT_COLOR)
@@ -567,12 +590,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.progress_bar = ctk.CTkProgressBar(progress_frame)
         self.progress_bar.set(0)
         self.progress_bar.pack(pady=(0,5), padx=10, fill="x")
-        help_frame = ctk.CTkFrame(progress_frame, fg_color="transparent")
-        help_frame.pack(fill="x", padx=10, pady=(0, 5))
-        speed_help_label = ctk.CTkLabel(help_frame, text="Límite: Dejar vacío para velocidad máxima.", font=ctk.CTkFont(size=11), text_color="gray")
-        speed_help_label.pack(side="left")
-        error_help_label = ctk.CTkLabel(help_frame, text="Consejo: Si una descarga falla, pruebe a limitar la velocidad (ej: 2).", font=ctk.CTkFont(size=11), text_color="gray")
-        error_help_label.pack(side="right")
+        
         self.on_mode_change(self.mode_selector.get())
         self.on_profile_selection_change(self.recode_profile_menu.get())
         self.start_h.bind("<KeyRelease>", lambda e: (self._handle_time_input(e, self.start_h, self.start_m), self.update_download_button_state()))
@@ -584,25 +602,56 @@ class SingleDownloadTab(ctk.CTkFrame):
         self._toggle_fragment_panel()
         self.recode_mode_selector.set("Modo Rápido")
         self._on_recode_mode_change("Modo Rápido")
+        
+        self.recode_main_frame.pack(pady=(10, 0), padx=5, fill="both", expand=True)
+        print("DEBUG: Panel de recodificación inicializado y visible")
 
     def create_entry_context_menu(self, widget):
         """Crea y muestra un menú contextual para un widget de entrada de texto."""
         menu = tkinter.Menu(self, tearoff=0)
-        def cut_text():
-            widget.event_generate("<<Copy>>")
-            if widget.select_present():
-                widget.delete("sel.first", "sel.last")
-                self.app.after(10, self.update_download_button_state)
-        def paste_text():
-            if widget.select_present():
-                widget.delete("sel.first", "sel.last")
+        
+        def copy_text():
+            """Copia el texto seleccionado al portapapeles."""
             try:
+                selected_text = widget.selection_get()
+                if selected_text:
+                    widget.clipboard_clear()
+                    widget.clipboard_append(selected_text)
+            except Exception:
+                pass # No había nada seleccionado
+
+        def cut_text():
+            """Corta el texto seleccionado (copia y borra)."""
+            try:
+                selected_text = widget.selection_get()
+                if selected_text:
+                    # 1. Copiar al portapapeles
+                    widget.clipboard_clear()
+                    widget.clipboard_append(selected_text)
+                    # 2. Borrar selección
+                    widget.delete("sel.first", "sel.last")
+                    self.app.after(10, self.update_download_button_state)
+            except Exception:
+                pass # No había nada seleccionado
+
+        def paste_text():
+            """Pega el texto del portapapeles."""
+            try:
+                # 1. Borrar selección actual (si existe)
+                if widget.selection_get():
+                    widget.delete("sel.first", "sel.last")
+            except Exception:
+                pass # No había nada seleccionado
+
+            try:
+                # 2. Pegar desde el portapapeles
                 widget.insert("insert", self.clipboard_get())
                 self.app.after(10, self.update_download_button_state)
             except tkinter.TclError:
-                pass
+                pass # Portapapeles vacío
+
         menu.add_command(label="Cortar", command=cut_text)
-        menu.add_command(label="Copiar", command=lambda: widget.event_generate("<<Copy>>"))
+        menu.add_command(label="Copiar", command=copy_text)
         menu.add_command(label="Pegar", command=paste_text)
         menu.add_separator()
         menu.add_command(label="Seleccionar todo", command=lambda: widget.select_range(0, 'end'))
@@ -853,7 +902,13 @@ class SingleDownloadTab(ctk.CTkFrame):
 
         if compatible_presets:
             self.recode_preset_menu.configure(values=compatible_presets, state="normal")
-            self.recode_preset_menu.set(compatible_presets[0])
+            
+            saved_preset = self.app.quick_preset_saved
+            if saved_preset and saved_preset in compatible_presets:
+                self.recode_preset_menu.set(saved_preset)
+            else:
+                self.recode_preset_menu.set(compatible_presets[0])
+                
             self._update_export_button_state()
         else:
             self.recode_preset_menu.configure(values=["- No hay presets para este modo -"], state="disabled")
@@ -1597,43 +1652,49 @@ class SingleDownloadTab(ctk.CTkFrame):
                 self.estimated_size_label.configure(text="N/A")
 
     def save_settings(self, event=None):
-        """ Guarda la configuración actual de la aplicación en un archivo JSON. """
+        """ 
+        Actualiza la configuración de la app principal (self.app).
+        La ventana principal se encargará de escribir el archivo JSON.
+        """
+        if not hasattr(self, 'app'): # Prevenir error si se llama antes de tiempo
+            return
+
+        # --- Actualizar config general ---
+        self.app.default_download_path = self.output_path_entry.get()
+        self.app.cookies_path = self.cookie_path_entry.get()
+        self.app.cookies_mode_saved = self.cookie_mode_menu.get()
+        self.app.selected_browser_saved = self.browser_var.get()
+        self.app.browser_profile_saved = self.browser_profile_entry.get()
+        
+        # --- Actualizar config de Presets ---
+        self.app.custom_presets = getattr(self, 'custom_presets', [])
+        
+        # --- Actualizar estado de UI Modo Rápido ---
+        self.app.apply_quick_preset_checkbox_state = self.apply_quick_preset_checkbox.get() == 1
+        self.app.keep_original_quick_saved = self.keep_original_quick_checkbox.get() == 1
+        self.app.quick_preset_saved = self.recode_preset_menu.get()
+
+        # --- Actualizar estado de UI Modo Manual ---
         mode = self.mode_selector.get()
         codec = self.recode_codec_menu.get()
         profile = self.recode_profile_menu.get()
         proc_type = self.proc_type_var.get()
-        if proc_type: self.recode_settings["proc_type"] = proc_type
+        
+        if proc_type: self.app.recode_settings["proc_type"] = proc_type
         if codec != "-":
-            if mode == "Video+Audio": self.recode_settings["video_codec"] = codec
-            else: self.recode_settings["audio_codec"] = codec
+            if mode == "Video+Audio": self.app.recode_settings["video_codec"] = codec
+            else: self.app.recode_settings["audio_codec"] = codec
         if profile != "-":
-            if mode == "Video+Audio": self.recode_settings["video_profile"] = profile
-            else: self.recode_settings["audio_profile"] = profile
+            if mode == "Video+Audio": self.app.recode_settings["video_profile"] = profile
+            else: self.app.recode_settings["audio_profile"] = profile
             if self.recode_audio_codec_menu.get() != "-":
-                self.recode_settings["video_audio_codec"] = self.recode_audio_codec_menu.get()
+                self.app.recode_settings["video_audio_codec"] = self.recode_audio_codec_menu.get()
             if self.recode_audio_profile_menu.get() != "-":
-                self.recode_settings["video_audio_profile"] = self.recode_audio_profile_menu.get()
-        self.recode_settings["keep_original"] = self.keep_original_checkbox.get() == 1
-        self.recode_settings["recode_video_enabled"] = self.recode_video_checkbox.get() == 1
-        self.recode_settings["recode_audio_enabled"] = self.recode_audio_checkbox.get() == 1
-        settings_to_save = {
-            "default_download_path": self.app.default_download_path,
-            "cookies_path": self.app.cookies_path,
-            "cookies_mode": self.cookie_mode_menu.get(),
-            "selected_browser": self.browser_var.get(),
-            "browser_profile": self.browser_profile_entry.get(),
-            "auto_download_subtitle": self.auto_download_subtitle_check.get() == 1,
-            "ffmpeg_update_snooze_until": self.app.ffmpeg_update_snooze_until.isoformat() if self.app.ffmpeg_update_snooze_until else None,
-            "recode_settings": self.recode_settings,
-            "custom_presets": getattr(self, 'custom_presets', []),
-            "apply_quick_preset_enabled": self.apply_quick_preset_checkbox.get() == 1,
-            "keep_original_quick_enabled": self.keep_original_quick_checkbox.get() == 1
-        }
-        try:
-            with open(self.app.SETTINGS_FILE, 'w') as f:
-                json.dump(settings_to_save, f, indent=4)
-        except IOError as e:
-            print(f"ERROR: Fallo al guardar configuración: {e}")
+                self.app.recode_settings["video_audio_profile"] = self.recode_audio_profile_menu.get()
+        
+        self.app.recode_settings["keep_original"] = self.keep_original_checkbox.get() == 1
+        self.app.recode_settings["recode_video_enabled"] = self.recode_video_checkbox.get() == 1
+        self.app.recode_settings["recode_audio_enabled"] = self.recode_audio_checkbox.get() == 1
 
 
     def _toggle_recode_panels(self):
@@ -1872,6 +1933,19 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.save_settings()
 
     def on_mode_change(self, mode):
+        print(f"DEBUG: on_mode_change llamado con mode={mode}")
+        print(f"  - video_formats vacío: {not self.video_formats}")
+        print(f"  - audio_formats vacío: {not self.audio_formats}")
+        print(f"  - local_file_path: {self.local_file_path}")
+        print(f"  - recode_main_frame empaquetado: {self.recode_main_frame.winfo_ismapped()}")
+        
+        # 🆕 PROTECCIÓN MEJORADA: Solo bloquear si no hay formatos Y no es modo local
+        if not self.video_formats and not self.audio_formats and not self.local_file_path:
+            print("DEBUG: on_mode_change llamado pero formatos no están listos aún (modo URL)")
+            return
+        
+        print("DEBUG: ✅ CONTINUANDO con on_mode_change")
+        
         self.format_warning_label.pack_forget()
         self.video_quality_label.pack_forget()
         self.video_quality_menu.pack_forget()
@@ -1880,6 +1954,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.recode_video_checkbox.deselect()
         self.recode_audio_checkbox.deselect()
         self.proc_type_var.set("") 
+        
         if mode == "Video+Audio":
             self.video_quality_label.pack(fill="x", padx=5, pady=(10, 0))
             self.video_quality_menu.pack(fill="x", padx=5, pady=(0, 5))
@@ -1888,17 +1963,93 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.format_warning_label.pack(fill="x", padx=5, pady=(5, 5))
             self.recode_video_checkbox.grid()
             self.recode_audio_checkbox.configure(text="Recodificar Audio")
-            self.on_video_quality_change(self.video_quality_menu.get())
+            
+            # 🆕 Solo llamar a on_video_quality_change si NO es modo local
+            if not self.local_file_path:
+                self.on_video_quality_change(self.video_quality_menu.get())
+            
         elif mode == "Solo Audio":
+            # 🆕 CRÍTICO: Verificar si REALMENTE hay audio disponible
+            print("DEBUG: Cambiando a modo Solo Audio")
+            
+            # Verificar si hay audio en ALGÚN formato
+            has_any_audio = bool(self.audio_formats) or any(
+                v.get('is_combined', False) for v in self.video_formats.values()
+            )
+            
+            if not has_any_audio:
+                # 🆕 No hay audio en absoluto - mostrar advertencia
+                print("⚠️ ERROR: No hay audio disponible en este video")
+                self.audio_quality_menu.configure(
+                    state="disabled", 
+                    values=["⚠️ Este video no tiene audio"]
+                )
+                self.audio_quality_menu.set("⚠️ Este video no tiene audio")
+                self.combined_audio_map = {}
+                
+                # Deshabilitar el botón de descarga
+                self.download_button.configure(state="disabled")
+                
+            elif self.audio_formats:
+                # Caso 1: Hay pistas de audio separadas
+                print("DEBUG: Hay pistas de audio dedicadas disponibles")
+                        
+            else:
+                # Caso 2: Solo hay formatos combinados - extraer opciones de audio de ellos
+                print("DEBUG: No hay pistas dedicadas. Extrayendo audio de formatos combinados")
+                
+                # Buscar todos los formatos combinados
+                audio_from_combined = []
+                seen_configs = set()
+                
+                for video_label, video_info in self.video_formats.items():
+                    if video_info.get('is_combined', False):
+                        acodec = video_info.get('acodec', 'unknown').split('.')[0]
+                        format_id = video_info.get('format_id')
+                        
+                        # Crear una clave única para evitar duplicados
+                        config_key = f"{acodec}_{format_id}"
+                        
+                        if config_key not in seen_configs:
+                            seen_configs.add(config_key)
+                            
+                            # Extraer info de audio del formato combinado
+                            label = f"Audio desde {video_label.split('(')[0].strip()} ({acodec})"
+                            
+                            audio_from_combined.append({
+                                'label': label,
+                                'format_id': format_id,
+                                'acodec': acodec
+                            })
+                
+                if audio_from_combined:
+                    # Crear opciones para el menú
+                    audio_options = [entry['label'] for entry in audio_from_combined]
+                    
+                    # Crear un mapa temporal (similar a combined_audio_map)
+                    self.combined_audio_map = {
+                        entry['label']: entry['format_id'] 
+                        for entry in audio_from_combined
+                    }
+                    
+                    self.audio_quality_menu.configure(state="normal", values=audio_options)
+                    self.audio_quality_menu.set(audio_options[0])
+                else:
+                    # No hay audio disponible en absoluto
+                    self.audio_quality_menu.configure(state="disabled", values=["- Sin Audio -"])
+                    self.combined_audio_map = {}
+            
             if hasattr(self, 'audio_options_frame'):
                 self.audio_options_frame.pack(fill="x")
             self.format_warning_label.pack(fill="x", padx=5, pady=(5, 5))
             self.recode_video_checkbox.grid_remove()
             self.recode_audio_checkbox.configure(text="Activar Recodificación para Audio")
             self._update_warnings()
+            
         self.recode_main_frame._parent_canvas.yview_moveto(0)
         self.recode_main_frame.pack_forget()
         self.recode_main_frame.pack(pady=(10, 0), padx=5, fill="both", expand=True)
+        
         self._toggle_recode_panels()
         self.update_codec_menu()
         self.update_audio_codec_menu()
@@ -1915,10 +2066,100 @@ class SingleDownloadTab(ctk.CTkFrame):
     def on_video_quality_change(self, selected_label):
         selected_format_info = self.video_formats.get(selected_label)
         if selected_format_info:
-            if selected_format_info.get('is_combined'):
-                self.audio_quality_menu.configure(state="disabled")
+            is_combined = selected_format_info.get('is_combined', False)
+            quality_key = selected_format_info.get('quality_key')
+            
+            # 🔧 MODIFICADO: Solo llenar el menú de audio si hay variantes REALES
+            if is_combined and quality_key and quality_key in self.combined_variants:
+                variants = self.combined_variants[quality_key]
+                
+                # 🆕 NUEVO: Verificar que realmente hay múltiples idiomas
+                unique_languages = set()
+                for variant in variants:
+                    lang = variant.get('language', '')
+                    if lang:
+                        unique_languages.add(lang)
+                
+                # 🔧 CRÍTICO: Solo crear menú de idiomas si hay 2+ idiomas diferentes
+                if len(unique_languages) >= 2:
+                    # Crear opciones de idioma para el menú de audio
+                    audio_language_options = []
+                    self.combined_audio_map = {}
+                    
+                    for variant in variants:
+                        lang_code = variant.get('language')
+                        format_id = variant.get('format_id')
+                        
+                        if lang_code:
+                            norm_code = lang_code.replace('_', '-').lower()
+                            lang_name = self.app.LANG_CODE_MAP.get(
+                                norm_code, 
+                                self.app.LANG_CODE_MAP.get(norm_code.split('-')[0], lang_code)
+                            )
+                        else:
+                            continue
+                        
+                        abr = variant.get('abr') or variant.get('tbr')
+                        acodec = variant.get('acodec', 'unknown').split('.')[0]
+                        
+                        label = f"{lang_name} - {abr:.0f}kbps ({acodec})" if abr else f"{lang_name} ({acodec})"
+                        
+                        if label not in self.combined_audio_map:
+                            audio_language_options.append(label)
+                            self.combined_audio_map[label] = format_id
+                    
+                    if not audio_language_options:
+                        # No hay idiomas válidos, deshabilitar el menú
+                        self.audio_quality_menu.configure(state="disabled")
+                        self.combined_audio_map = {}
+                        print("DEBUG: No hay idiomas válidos en las variantes combinadas")
+                    else:
+                        # Ordenar por prioridad de idioma
+                        def sort_by_lang_priority(label):
+                            for variant in variants:
+                                if self.combined_audio_map.get(label) == variant.get('format_id'):
+                                    lang_code = variant.get('language', '')
+                                    norm_code = lang_code.replace('_', '-').lower()
+                                    return self.app.LANGUAGE_ORDER.get(
+                                        norm_code, 
+                                        self.app.LANGUAGE_ORDER.get(norm_code.split('-')[0], self.app.DEFAULT_PRIORITY)
+                                    )
+                            return self.app.DEFAULT_PRIORITY
+                        
+                        audio_language_options.sort(key=sort_by_lang_priority)
+                        
+                        # Actualizar el menú de audio
+                        self.audio_quality_menu.configure(state="normal", values=audio_language_options)
+                        self.audio_quality_menu.set(audio_language_options[0])
+                        print(f"DEBUG: Menú de audio llenado con {len(audio_language_options)} idiomas")
+                else:
+                    # 🆕 NUEVO: Solo hay un idioma o ninguno, deshabilitar el menú
+                    self.audio_quality_menu.configure(state="disabled")
+                    self.combined_audio_map = {}
+                    print(f"DEBUG: Combinado de un solo idioma detectado (quality_key: {quality_key})")
             else:
-                self.audio_quality_menu.configure(state="normal")
+                # 🆕 CRÍTICO: Este else faltaba - restaurar el menú de audio normal
+                print(f"DEBUG: No es combinado multiidioma, restaurando menú de audio normal")
+                self.combined_audio_map = {}
+                
+                # Restaurar las opciones de audio originales
+                a_opts = list(self.audio_formats.keys()) or ["- Sin Pistas de Audio -"]
+                
+                # Buscar la mejor opción (la que tenga ✨)
+                default_audio_selection = a_opts[0]
+                for option in a_opts:
+                    if "✨" in option:
+                        default_audio_selection = option
+                        break
+                
+                # Restaurar el menú
+                self.audio_quality_menu.configure(
+                    state="normal" if self.audio_formats else "disabled",
+                    values=a_opts
+                )
+                self.audio_quality_menu.set(default_audio_selection)
+            
+            # Actualizar dimensiones si están disponibles
             new_width = selected_format_info.get('width')
             new_height = selected_format_info.get('height')
             if new_width and new_height and hasattr(self, 'width_entry'):
@@ -1928,6 +2169,7 @@ class SingleDownloadTab(ctk.CTkFrame):
                 self.height_entry.insert(0, str(new_height))
                 if self.aspect_ratio_lock.get():
                     self.on_aspect_lock_change()
+        
         self._update_warnings()
         self._validate_recode_compatibility()
 
@@ -2524,11 +2766,64 @@ class SingleDownloadTab(ctk.CTkFrame):
         return True
 
     def sanitize_filename(self, filename):
+        """
+        Sanitización completa con doble límite (caracteres + bytes).
+        
+        Límites:
+        - 150 caracteres (límite visual/UX)
+        - 220 bytes UTF-8 (límite técnico filesystem)
+        
+        Compatible con todos los idiomas y sistemas modernos.
+        """
         import unicodedata
-        filename = unicodedata.normalize('NFKD', filename).encode('ascii', 'ignore').decode('ascii')
-        filename = re.sub(r'[^\w\s\.-]', '', filename).strip()
-        filename = re.sub(r'[-\s]+', ' ', filename)
-        filename = re.sub(r'[\\/:\*\?"<>|]', '', filename)
+        
+        original_filename = filename
+        
+        # 1. Normalizar Unicode (NFC)
+        filename = unicodedata.normalize('NFC', filename)
+        
+        # 2. Eliminar caracteres de control
+        filename = ''.join(
+            char for char in filename 
+            if unicodedata.category(char)[0] != 'C'
+        )
+        
+        # 3. Eliminar caracteres prohibidos por filesystems
+        forbidden_chars = r'[\\/:\*\?"<>|]'
+        filename = re.sub(forbidden_chars, '', filename)
+        
+        # 4. Normalizar espacios múltiples
+        filename = re.sub(r'\s+', ' ', filename).strip()
+        
+        # 5. Eliminar puntos y espacios al final (Windows)
+        filename = filename.rstrip('. ')
+        
+        # 6. 🆕 LÍMITE VISUAL: 150 caracteres
+        max_chars = 150
+        if len(filename) > max_chars:
+            filename = filename[:max_chars]
+            filename = filename.rstrip('. ')
+            print(f"ℹ️ Título truncado de {len(original_filename)} a {max_chars} caracteres")
+        
+        # 7. LÍMITE TÉCNICO: 220 bytes UTF-8
+        max_bytes = 220
+        if len(filename.encode('utf-8')) > max_bytes:
+            filename_bytes = filename.encode('utf-8')[:max_bytes]
+            filename = filename_bytes.decode('utf-8', errors='ignore')
+            filename = filename.rstrip('. ')
+            print(f"ℹ️ Título truncado de {len(filename.encode('utf-8'))} a {max_bytes} bytes")
+        
+        # 8. Fallback de seguridad
+        if not filename or filename.strip() == '':
+            filename = "video_descargado"
+            print(f"⚠️ Título vacío después de sanitización. Usando fallback.")
+        
+        # 9. Log si hubo cambios (útil para debugging)
+        if filename != original_filename:
+            print(f"📝 Nombre ajustado:")
+            print(f"   Original: {original_filename[:100]}{'...' if len(original_filename) > 100 else ''}")
+            print(f"   Final: {filename}")
+        
         return filename
 
     def create_placeholder_label(self, text="Miniatura", font_size=14):
@@ -2550,18 +2845,38 @@ class SingleDownloadTab(ctk.CTkFrame):
 
     def on_cookie_mode_change(self, mode):
         """Muestra u oculta las opciones de cookies según el modo seleccionado."""
+        
+        # 🆕 NUEVO: Manejar la opción de ayuda
+        if mode == "¿Cómo obtener cookies?":
+            self._open_cookie_extension_link()
+            # Restaurar al modo anterior (o "No usar" si no había)
+            previous_mode = getattr(self, '_previous_cookie_mode', "No usar")
+            self.cookie_mode_menu.set(previous_mode)
+            return
+        
+        # Guardar el modo actual para poder volver después
+        self._previous_cookie_mode = mode
+        
         print("DEBUG: Cookie mode changed. Clearing analysis cache.")
         self.analysis_cache.clear()
+        
         if mode == "Archivo Manual...":
             self.manual_cookie_frame.pack(fill="x", padx=10, pady=(0, 10))
             self.browser_options_frame.pack_forget()
         elif mode == "Desde Navegador":
             self.manual_cookie_frame.pack_forget()
             self.browser_options_frame.pack(fill="x", padx=10, pady=(0, 10))
-        else: 
+        else:  # "No usar"
             self.manual_cookie_frame.pack_forget()
             self.browser_options_frame.pack_forget()
+        
         self.save_settings()
+
+    def _open_cookie_extension_link(self):
+        """Abre la página de GitHub de la extensión Get cookies.txt LOCALLY"""
+        import webbrowser
+        webbrowser.open_new_tab("https://github.com/kairi003/Get-cookies.txt-LOCALLY")
+        print("DEBUG: Abriendo enlace de extensión de cookies en el navegador")
 
     def toggle_manual_thumbnail_button(self):
         is_checked = self.auto_save_thumbnail_check.get() == 1
@@ -2720,65 +3035,129 @@ class SingleDownloadTab(ctk.CTkFrame):
             except Exception as e: self.on_process_finished(False, f"Error al guardar miniatura: {e}", None)
 
     def _execute_subtitle_download_subprocess(self, url, subtitle_info, save_path):
-        """
-        Descarga un subtítulo usando la API de yt-dlp, preservando la lógica de cookies
-        y detección de archivos.
-        """
         try:
-            self.app.after(0, self.update_progress, 0, "Iniciando proceso de yt-dlp...")
-            
             output_dir = os.path.dirname(save_path)
-            files_before = set(os.listdir(output_dir)) 
+            files_before = set(os.listdir(output_dir))
             lang_code = subtitle_info['lang']
-            base_name = os.path.splitext(os.path.basename(save_path))[0]
-            output_template = os.path.join(output_dir, f"{base_name}.%(ext)s")
-
-            ydl_opts = {
-                'no_warnings': True,
-                'skip_download': True,
-                'noplaylist': True,
-                'outtmpl': output_template,
-                'writesubtitles': True,
-                'subtitleslangs': [lang_code],
-                'writeautomaticsub': subtitle_info.get('automatic', False),
-                'ffmpeg_location': self.ffmpeg_processor.ffmpeg_path
-            }
-
-            if self.clean_subtitle_check.winfo_ismapped() and self.clean_subtitle_check.get() == 1:
-                ydl_opts['subtitlesformat'] = 'best/vtt/best'
-                ydl_opts['convertsubtitles'] = 'srt'
+            
+            # Usar el template por defecto de yt-dlp
+            output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
+            
+            command = [
+                'yt-dlp', '--no-warnings', '--write-sub',
+                '--sub-langs', lang_code,
+                '--skip-download', '--no-playlist',
+                '-o', output_template 
+            ]
+            
+            # Verificar si se debe convertir a SRT
+            should_convert_to_srt = self.clean_subtitle_check.winfo_ismapped() and self.clean_subtitle_check.get() == 1
+            
+            if should_convert_to_srt:
+                command.extend(['--sub-format', 'best/vtt/best'])
+                command.extend(['--convert-subs', 'srt'])
             else:
-                ydl_opts['subtitlesformat'] = subtitle_info['ext']
-
+                command.extend(['--sub-format', subtitle_info['ext']])
+                
+            if subtitle_info.get('automatic', False):
+                command.append('--write-auto-sub')
+                
             cookie_mode = self.cookie_mode_menu.get()
             if cookie_mode == "Archivo Manual..." and self.cookie_path_entry.get():
-                ydl_opts['cookiefile'] = self.cookie_path_entry.get()
+                command.extend(['--cookies', self.cookie_path_entry.get()])
             elif cookie_mode != "No usar":
                 browser_arg = self.browser_var.get()
                 profile = self.browser_profile_entry.get()
-                if profile: browser_arg += f":{profile}"
-                ydl_opts['cookiesfrombrowser'] = (browser_arg,)
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-
+                if profile: 
+                    browser_arg += f":{profile}"
+                command.extend(['--cookies-from-browser', browser_arg])
+                
+            command.extend(['--ffmpeg-location', self.ffmpeg_processor.ffmpeg_path])    
+            command.append(url)
+            
+            self.app.after(0, self.update_progress, 0, "Iniciando proceso de yt-dlp...")
+            print(f"\n\nDEBUG: Comando final enviado a yt-dlp:\n{' '.join(command)}\n\n")
+            
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            process = subprocess.Popen(
+                command, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE, 
+                text=True, 
+                encoding='utf-8', 
+                errors='ignore', 
+                creationflags=creationflags
+            )
+            
+            stdout_lines = []
+            stderr_lines = []
+            
+            def read_stream(stream, lines_buffer):
+                for line in iter(stream.readline, ''):
+                    lines_buffer.append(line.strip())
+                    
+            stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, stdout_lines))
+            stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_lines))
+            stdout_thread.start()
+            stderr_thread.start()
+            stdout_thread.join()
+            stderr_thread.join()
+            process.wait()
+            
+            print("--- [yt-dlp finished] ---\n")
+            
+            if process.returncode != 0:
+                full_error_output = "\n".join(stdout_lines) + "\n" + "\n".join(stderr_lines)
+                raise Exception(f"El proceso de yt-dlp falló:\n{full_error_output}")
+                
             files_after = set(os.listdir(output_dir))
             new_files = files_after - files_before
             
             if not new_files:
                 raise FileNotFoundError("yt-dlp terminó, pero no se detectó ningún archivo de subtítulo nuevo.")
             
-            new_filename = new_files.pop()
-            final_output_path = os.path.join(output_dir, new_filename)
-
+            # Filtrar solo archivos de subtítulos
+            subtitle_extensions = {'.vtt', '.srt', '.ass', '.ssa'}
+            new_subtitle_files = [f for f in new_files if os.path.splitext(f)[1].lower() in subtitle_extensions]
+            
+            if not new_subtitle_files:
+                raise FileNotFoundError(f"yt-dlp descargó archivos, pero ninguno es un subtítulo. Archivos nuevos: {new_files}")
+            
+            new_filename = new_subtitle_files[0]
+            downloaded_subtitle_path = os.path.join(output_dir, new_filename)
+            
+            print(f"DEBUG: Subtítulo descargado: {downloaded_subtitle_path}")
+            
+            # 🔧 OPCIÓN 1: Mantener el código de idioma en el nombre
+            # Extraer el nombre base del archivo descargado (sin el código de idioma)
+            downloaded_name = os.path.basename(downloaded_subtitle_path)
+            downloaded_ext = os.path.splitext(downloaded_name)[1]
+            
+            # Construir el nuevo nombre: usar el nombre elegido por el usuario + código de idioma + extensión
+            user_chosen_name = os.path.splitext(os.path.basename(save_path))[0]
+            final_filename = f"{user_chosen_name}.{lang_code}{downloaded_ext}"
+            final_output_path = os.path.join(output_dir, final_filename)
+            
+            # Renombrar
+            if downloaded_subtitle_path != final_output_path:
+                if os.path.exists(final_output_path):
+                    os.remove(final_output_path)
+                os.rename(downloaded_subtitle_path, final_output_path)
+                print(f"DEBUG: Subtítulo renombrado a: {final_output_path}")
+            
+            # 🔧 CORREGIDO: Limpiar/convertir SIEMPRE que sea .srt (ya sea que venga así o fue convertido)
             if final_output_path.lower().endswith('.srt'):
-                self.app.after(0, self.update_progress, 90, "Estandarizando formato SRT...")
+                self.app.after(0, self.update_progress, 90, "Limpiando y estandarizando formato SRT...")
                 final_output_path = clean_and_convert_vtt_to_srt(final_output_path)
-
-            self.app.after(0, self.on_process_finished, True, f"Subtítulo guardado en {os.path.basename(final_output_path)}", final_output_path)
-        
+                print(f"DEBUG: Subtítulo limpiado: {final_output_path}")
+            
+            self.app.after(0, self.on_process_finished, True, 
+                        f"Subtítulo guardado en {os.path.basename(final_output_path)}", 
+                        final_output_path)
+                        
         except Exception as e:
-            self.app.after(0, self.on_process_finished, False, f"Error al descargar subtítulo: {e}", None)
+            self.app.after(0, self.on_process_finished, False, 
+                        f"Error al descargar subtítulo: {e}", None)
 
     def save_subtitle(self):
         """
@@ -2809,22 +3188,31 @@ class SingleDownloadTab(ctk.CTkFrame):
     def cancel_operation(self):
         """
         Maneja la cancelación de cualquier operación activa, ya sea análisis o descarga.
-        Ahora termina forzosamente el proceso para liberar los bloqueos de archivo.
+        Ahora termina forzosamente el proceso y espera a que libere archivos.
         """
         print("DEBUG: Botón de Cancelar presionado.")
         self.cancellation_event.set()
         self.ffmpeg_processor.cancel_current_process()
+        
         if self.active_subprocess_pid:
             print(f"DEBUG: Intentando terminar el árbol de procesos para el PID: {self.active_subprocess_pid}")
             try:
+                # 🆕 Terminar el proceso
                 subprocess.run(
                     ['taskkill', '/PID', str(self.active_subprocess_pid), '/T', '/F'],
                     check=True,
-                    capture_output=True, text=True
+                    capture_output=True, 
+                    text=True
                 )
                 print(f"DEBUG: Proceso {self.active_subprocess_pid} y sus hijos terminados exitosamente.")
+                
+                # 🆕 Esperar a que el SO libere los archivos
+                time.sleep(1.5)  # Dar tiempo al sistema operativo
+                gc.collect()
+                
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                print(f"ADVERTENCIA: No se pudo terminar el proceso {self.active_subprocess_pid} con taskkill (puede que ya haya terminado): {e}")
+                print(f"ADVERTENCIA: No se pudo terminar el proceso {self.active_subprocess_pid} con taskkill: {e}")
+            
             self.active_subprocess_pid = None
 
     def start_download_thread(self):
@@ -2832,12 +3220,20 @@ class SingleDownloadTab(ctk.CTkFrame):
         output_path = self.output_path_entry.get()
         has_input = url or self.local_file_path
         has_output = output_path
+        
         if not has_input or not has_output:
             error_msg = "Error: Falta la carpeta de salida."
             if not has_input:
                 error_msg = "Error: No se ha proporcionado una URL ni se ha importado un archivo."
             self.progress_label.configure(text=error_msg)
             return
+        
+        # 🆕 VALIDACIÓN: Verificar que hay audio si está en modo Solo Audio
+        if self.mode_selector.get() == "Solo Audio":
+            audio_label = self.audio_quality_menu.get()
+            if "no tiene audio" in audio_label.lower() or audio_label == "-":
+                self.progress_label.configure(text="Error: Este video no tiene audio disponible.")
+                return
         self.download_button.configure(text="Cancelar", fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER, command=self.cancel_operation)
         self.analyze_button.configure(state="disabled") 
         self.save_subtitle_button.configure(state="disabled") 
@@ -2959,11 +3355,14 @@ class SingleDownloadTab(ctk.CTkFrame):
             return
             
         try:
-            if options["mode"] == "Solo Audio" and not self.audio_formats and self.video_formats:
-                audio_extraction_fallback = True
-                print("DEBUG: No hay pistas de audio dedicadas. Se activó el fallback de extracción desde el video.")
-                best_video_label = next(iter(self.video_formats))
-                options["video_format_label"] = best_video_label
+            if options["mode"] == "Solo Audio":
+                # Verificar si realmente hay audio dedicado o solo combinados
+                audio_info = self.audio_formats.get(options["audio_format_label"], {})
+                if not audio_info.get('format_id'):
+                    audio_extraction_fallback = True
+                    print("DEBUG: No hay pistas de audio dedicadas o formato_id inválido. Se activó el fallback de extracción desde el video.")
+                    best_video_label = next(iter(self.video_formats))
+                    options["video_format_label"] = best_video_label
                 
             final_output_path_str = options["output_path"]
             user_facing_title = self.sanitize_filename(options['title'])
@@ -3004,25 +3403,68 @@ class SingleDownloadTab(ctk.CTkFrame):
 
             self._save_thumbnail_if_enabled(filepath_to_process)
             
-            if options.get("download_subtitles") and self.clean_subtitle_check.get() == 1:
-                self.app.after(0, self.update_progress, 99, "Limpiando subtítulo descargado...")
+            if options.get("download_subtitles"):
                 subtitle_info = options.get("selected_subtitle_info")
                 if subtitle_info:
                     try:
-                        # La búsqueda del subtítulo se basa en el nombre del archivo original,
-                        # por lo que aquí 'downloaded_filepath' es correcto.
                         output_dir = os.path.dirname(downloaded_filepath)
                         base_name = os.path.splitext(os.path.basename(downloaded_filepath))[0]
-                        expected_sub_path = os.path.join(output_dir, f"{base_name}.{subtitle_info['lang']}.{subtitle_info['ext']}")
-                        if not os.path.exists(expected_sub_path):
-                            expected_sub_path = os.path.join(output_dir, f"{base_name}.{subtitle_info['ext']}")
-                        if os.path.exists(expected_sub_path):
-                            print(f"DEBUG: Encontrado subtítulo para limpieza automática en: {expected_sub_path}")
-                            clean_and_convert_vtt_to_srt(expected_sub_path)
+                        lang_code = subtitle_info['lang']
+                        
+                        # 🔧 Buscar el archivo de subtítulo descargado
+                        import glob
+                        
+                        # Posibles patrones de nombre
+                        possible_patterns = [
+                            os.path.join(output_dir, f"{base_name}.{lang_code}.srt"),
+                            os.path.join(output_dir, f"{base_name}.{lang_code}.vtt"),
+                            os.path.join(output_dir, f"{base_name}.srt"),
+                            os.path.join(output_dir, f"{base_name}.vtt"),
+                        ]
+                        
+                        found_subtitle_path = None
+                        for pattern in possible_patterns:
+                            if os.path.exists(pattern):
+                                found_subtitle_path = pattern
+                                print(f"DEBUG: Encontrado subtítulo: {found_subtitle_path}")
+                                break
+                        
+                        # Si no se encuentra con patrones específicos, buscar con glob
+                        if not found_subtitle_path:
+                            search_pattern = os.path.join(output_dir, f"{base_name}.{lang_code}.*")
+                            matches = glob.glob(search_pattern)
+                            subtitle_matches = [m for m in matches if m.lower().endswith(('.srt', '.vtt', '.ass', '.ssa'))]
+                            if subtitle_matches:
+                                found_subtitle_path = subtitle_matches[0]
+                                print(f"DEBUG: Encontrado subtítulo con glob: {found_subtitle_path}")
+                        
+                        if found_subtitle_path:
+                            # 🔧 NUEVO: Convertir a SRT si está marcada la opción Y el archivo no es SRT
+                            should_convert = self.clean_subtitle_check.winfo_ismapped() and self.clean_subtitle_check.get() == 1
+                            
+                            if should_convert and not found_subtitle_path.lower().endswith('.srt'):
+                                self.app.after(0, self.update_progress, 98, "Convirtiendo subtítulo a SRT...")
+                                print(f"DEBUG: Convirtiendo {found_subtitle_path} a SRT")
+                                
+                                # Convertir VTT a SRT manualmente si es necesario
+                                srt_path = os.path.splitext(found_subtitle_path)[0] + '.srt'
+                                
+                                # Usar la función de limpieza que también convierte
+                                converted_path = clean_and_convert_vtt_to_srt(found_subtitle_path)
+                                found_subtitle_path = converted_path
+                                print(f"DEBUG: Subtítulo convertido a: {found_subtitle_path}")
+                            
+                            # Limpiar/estandarizar si es SRT (siempre, sin importar si fue convertido o ya era SRT)
+                            if found_subtitle_path.lower().endswith('.srt'):
+                                self.app.after(0, self.update_progress, 99, "Estandarizando formato SRT...")
+                                print(f"DEBUG: Limpiando subtítulo SRT: {found_subtitle_path}")
+                                found_subtitle_path = clean_and_convert_vtt_to_srt(found_subtitle_path)
+                                print(f"DEBUG: Subtítulo limpiado: {found_subtitle_path}")
                         else:
-                            print(f"ADVERTENCIA: No se encontró el archivo de subtítulo '{expected_sub_path}' para la limpieza automática.")
+                            print(f"ADVERTENCIA: No se encontró el archivo de subtítulo para '{base_name}' con idioma '{lang_code}'")
+                            
                     except Exception as sub_e:
-                        print(f"ADVERTENCIA: Falló la limpieza automática del subtítulo: {sub_e}")
+                        print(f"ADVERTENCIA: Falló el procesamiento automático del subtítulo: {sub_e}")
 
             if audio_extraction_fallback:
                 self.app.after(0, self.update_progress, 95, "Extrayendo pista de audio...")
@@ -3088,14 +3530,55 @@ class SingleDownloadTab(ctk.CTkFrame):
                 
                 if self.app.ui_response_data.get("result", False):
                     keep_file_on_cancel = downloaded_filepath
-                    self.app.after(0, lambda: self.on_process_finished(False, "Recodificación cancelada. Archivo original conservado.", keep_file_on_cancel, show_dialog=False))
+                    self.app.after(0, lambda: self.on_process_finished(False, "Recodificación cancelada. Archivo original conservado.", keep_file_on_cancel, False))
+
                 else:
-                    self.app.after(0, lambda: self.on_process_finished(False, error_message, downloaded_filepath, show_dialog=False))
+                    self.app.after(0, lambda: self.on_process_finished(False, error_message, downloaded_filepath, False))
+
             else:
-                self.app.after(0, lambda: self.on_process_finished(False, error_message, downloaded_filepath, show_dialog=False))
+                self.app.after(0, lambda: self.on_process_finished(False, error_message, downloaded_filepath, False))
+
+        except PlaylistDownloadError as e:
+            print(f"DEBUG: Se capturó un error específico de Playlist: {e}")
+            
+            # Comprobar si el flag de análisis está activo
+            if self.analysis_was_playlist:
+                print("DEBUG: El análisis original fue de una playlist. Mostrando diálogo.")
+                
+                # 1. Pedir a la UI que muestre el diálogo
+                self.app.ui_request_data = {
+                    "type": "ask_playlist_error",
+                    "filename": options["url"] # Mostrar la URL original
+                }
+                self.app.ui_response_event.clear()
+                self.app.ui_request_event.set()
+                
+                # 2. Esperar la respuesta del usuario
+                self.app.ui_response_event.wait()
+                user_choice = self.app.ui_response_data.get("result", "cancel")
+                
+                if user_choice == "send_to_batch":
+                    # 3. Lógica para enviar a Lotes
+                    # Usamos 'after' para asegurarnos de que se ejecute en el hilo de la UI
+                    self.app.after(0, self._send_url_to_batch, options["url"])
+                    error_message = "Elemento enviado a la pestaña de Lotes."
+                    self.app.after(0, lambda: self.on_process_finished(False, error_message, None, False))
+                
+                else: # "cancel"
+                    # 4. Cancelar normal
+                    error_message = "Descarga de colección cancelada por el usuario."
+                    self.app.after(0, lambda: self.on_process_finished(False, error_message, None, False))
+            
+            else:
+                # 5. Si no era una playlist (error inesperado), mostrar el error genérico
+                print("DEBUG: Error tipo Playlist, pero el análisis no fue de playlist. Mostrando error normal.")
+                cleaned_message = self._clean_ansi_codes(str(e))
+                self.app.after(0, lambda: self.on_process_finished(False, cleaned_message, downloaded_filepath, True))
+
         except Exception as e:
             cleaned_message = self._clean_ansi_codes(str(e))
-            self.app.after(0, self.on_process_finished, False, cleaned_message, downloaded_filepath, True)
+            self.app.after(0, lambda: self.on_process_finished(False, cleaned_message, downloaded_filepath, True))
+
             should_ask_user = recode_phase_started and not options.get("keep_original_file", False) and not self.app.is_shutting_down
             if should_ask_user:
                 self.app.ui_request_data = {
@@ -3311,43 +3794,94 @@ class SingleDownloadTab(ctk.CTkFrame):
         downloaded_filepath = None
         temp_video_for_extraction = None
         self.app.after(0, self.update_progress, 0, "Iniciando descarga...")
-        cleanup_required = True
+        
         video_format_info = self.video_formats.get(options["video_format_label"], {})
         audio_format_info = self.audio_formats.get(options["audio_format_label"], {})
         mode = options["mode"]
         output_template = os.path.join(options["output_path"], f"{user_facing_title}.%(ext)s")
-        precise_selector = ""
-        video_format_info = self.video_formats.get(options["video_format_label"], {})
-        audio_format_info = self.audio_formats.get(options["audio_format_label"], {})
+        
+        # 🔧 PASO 1: Determinar los format_ids correctos ANTES de todo
         video_format_id = video_format_info.get('format_id')
         audio_format_id = audio_format_info.get('format_id')
+        
+        # 🔧 PASO 2: Si es combinado multiidioma, reemplazar con el idioma seleccionado
+        if hasattr(self, 'combined_audio_map') and self.combined_audio_map:
+            selected_audio_label = options.get("audio_format_label")
+            if selected_audio_label in self.combined_audio_map:
+                video_format_id = self.combined_audio_map[selected_audio_label]
+                print(f"DEBUG: ✅ Reemplazando format_id con variante de idioma: {video_format_id}")
+        
+        # 🆕 PASO 2.5: Detectar si el formato es "simple" con validación robusta
+        total_formats = len(self.video_formats) + len(self.audio_formats)
+        is_combined = video_format_info.get('is_combined', False)
+
+        # 🔒 VALIDACIÓN: Un formato es "simple" solo si:
+        # 1. Hay exactamente 1 formato total
+        # 2. Y (es combinado O es el único video disponible)
+        is_simple_format = (
+            total_formats == 1 and 
+            (is_combined or not self.audio_formats)
+        )
+
+        # 🔒 VALIDACIÓN EXTRA: Verificar que el format_id sea válido para selector directo
+        if is_simple_format and video_format_id:
+            # IDs válidos para selector directo:
+            # - Numéricos: "0", "1", "123"
+            # - Protocolos: "http", "https", "m3u8"
+            # - Especiales: "default", "best"
+            # - IDs cortos: hasta 10 caracteres
+            
+            # 🆕 Lista de IDs de protocolo conocidos
+            protocol_ids = ['http', 'https', 'm3u8', 'm3u8_native', 'hls', 'dash']
+            
+            is_simple_id = (
+                video_format_id.isdigit() or                    # "0", "1", "123"
+                video_format_id in ['default', 'best'] or       # IDs especiales
+                video_format_id in protocol_ids or              # 🆕 IDs de protocolo
+                (len(video_format_id) <= 10 and '+' not in video_format_id)  # IDs cortos sin '+'
+            )
+            
+            if not is_simple_id:
+                print(f"DEBUG: ⚠️ Format_id '{video_format_id}' no es simple. Usando lógica estándar.")
+                is_simple_format = False
+
+        if is_simple_format:
+            print(f"DEBUG: 🎯 Formato simple detectado (total={total_formats}, id={video_format_id})")
+        
+        # 🔧 PASO 3: Construir el selector preciso
+        precise_selector = ""
+        
         if audio_extraction_fallback:
             precise_selector = video_format_id
-            print(f"DEBUG: Fallback activado. Selector de descarga forzado: {precise_selector}")
-        elif options["mode"] == "Video+Audio":
-            is_combined = video_format_info.get('is_combined', False)
-            if is_combined and video_format_id:
+            print(f"DEBUG: Fallback activado. Selector: {precise_selector}")
+            
+        elif mode == "Video+Audio":
+            # 🆕 CASO ESPECIAL: Si es formato simple Y validado
+            if is_simple_format and video_format_id:
                 precise_selector = video_format_id
+                print(f"DEBUG: PASO 1 (simple): Selector directo: {precise_selector}")
+                
+            # CASO NORMAL: Formato combinado multiidioma o estándar
+            elif is_combined and video_format_id:
+                precise_selector = video_format_id
+                print(f"DEBUG: PASO 1: Selector combinado: {precise_selector}")
+                
+            # CASO NORMAL: Formatos separados
             elif video_format_id and audio_format_id:
                 precise_selector = f"{video_format_id}+{audio_format_id}"
-        elif options["mode"] == "Solo Audio":
+                print(f"DEBUG: PASO 1: Selector separado: {precise_selector}")
+                
+        elif mode == "Solo Audio":
             precise_selector = audio_format_id
-        else:
-            video_format_id = video_format_info.get('format_id')
-            audio_format_id = audio_format_info.get('format_id')
-            if mode == "Video+Audio":
-                is_combined = video_format_info.get('is_combined', False)
-                if is_combined and video_format_id:
-                    precise_selector = video_format_id
-                elif video_format_id and audio_format_id:
-                    precise_selector = f"{video_format_id}+{audio_format_id}"
-            elif mode == "Solo Audio":
-                precise_selector = audio_format_id
+            print(f"DEBUG: PASO 1: Selector audio: {precise_selector}")
+        
+        # 🔧 PASO 4: Configurar yt-dlp con el selector ya definido
         if getattr(sys, 'frozen', False):
             project_root = os.path.dirname(sys.executable)
         else:
             project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         bin_dir = os.path.join(project_root, "bin")
+        
         ydl_opts = {
             'outtmpl': output_template,
             'postprocessors': [],
@@ -3364,115 +3898,136 @@ class SingleDownloadTab(ctk.CTkFrame):
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }]
+        
         if options["download_subtitles"] and options.get("selected_subtitle_info"):
             subtitle_info = options["selected_subtitle_info"]
             if subtitle_info:
+                # 🔧 Verificar si se debe convertir a SRT
+                should_convert_to_srt = self.clean_subtitle_check.winfo_ismapped() and self.clean_subtitle_check.get() == 1
+                
                 ydl_opts.update({
                     'writesubtitles': True,
                     'subtitleslangs': [subtitle_info['lang']],
-                    'subtitlesformat': subtitle_info.get('ext', 'best'),
                     'writeautomaticsub': subtitle_info.get('automatic', False),
                     'embedsubtitles': mode == "Video+Audio"
                 })
+                
+                # 🔧 NUEVO: Si está marcado convertir a SRT
+                if should_convert_to_srt:
+                    ydl_opts['subtitlesformat'] = 'best/vtt/best'
+                    ydl_opts['convertsubtitles'] = 'srt'
+                else:
+                    ydl_opts['subtitlesformat'] = subtitle_info.get('ext', 'best')
+        
         if options["speed_limit"]:
-            try: ydl_opts['ratelimit'] = float(options["speed_limit"]) * 1024 * 1024
-            except ValueError: pass
+            try: 
+                ydl_opts['ratelimit'] = float(options["speed_limit"]) * 1024 * 1024
+            except ValueError: 
+                pass
+        
         cookie_mode = options["cookie_mode"]
-        if cookie_mode == "Archivo Manual..." and options["cookie_path"]: ydl_opts['cookiefile'] = options["cookie_path"]
+        if cookie_mode == "Archivo Manual..." and options["cookie_path"]: 
+            ydl_opts['cookiefile'] = options["cookie_path"]
         elif cookie_mode != "No usar":
             browser_arg = options["selected_browser"]
-            if options["browser_profile"]: browser_arg += f":{options['browser_profile']}"
+            if options["browser_profile"]: 
+                browser_arg += f":{options['browser_profile']}"
             ydl_opts['cookiesfrombrowser'] = (browser_arg,)
-            
+        
+        # 🔧 CRÍTICO: Usar el precise_selector que ya calculamos
         if audio_extraction_fallback:
-            precise_selector = video_format_info.get('format_id')
-            if not precise_selector:
-                raise Exception("No se pudo determinar un formato de video para el fallback.")
             ydl_opts['format'] = precise_selector
-            print(f"DEBUG: [FALLBACK] Intentando descarga directa del video combinado: {precise_selector}")
+            print(f"DEBUG: [FALLBACK] Descargando video: {precise_selector}")
             downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
             temp_video_for_extraction = downloaded_filepath
+            return downloaded_filepath, temp_video_for_extraction 
         else:
             try:
+                # 🔧 INTENTO 1: Usar el selector preciso
+                if not precise_selector:
+                    raise yt_dlp.utils.DownloadError("Selector preciso no válido")
+                
+                ydl_opts['format'] = precise_selector
+                print(f"DEBUG: INTENTO 1: Descargando con selector: {precise_selector}")
+                downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                
+            except yt_dlp.utils.DownloadError as e:
+                print(f"DEBUG: Falló el intento 1. Error: {e}")
+                print("DEBUG: Pasando al Paso 2 (selector flexible).")
+                
                 try:
-                    precise_selector = None
-                    video_format_id = video_format_info.get('format_id')
-                    audio_format_id = audio_format_info.get('format_id')
-                    if mode == "Video+Audio":
-                        if video_format_info.get('is_combined'):
-                            precise_selector = video_format_id
-                        elif video_format_id and audio_format_id:
-                            precise_selector = f"{video_format_id}+{audio_format_id}"
-                        elif video_format_id: 
-                            precise_selector = video_format_id
-                    elif mode == "Solo Audio":
-                        precise_selector = audio_format_id
-                    if not precise_selector:
-                        raise yt_dlp.utils.DownloadError("Selector preciso no válido o no se seleccionaron formatos.")
-                    ydl_opts['format'] = precise_selector
-                    print(f"DEBUG: PASO 1: Intentando con selector preciso: {precise_selector}")
-                    downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
-                    if audio_extraction_fallback:
-                        temp_video_for_extraction = downloaded_filepath
-                except yt_dlp.utils.DownloadError as e:
-                    print(f"DEBUG: Falló la descarga directa. Error: {e}")
-                    print("DEBUG: PASO 1 FALLÓ. Pasando al Paso 2.")
-                    try:
-                        if not self.video_formats and not self.audio_formats:
-                            strict_flexible_selector = 'best'
-                        else:
-                            info_dict = self.analysis_cache.get(options["url"], {}).get('data', {})
-                            selected_audio_details = next((f for f in info_dict.get('formats', []) if f.get('format_id') == audio_format_id), None)
-                            language_code = selected_audio_details.get('language') if selected_audio_details else None
-                            
-                            strict_flexible_selector = ""
-                            if self.has_audio_streams:
-                                if mode == "Video+Audio":
-                                    height = video_format_info.get('height')
-                                    video_selector = f'bv[height={height}]' if height else 'bv' 
-                                    audio_selector = f'ba[lang={language_code}]' if language_code else 'ba'
-                                    strict_flexible_selector = f'{video_selector}+{audio_selector}'
-                                elif mode == "Solo Audio":
-                                    strict_flexible_selector = f'ba[lang={language_code}]' if language_code else 'ba'
-                            else: 
+                    # 🆕 INTENTO 2 MEJORADO: Lógica adaptativa
+                    if is_simple_format:
+                        # Para formatos simples, 'best' es más seguro
+                        strict_flexible_selector = 'best'
+                        print(f"DEBUG: INTENTO 2 (simple): Usando selector 'best'")
+                    
+                    # 🆕 CASO ESPECIAL: Twitter/X (extractor específico)
+                    elif 'twitter' in options["url"] or 'x.com' in options["url"]:
+                        strict_flexible_selector = 'best'
+                        print(f"DEBUG: INTENTO 2 (Twitter): Usando selector 'best'")
+                        
+                    elif not self.video_formats and not self.audio_formats:
+                        strict_flexible_selector = 'best'
+                        
+                    else:
+                        # 🔒 LÓGICA COMPLEJA ORIGINAL
+                        info_dict = self.analysis_cache.get(options["url"], {}).get('data', {})
+                        selected_audio_details = next((f for f in info_dict.get('formats', []) if f.get('format_id') == audio_format_id), None)
+                        language_code = selected_audio_details.get('language') if selected_audio_details else None
+                        
+                        strict_flexible_selector = ""
+                        if self.has_audio_streams:
+                            if mode == "Video+Audio":
                                 height = video_format_info.get('height')
-                                strict_flexible_selector = f'bv[height={height}]' if height else 'bv'
-                        ydl_opts['format'] = strict_flexible_selector
-                        print(f"DEBUG: PASO 2: Intentando con selector estricto-flexible: {strict_flexible_selector}")
-                        downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
-                    except yt_dlp.utils.DownloadError:
-                        print("DEBUG: PASO 2 FALLÓ. Pasando al Paso 3.")
-                        details_ready_event = threading.Event()
-                        compromise_details = {"text": "Obteniendo detalles..."}
-                        def get_details_thread():
-                            """Este hilo ejecuta la simulación en segundo plano."""
-                            compromise_details["text"] = self._get_best_available_info(options["url"], options)
-                            details_ready_event.set() 
-                        self.app.after(0, self.update_progress, 50, "Calidad no disponible. Obteniendo detalles de alternativa...")
-                        threading.Thread(target=get_details_thread, daemon=True).start()
-                        details_ready_event.wait() 
-                        self.app.ui_request_data = {"type": "ask_compromise", "details": compromise_details["text"]}
-                        self.app.ui_response_event.clear()
-                        self.app.ui_request_event.set()
-                        self.app.ui_response_event.wait()
-                        user_choice = self.app.ui_response_data.get("result", "cancel")
-                        if user_choice == "accept":
-                            print("DEBUG: PASO 4: El usuario aceptó. Intentando con selector final.")
-                            if not self.video_formats and not self.audio_formats:
-                                final_selector = 'best'
-                            else:
-                                final_selector = 'ba'
-                                if mode == "Video+Audio":
-                                    final_selector = 'bv+ba' if self.has_audio_streams else 'bv'
-                            ydl_opts['format'] = final_selector
-                            downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                                video_selector = f'bv[height={height}]' if height else 'bv' 
+                                audio_selector = f'ba[lang={language_code}]' if language_code else 'ba'
+                                strict_flexible_selector = f'{video_selector}+{audio_selector}'
+                            elif mode == "Solo Audio":
+                                strict_flexible_selector = f'ba[lang={language_code}]' if language_code else 'ba'
+                        else: 
+                            height = video_format_info.get('height')
+                            strict_flexible_selector = f'bv[height={height}]' if height else 'bv'
+                    
+                    ydl_opts['format'] = strict_flexible_selector
+                    print(f"DEBUG: INTENTO 2: Descargando con selector flexible: {strict_flexible_selector}")
+                    downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                    
+                except yt_dlp.utils.DownloadError:
+                    print("DEBUG: Falló intento 2. Pasando al Paso 3 (compromiso).")
+
+                    details_ready_event = threading.Event()
+                    compromise_details = {"text": "Obteniendo detalles..."}
+                    def get_details_thread():
+                        """Este hilo ejecuta la simulación en segundo plano."""
+                        compromise_details["text"] = self.app._get_best_available_info(options["url"], options)
+                        details_ready_event.set() 
+                    self.app.after(0, self.update_progress, 50, "Calidad no disponible. Obteniendo detalles de alternativa...")
+                    threading.Thread(target=get_details_thread, daemon=True).start()
+                    details_ready_event.wait() 
+                    self.app.ui_request_data = {"type": "ask_compromise", "details": compromise_details["text"]}
+                    self.app.ui_response_event.clear()
+                    self.app.ui_request_event.set()
+                    self.app.ui_response_event.wait()
+                    user_choice = self.app.ui_response_data.get("result", "cancel")
+                    if user_choice == "accept":
+                        print("DEBUG: PASO 4: El usuario aceptó. Intentando con selector final.")
+                        if not self.video_formats and not self.audio_formats:
+                            final_selector = 'best'
                         else:
-                            raise UserCancelledError("Descarga cancelada por el usuario en el diálogo de compromiso.")
+                            final_selector = 'ba'
+                            if mode == "Video+Audio":
+                                final_selector = 'bv+ba' if self.has_audio_streams else 'bv'
+                        ydl_opts['format'] = final_selector
+                        downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                    else:
+                        raise UserCancelledError("Descarga cancelada por el usuario en el diálogo de compromiso.")
             except Exception as final_e:
                     raise final_e
             if not downloaded_filepath or not os.path.exists(downloaded_filepath):
-                    raise Exception("La descarga falló o el archivo no se encontró.")
-        return downloaded_filepath, temp_video_for_extraction
+                raise Exception("La descarga falló o el archivo no se encontró.")
+            
+            return downloaded_filepath, temp_video_for_extraction
 
     def _perform_cleanup(self, process_successful, recode_phase_started, final_recoded_path, 
                      temp_video_for_extraction, backup_file_path, cleanup_required, 
@@ -3484,7 +4039,17 @@ class SingleDownloadTab(ctk.CTkFrame):
 
             if output_dir and user_facing_title:
                 base_title_for_cleanup = user_facing_title.replace("_recoded", "")
+                
+                # 🆕 Limpieza inmediata
                 self._cleanup_ytdlp_temp_files(output_dir, base_title_for_cleanup)
+                
+                # 🆕 Programar limpieza diferida para archivos bloqueados
+                def deferred_cleanup():
+                    time.sleep(3)  # Esperar 3 segundos
+                    print("DEBUG: Ejecutando limpieza diferida...")
+                    self._cleanup_ytdlp_temp_files(output_dir, base_title_for_cleanup)
+                
+                threading.Thread(target=deferred_cleanup, daemon=True).start()
 
             if recode_phase_started and final_recoded_path and os.path.exists(final_recoded_path):
                 try:
@@ -3559,6 +4124,7 @@ class SingleDownloadTab(ctk.CTkFrame):
     def _cleanup_ytdlp_temp_files(self, output_dir, base_title):
         """
         Limpia archivos temporales específicos de yt-dlp (.part, fragmentos, etc.)
+        Incluye reintentos y manejo de bloqueos de archivo.
         """
         import glob
         
@@ -3568,22 +4134,80 @@ class SingleDownloadTab(ctk.CTkFrame):
             f"{base_title}*.ytdl",           # Archivos de metadata
             f"{base_title}*.temp",           # Temporales genéricos
             f"*.f[0-9]*.part",               # Fragmentos parciales sin título
+            # 🆕 Patrones adicionales comunes
+            f"{base_title}*.temp.*",
+            f"{base_title}*.part-*",
+            f".{base_title}*",               # Archivos ocultos temporales
         ]
         
         cleaned_count = 0
+        failed_files = []
+        
         for pattern in patterns_to_clean:
             full_pattern = os.path.join(output_dir, pattern)
+            
             for temp_file in glob.glob(full_pattern):
-                try:
-                    if os.path.exists(temp_file):
+                if not os.path.exists(temp_file):
+                    continue
+                
+                # 🆕 Reintentos con espera para archivos bloqueados
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        # 🆕 Liberar recursos antes de eliminar
+                        gc.collect()
+                        
+                        # 🆕 Espera progresiva en cada intento
+                        if attempt > 0:
+                            wait_time = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s
+                            time.sleep(wait_time)
+                        
                         os.remove(temp_file)
                         print(f"DEBUG: Eliminado temp de yt-dlp: {temp_file}")
                         cleaned_count += 1
-                except OSError as e:
-                    print(f"ADVERTENCIA: No se pudo eliminar {temp_file}: {e}")
+                        break  # Éxito, salir del loop de reintentos
+                        
+                    except PermissionError as e:
+                        if attempt < max_retries - 1:
+                            print(f"⚠️ Archivo bloqueado, reintentando ({attempt+1}/{max_retries}): {temp_file}")
+                            continue
+                        else:
+                            print(f"⚠️ No se pudo eliminar (bloqueado): {temp_file}")
+                            failed_files.append(temp_file)
+                            
+                    except OSError as e:
+                        if attempt < max_retries - 1:
+                            continue
+                        else:
+                            print(f"⚠️ No se pudo eliminar {temp_file}: {e}")
+                            failed_files.append(temp_file)
         
         if cleaned_count > 0:
             print(f"DEBUG: Se eliminaron {cleaned_count} archivos temporales de yt-dlp")
+        
+        # 🆕 Reportar archivos que no se pudieron eliminar
+        if failed_files:
+            print(f"⚠️ {len(failed_files)} archivo(s) temporal(es) no se pudieron eliminar:")
+            for f in failed_files:
+                print(f"   - {os.path.basename(f)}")
+            
+            # 🆕 Intentar una última vez después de un delay mayor
+            time.sleep(2)
+            remaining_files = []
+            
+            for temp_file in failed_files:
+                try:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                        print(f"✅ Eliminado en reintento final: {os.path.basename(temp_file)}")
+                        cleaned_count += 1
+                except Exception as e:
+                    remaining_files.append(temp_file)
+            
+            if remaining_files:
+                print(f"⚠️ {len(remaining_files)} archivo(s) requieren limpieza manual:")
+                for f in remaining_files:
+                    print(f"   - {f}")
 
     def _reset_buttons_to_original_state(self):
         """ Restablece los botones a su estado original, aplicando el color correcto. """
@@ -3642,7 +4266,7 @@ class SingleDownloadTab(ctk.CTkFrame):
                     "subtitle": None
                 }
                 file_ext_without_dot = os.path.splitext(final_filepath)[1].lower().lstrip('.')
-                if file_ext_without_dot in self.app.VIDEO_EXTENSIONS or file_ext_without_dot in self.SINGLE_STREAM_AUDIO_CONTAINERS:
+                if file_ext_without_dot in VIDEO_EXTENSIONS or file_ext_without_dot in AUDIO_EXTENSIONS or file_ext_without_dot in SINGLE_STREAM_AUDIO_CONTAINERS:
                     file_package["video"] = final_filepath.replace('\\', '/')
                 elif file_ext_without_dot == 'srt':
                     file_package["subtitle"] = final_filepath.replace('\\', '/')
@@ -3866,6 +4490,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.subtitle_type_menu.configure(state="disabled", values=["-"])
         self.subtitle_type_menu.set("-") 
         self.toggle_manual_subtitle_button() 
+        self.analysis_was_playlist = False
         threading.Thread(target=self._run_analysis_subprocess, args=(url,), daemon=True).start()
 
     def _run_analysis_subprocess(self, url):
@@ -3903,6 +4528,9 @@ class SingleDownloadTab(ctk.CTkFrame):
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     try:
                         info = ydl.extract_info(url, download=False)
+                        if info:
+                            info = self._normalize_info_dict(info)
+
                     except Exception as e:
                         print(f"\nError interno de yt-dlp: {e}")
             
@@ -3914,25 +4542,111 @@ class SingleDownloadTab(ctk.CTkFrame):
 
             if info is None:
                 raise Exception(f"yt-dlp falló: {' '.join(other_lines)}")
+            
+            formats_raw = info.get('formats', [])
+            print(f"\n🔍 DEBUG: Formatos RAW recibidos de yt-dlp: {len(formats_raw)}")
+            for idx, f in enumerate(formats_raw):
+                print(f"  [{idx}] id={f.get('format_id')}, ext={f.get('ext')}, "
+                    f"vcodec={f.get('vcodec')}, acodec={f.get('acodec')}, "
+                    f"resolution={f.get('resolution')}")
 
             if 'subtitles' not in info and 'automatic_captions' not in info:
                 info['subtitles'], info['automatic_captions'] = self._parse_subtitle_lines_from_text(other_lines)
 
             if info.get('is_live'):
-                self.app.after(0, self.on_analysis_complete, None, "AVISO: La URL apunta a una transmisión en vivo.")
+                self.app.after(0, lambda: self.on_analysis_complete(None, "AVISO: La URL apunta a una transmisión en vivo."))
+
                 return
                 
             self.app.after(0, self.on_analysis_complete, info)
 
         except UserCancelledError:
-            self.app.after(0, self.on_process_finished, False, "Análisis cancelado.", None, show_dialog=False)
+            self.app.after(0, lambda: self.on_process_finished(False, "Análisis cancelado.", None, show_dialog=False))
         except Exception as e:
             error_message = f"ERROR: {e}"
             if isinstance(e, yt_dlp.utils.DownloadError):
                 error_message = f"ERROR de yt-dlp: {str(e).replace('ERROR:', '').strip()}"
-            self.app.after(0, self.on_analysis_complete, None, error_message)
+            self.app.after(0, lambda: self.on_analysis_complete(None, error_message))
+
         finally:
             self.active_subprocess_pid = None
+
+    def _normalize_info_dict(self, info):
+        """
+        Normaliza el diccionario de info para casos donde yt-dlp no devuelve 'formats'.
+        Maneja múltiples casos especiales de extractores.
+        """
+        if not info:
+            return info
+        
+        formats = info.get('formats', [])
+        
+        # ✅ CASO 1: Ya tiene formats, retornar tal cual
+        if formats:
+            return info
+        
+        # ✅ CASO 2: Detectar si es contenido de audio directo
+        url = info.get('url')
+        ext = info.get('ext')
+        vcodec = info.get('vcodec', 'none')
+        acodec = info.get('acodec')
+        
+        # 🔍 Detectar audio por múltiples señales
+        is_audio_content = False
+        
+        # Señal 1: Codecs explícitos
+        if url and ext and (vcodec == 'none' or not vcodec) and acodec and acodec != 'none':
+            is_audio_content = True
+        
+        # Señal 2: Extensión de audio conocida
+        elif ext in self.app.AUDIO_EXTENSIONS:
+            is_audio_content = True
+            if not acodec or acodec == 'none':
+                # Inferir codec desde extensión
+                acodec = {'mp3': 'mp3', 'opus': 'opus', 'aac': 'aac', 'm4a': 'aac'}.get(ext, ext)
+        
+        # Señal 3: Extractor conocido de audio
+        elif info.get('extractor_key', '').lower() in ['applepodcasts', 'soundcloud', 'audioboom', 'spreaker', 'libsyn']:
+            is_audio_content = True
+            if not acodec:
+                acodec = 'mp3'  # Fallback común
+        
+        if is_audio_content:
+            print(f"DEBUG: 🎵 Contenido de audio directo detectado (ext={ext}, acodec={acodec})")
+            
+            # Crear un formato sintético
+            synthetic_format = {
+                'format_id': '0',
+                'url': url or info.get('manifest_url') or '',
+                'ext': ext or 'mp3',
+                'vcodec': 'none',
+                'acodec': acodec or 'unknown',
+                'abr': info.get('abr'),
+                'tbr': info.get('tbr'),
+                'filesize': info.get('filesize'),
+                'filesize_approx': info.get('filesize_approx'),
+                'protocol': info.get('protocol', 'https'),
+                'format_note': info.get('format_note', 'Audio directo'),
+            }
+            
+            info['formats'] = [synthetic_format]
+            print(f"DEBUG: ✅ Formato sintético creado: {synthetic_format['format_id']}")
+        
+        # ✅ CASO 3: Livestreams (sin formats pero con manifest_url)
+        elif info.get('is_live') and info.get('manifest_url'):
+            print(f"DEBUG: 🔴 Livestream detectado sin formats")
+            
+            synthetic_format = {
+                'format_id': 'live',
+                'url': info.get('manifest_url'),
+                'ext': info.get('ext', 'mp4'),
+                'protocol': 'm3u8_native',
+                'format_note': 'Livestream',
+            }
+            
+            info['formats'] = [synthetic_format]
+        
+        return info
 
     def _parse_subtitle_lines_from_text(self, lines):
         """
@@ -3975,6 +4689,7 @@ class SingleDownloadTab(ctk.CTkFrame):
     def on_analysis_complete(self, info, error_message=None):
         try:
             if info and info.get('_type') in ('playlist', 'multi_video'):
+                self.analysis_was_playlist = True
                 if info.get('entries') and len(info['entries']) > 0:
                     print("DEBUG: Playlist detectada. Extrayendo información del primer video.")
                     info = info['entries'][0]
@@ -3995,6 +4710,20 @@ class SingleDownloadTab(ctk.CTkFrame):
                 return
             self.progress_bar.set(1)
             self.analysis_is_complete = True
+
+            if info:
+                extractor = info.get('extractor_key', '').lower()
+                
+                # Lista de extractors que pueden tener problemas
+                problematic_extractors = {
+                    'generic': 'Este sitio usa un extractor genérico (puede ser inestable)',
+                    'soundcloud': 'SoundCloud detectado (verificando formatos...)',
+                    'twitch:stream': 'Livestream de Twitch (sin duración conocida)',
+                }
+                
+                if extractor in problematic_extractors:
+                    print(f"ℹ️ INFO: {problematic_extractors[extractor]}")
+
             url = self.url_entry.get()
             self.analysis_cache[url] = {'data': info, 'timestamp': time.time()}
             print(f"DEBUG: Resultado para '{url}' guardado en caché.")
@@ -4033,81 +4762,391 @@ class SingleDownloadTab(ctk.CTkFrame):
     def load_thumbnail(self, path_or_url, is_local=False):
         try:
             self.app.after(0, self.create_placeholder_label, "Cargando miniatura...")
+            
             if is_local:
                 with open(path_or_url, 'rb') as f:
                     img_data = f.read()
             else:
-                response = requests.get(path_or_url, timeout=10)
-                response.raise_for_status()
-                img_data = response.content
+                # 🆕 Headers mejorados para evitar rate limits
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Referer': 'https://imgur.com/',
+                }
+                
+                # 🆕 Reintentos con timeout más largo
+                max_retries = 2
+                timeout = 15
+                
+                for attempt in range(max_retries):
+                    try:
+                        response = requests.get(
+                            path_or_url, 
+                            headers=headers, 
+                            timeout=timeout,
+                            allow_redirects=True
+                        )
+                        response.raise_for_status()
+                        img_data = response.content
+                        break  # Éxito, salir del loop
+                        
+                    except requests.exceptions.HTTPError as e:
+                        if e.response.status_code == 429:
+                            # Rate limit detectado
+                            if attempt < max_retries - 1:
+                                wait_time = 2 ** attempt  # Backoff exponencial: 1s, 2s
+                                print(f"⚠️ Rate limit en miniatura. Reintentando en {wait_time}s...")
+                                time.sleep(wait_time)
+                                continue
+                            else:
+                                # Último intento falló
+                                raise Exception(f"Rate limit de Imgur (429). La miniatura no está disponible temporalmente.")
+                        else:
+                            raise  # Otro error HTTP
+                            
+                    except requests.exceptions.Timeout:
+                        if attempt < max_retries - 1:
+                            print(f"⚠️ Timeout descargando miniatura. Reintentando...")
+                            continue
+                        else:
+                            raise Exception("Timeout al descargar la miniatura")
+            
+            # 🔧 Validar que img_data no esté vacío
+            if not img_data or len(img_data) < 100:
+                raise Exception("La miniatura descargada está vacía o corrupta")
+            
             self.pil_image = Image.open(BytesIO(img_data))
             display_image = self.pil_image.copy()
             display_image.thumbnail((320, 180), Image.Resampling.LANCZOS)
             ctk_image = ctk.CTkImage(light_image=display_image, dark_image=display_image, size=display_image.size)
 
             def set_new_image():
-                if self.thumbnail_label: self.thumbnail_label.destroy()
+                if self.thumbnail_label: 
+                    self.thumbnail_label.destroy()
                 self.thumbnail_label = ctk.CTkLabel(self.thumbnail_container, text="", image=ctk_image)
                 self.thumbnail_label.pack(expand=True)
                 self.thumbnail_label.image = ctk_image
                 self.save_thumbnail_button.configure(state="normal")
                 self.toggle_manual_thumbnail_button()
+                
             self.app.after(0, set_new_image)
+            
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if hasattr(e, 'response') else 'unknown'
+            error_msg = f"Error HTTP {status_code}"
+            
+            if status_code == 429:
+                error_msg = "Rate limit (429)"
+                placeholder_text = "⏳"
+            elif status_code == 404:
+                error_msg = "Miniatura no encontrada (404)"
+                placeholder_text = "❌"
+            elif status_code in [403, 401]:
+                error_msg = f"Acceso denegado ({status_code})"
+                placeholder_text = "🔒"
+            else:
+                placeholder_text = "❌"
+            
+            print(f"⚠️ Error al cargar miniatura: {error_msg} - URL: {path_or_url}")
+            self.app.after(0, self.create_placeholder_label, placeholder_text, font_size=60)
+            
+        except requests.exceptions.Timeout:
+            print(f"⚠️ Timeout al cargar miniatura: {path_or_url}")
+            self.app.after(0, self.create_placeholder_label, "⏱️", font_size=60)
+            
         except Exception as e:
-            print(f"Error al cargar la miniatura: {e}")
-            self.app.after(0, self.create_placeholder_label, "Error de miniatura")
+            print(f"⚠️ Error al cargar miniatura: {e}")
+            self.app.after(0, self.create_placeholder_label, "❌", font_size=60)
 
     def _classify_format(self, f):
         """
-        Clasifica un formato de yt-dlp como 'VIDEO', 'AUDIO' o 'UNKNOWN'
-        siguiendo un estricto conjunto de reglas jerárquicas (v2.2 FINAL).
+        Clasifica un formato (v3.2 - Manejo de codecs 'unknown')
         """
-        if f.get('height') or f.get('width'):
+        ext = f.get('ext', '')
+        vcodec = f.get('vcodec', '')
+        acodec = f.get('acodec', '')
+        format_id = (f.get('format_id') or '').lower()
+        format_note = (f.get('format_note') or '').lower()
+        protocol = f.get('protocol', '')
+        
+        # 🆕 REGLA -1: Formato sintético
+        if 'audio directo' in format_note or 'livestream' in format_note:
+            if 'audio' in format_note:
+                return 'AUDIO'
             return 'VIDEO'
-        format_id_raw = f.get('format_id')
-        format_note_raw = f.get('format_note')
-        format_id = format_id_raw.lower() if format_id_raw else ''
-        format_note = format_note_raw.lower() if format_note_raw else ''
+        
+        # 🆕 REGLA 0: Casos especiales de vcodec literal
+        vcodec_special_cases = {
+            'audio only': 'AUDIO',
+            'images': 'VIDEO',
+            'slideshow': 'VIDEO',
+        }
+        
+        if vcodec in vcodec_special_cases:
+            return vcodec_special_cases[vcodec]
+        
+        # 🔧 REGLA 1: GIF explícito
+        if ext == 'gif' or vcodec == 'gif':
+            return 'VIDEO'
+        
+        # 🔧 REGLA 2: Tiene dimensiones → VIDEO (con o sin audio)
+        if f.get('height') or f.get('width'):
+            # 🆕 CRÍTICO: Si ambos codecs son 'unknown' o faltan → ASUMIR COMBINADO
+            vcodec_is_unknown = not vcodec or vcodec in ['unknown', 'N/A', '']
+            acodec_is_unknown = not acodec or acodec in ['unknown', 'N/A', '']
+            
+            # Si AMBOS son desconocidos → probablemente es combinado
+            if vcodec_is_unknown and acodec_is_unknown:
+                print(f"DEBUG: Formato {f.get('format_id')} con codecs desconocidos → asumiendo VIDEO combinado")
+                return 'VIDEO'
+            
+            # Si solo audio es 'none' explícitamente → VIDEO_ONLY
+            if acodec in ['none']:
+                return 'VIDEO_ONLY'
+            
+            # Si tiene audio conocido → VIDEO combinado
+            return 'VIDEO'
+        
+        # 🆕 REGLA 2.5: Livestreams
+        if f.get('is_live') or 'live' in format_id:
+            return 'VIDEO'
+        
+        # 🔧 REGLA 3: Resolución en format_note
+        resolution_patterns = ['144p', '240p', '360p', '480p', '720p', '1080p', '1440p', '2160p', '4320p']
+        if any(res in format_note for res in resolution_patterns):
+            if acodec in ['none']:
+                return 'VIDEO_ONLY'
+            return 'VIDEO'
+        
+        # 🔧 REGLA 4: "audio" explícito en IDs
         if 'audio' in format_id or 'audio' in format_note:
             return 'AUDIO'
-        vcodec = f.get('vcodec')
-        acodec = f.get('acodec')
-        if (vcodec == 'none' or not vcodec) and (acodec and acodec != 'none'):
+        
+        # 🆕 REGLA 4.5: "video" explícito en IDs
+        if 'video' in format_id or 'video' in format_note:
+            # Si tiene dimensiones o codecs desconocidos → asumir combinado
+            if f.get('height') or (vcodec == 'unknown' and acodec == 'unknown'):
+                return 'VIDEO'
+            return 'VIDEO_ONLY' if acodec in ['none'] else 'VIDEO'
+        
+        # 🔧 REGLA 5: Extensión tiene MÁXIMA PRIORIDAD
+        if ext in self.app.AUDIO_EXTENSIONS:
             return 'AUDIO'
-        if f.get('ext') in self.AUDIO_EXTENSIONS:
+        
+        # 🆕 REGLA 6: Audio sin video (codec EXPLÍCITAMENTE 'none')
+        # IMPORTANTE: 'unknown' NO es lo mismo que 'none'
+        if vcodec == 'none' and acodec and acodec not in ['none', '', 'N/A', 'unknown']:
             return 'AUDIO'
-        if f.get('ext') in self.app.VIDEO_EXTENSIONS:
+        
+        # 🆕 REGLA 7: Video sin audio (codec EXPLÍCITAMENTE 'none')
+        if acodec == 'none' and vcodec and vcodec not in ['none', '', 'N/A', 'unknown']:
+            return 'VIDEO_ONLY'
+        
+        # 🔧 REGLA 8: Extensión de video + codecs válidos o desconocidos
+        if ext in self.app.VIDEO_EXTENSIONS:
+            # 🆕 Si ambos codecs son desconocidos → asumir combinado
+            if vcodec in ['unknown', ''] and acodec in ['unknown', '']:
+                return 'VIDEO'
             return 'VIDEO'
-        if vcodec == 'none':
+        
+        # 🔧 REGLA 9: Ambos codecs explícitamente válidos
+        valid_vcodecs = ['h264', 'h265', 'vp8', 'vp9', 'av1', 'hevc', 'mpeg4', 'xvid', 'theora']
+        valid_acodecs = ['aac', 'mp3', 'opus', 'vorbis', 'flac', 'ac3', 'eac3', 'pcm']
+        
+        vcodec_lower = (vcodec or '').lower()
+        acodec_lower = (acodec or '').lower()
+        
+        if vcodec_lower in valid_vcodecs:
+            if acodec_lower in valid_acodecs:
+                return 'VIDEO'
+            else:
+                return 'VIDEO_ONLY'
+        
+        # 🔧 REGLA 10: Protocolo m3u8/dash
+        if 'm3u8' in protocol or 'dash' in protocol:
+            return 'VIDEO'
+        
+        # 🆕 REGLA 11: Casos de formatos sin codecs claros pero con metadata
+        if f.get('tbr') and not f.get('abr'):
+            return 'VIDEO'
+        elif f.get('abr') and not f.get('vbr'):
             return 'AUDIO'
+        
+        # 🆕 REGLA 12: Fallback para casos ambiguos con extensión de video
+        if ext in self.app.VIDEO_EXTENSIONS:
+            print(f"⚠️ ADVERTENCIA: Formato {f.get('format_id')} ambiguo → asumiendo VIDEO combinado por extensión")
+            return 'VIDEO'
+        
+        # 🔧 REGLA 13: Si llegamos aquí → UNKNOWN
+        print(f"⚠️ ADVERTENCIA: Formato sin clasificación clara: {f.get('format_id')} (vcodec={vcodec}, acodec={acodec}, ext={ext})")
         return 'UNKNOWN'
-
+        
     def populate_format_menus(self, info, has_video, has_audio):
+        # 🆕 Detectar si es un livestream
+        is_live = info.get('is_live', False)
+        
+        if is_live:
+            # Los livestreams no tienen duración conocida
+            self.video_duration = 0
+            print("DEBUG: 🔴 Contenido en vivo detectado (duración desconocida)")
+        
         formats = info.get('formats', [])
+        
+        # ✅ Validación mejorada
+        if not formats:
+            error_msg = "Error: No se pudieron extraer formatos de esta URL"
+            
+            # Mensaje más específico según el caso
+            if is_live:
+                error_msg = "Error: No se puede analizar este livestream (puede estar offline)"
+            elif info.get('extractor_key', '').lower() in ['applepodcasts', 'soundcloud']:
+                error_msg = "Error: El extractor no devolvió información de formatos"
+            
+            print(f"⚠️ ADVERTENCIA: {error_msg}")
+            self.progress_label.configure(text=error_msg)
+            self._clear_subtitle_menus()
+            return
+
+        # 🔧 DEBUG: Ver TODOS los formatos recibidos
+        print(f"\nDEBUG: Total de formatos recibidos: {len(formats)}")
+        for f in formats:
+            format_id = f.get('format_id', 'unknown')
+            format_type = self._classify_format(f)
+            vcodec = f.get('vcodec', 'N/A')
+            acodec = f.get('acodec', 'N/A')
+            height = f.get('height', 'N/A')
+            protocol = f.get('protocol', 'N/A')
+            print(f"  {format_id}: type={format_type}, vcodec={vcodec}, acodec={acodec}, height={height}, protocol={protocol}")
+        
+        # 🆕 PASADA PREVIA: Detectar si hay ALGUNA fuente de audio disponible
+        has_any_audio_source = False
+        for f in formats:
+            format_type = self._classify_format(f)
+            if format_type == 'AUDIO':
+                has_any_audio_source = True
+                break
+            if format_type == 'VIDEO':  # Combinado con audio
+                acodec = f.get('acodec')
+                if acodec and acodec != 'none':
+                    has_any_audio_source = True
+                    break
+        
+        print(f"DEBUG: 🔊 has_any_audio_source = {has_any_audio_source}")
+        
         video_entries, audio_entries = [], []
         self.video_formats.clear()
         self.audio_formats.clear()
+        
+        # 🔧 PASO 1: Pre-análisis MEJORADO para agrupar variantes
+        self.combined_variants = {}
+        
+        for f in formats:
+            format_type = self._classify_format(f)
+            
+            # 🆕 CRÍTICO: Manejar VIDEO, VIDEO_ONLY y AUDIO
+            if format_type in ['VIDEO', 'VIDEO_ONLY']:  # 🔧 AGREGADO VIDEO_ONLY
+                vcodec_raw = f.get('vcodec')
+                acodec_raw = f.get('acodec')
+                vcodec = vcodec_raw.split('.')[0] if vcodec_raw else 'none'
+                acodec = acodec_raw.split('.')[0] if acodec_raw else 'none'
+                is_combined = acodec != 'none' and acodec is not None
+                
+                if is_combined:
+                    fps = f.get('fps')
+                    height = f.get('height', 0)
+                    fps_val = int(fps) if fps else 0
+                    ext = f.get('ext', 'N/A')
+                    
+                    tbr = f.get('tbr', 0)
+                    tbr_rounded = round(tbr / 100) * 100 if tbr else 0
+                    
+                    quality_key = f"{height}p{fps_val}_{ext}_{vcodec}_{acodec}_tbr{tbr_rounded}"
+                    
+                    if quality_key not in self.combined_variants:
+                        self.combined_variants[quality_key] = []
+                    self.combined_variants[quality_key].append(f)
+            
+        # 🔧 PASO 1.5: Filtrar grupos que NO son realmente multiidioma
+        # Un grupo es multiidioma solo si tiene múltiples códigos de idioma DIFERENTES
+        real_multilang_keys = set()
+        for quality_key, variants in self.combined_variants.items():
+            unique_languages = set()
+            for variant in variants:
+                lang = variant.get('language', '')
+                if lang:  # Solo contar si tiene idioma definido
+                    unique_languages.add(lang)
+            
+            # 🔧 CRÍTICO: Solo marcar como multiidioma si hay 2+ idiomas DIFERENTES
+            if len(unique_languages) >= 2:
+                real_multilang_keys.add(quality_key)
+                print(f"DEBUG: Grupo multiidioma detectado: {quality_key} con idiomas {unique_languages}")
+        
+        # 🔧 PASO 2: Ahora sí crear las entradas con la información correcta
+        combined_keys_seen = set()
+        
         for f in formats:
             format_type = self._classify_format(f)
             size_mb_str = "Tamaño desc."
             size_sort_priority = 0
             filesize = f.get('filesize') or f.get('filesize_approx')
             if filesize:
-                size_mb_str = f"{filesize / (1024*1024):.2f} MB"; size_sort_priority = 2
+                size_mb_str = f"{filesize / (1024*1024):.2f} MB"
+                size_sort_priority = 2
             else:
                 bitrate = f.get('tbr') or f.get('vbr') or f.get('abr')
                 if bitrate and self.video_duration:
-                    estimated_bytes = (bitrate*1000/8)*self.video_duration; size_mb_str=f"Aprox. {estimated_bytes/(1024*1024):.2f} MB"; size_sort_priority = 1
-            vcodec_raw = f.get('vcodec'); acodec_raw = f.get('acodec')
+                    estimated_bytes = (bitrate*1000/8)*self.video_duration
+                    size_mb_str = f"Aprox. {estimated_bytes/(1024*1024):.2f} MB"
+                    size_sort_priority = 1
+            
+            vcodec_raw = f.get('vcodec')
+            acodec_raw = f.get('acodec')
             vcodec = vcodec_raw.split('.')[0] if vcodec_raw else 'none'
             acodec = acodec_raw.split('.')[0] if acodec_raw else 'none'
             ext = f.get('ext', 'N/A')
-            if format_type == 'VIDEO':
+            
+            # 🆕 CRÍTICO: Procesar VIDEO y VIDEO_ONLY
+            if format_type in ['VIDEO', 'VIDEO_ONLY']:
                 is_combined = acodec != 'none' and acodec is not None
                 fps = f.get('fps')
                 fps_tag = f"{fps:.0f}" if fps else ""
+                
+                quality_key = None
+                if is_combined:
+                    height = f.get('height', 0)
+                    fps_val = int(fps) if fps else 0
+                    tbr = f.get('tbr', 0)
+                    tbr_rounded = round(tbr / 100) * 100 if tbr else 0
+                    quality_key = f"{height}p{fps_val}_{ext}_{vcodec}_{acodec}_tbr{tbr_rounded}"
+                    
+                    # 🔧 MODIFICADO: Solo deduplicar si es REALMENTE multiidioma
+                    if quality_key in real_multilang_keys:
+                        if quality_key in combined_keys_seen:
+                            continue
+                        combined_keys_seen.add(quality_key)
+                
                 label_base = f"{f.get('height', 'Video')}p{fps_tag} ({ext}"
                 label_codecs = f", {vcodec}+{acodec}" if is_combined else f", {vcodec}"
+                
+                # 🔧 MODIFICADO: Solo mostrar [Sin Audio] si NO hay audio disponible en el sitio
+                no_audio_tag = ""
+                if format_type == 'VIDEO_ONLY' and not has_any_audio_source:
+                    no_audio_tag = " [Sin Audio]"
+                
+                # 🔧 MODIFICADO: Solo mostrar "Multiidioma" si está en real_multilang_keys
+                audio_lang_tag = ""
+
+                if is_combined and quality_key:
+                    if quality_key in real_multilang_keys:
+                        audio_lang_tag = f" [Multiidioma]"
+                    else:
+                        lang_code = f.get('language')
+                        if lang_code:
+                            norm_code = lang_code.replace('_', '-').lower()
+                            lang_name = self.app.LANG_CODE_MAP.get(norm_code, self.app.LANG_CODE_MAP.get(norm_code.split('-')[0], lang_code))
+                            audio_lang_tag = f" | Audio: {lang_name}"
+                
                 label_tag = " [Combinado]" if is_combined else ""
                 note = f.get('format_note') or ''
                 note_tag = ""  
@@ -4116,18 +5155,60 @@ class SingleDownloadTab(ctk.CTkFrame):
                     note_tag = f" [{note}]"
                 protocol = f.get('protocol', '')
                 protocol_tag = " [Streaming]" if 'm3u8' in protocol else ""
-                label = f"{label_base}{label_codecs}){label_tag}{note_tag}{protocol_tag} - {size_mb_str}"
+                
+                # 🔧 CORREGIDO: Agregar el tag de sin audio
+                label = f"{label_base}{label_codecs}){label_tag}{audio_lang_tag}{no_audio_tag}{note_tag}{protocol_tag} - {size_mb_str}"
 
-                tags = []; compatibility_issues, unknown_issues = self._get_format_compatibility_issues(f)
-                if not compatibility_issues and not unknown_issues: tags.append("✨")
+                tags = []
+                compatibility_issues, unknown_issues = self._get_format_compatibility_issues(f)
+                if not compatibility_issues and not unknown_issues: 
+                    tags.append("✨")
                 elif compatibility_issues or unknown_issues:
                     tags.append("⚠️")
-                if tags: label += f" {' '.join(tags)}"
+                if tags: 
+                    label += f" {' '.join(tags)}"
 
-                video_entries.append({'label': label, 'format': f, 'is_combined': is_combined, 'sort_priority': size_sort_priority})
+                video_entries.append({
+                    'label': label, 
+                    'format': f, 
+                    'is_combined': is_combined, 
+                    'sort_priority': size_sort_priority,
+                    'quality_key': quality_key
+                })
+
+            # 👇 AQUÍ DEBE IR EL elif - AL MISMO NIVEL QUE EL if DE VIDEO
             elif format_type == 'AUDIO':
+                # 🔧 DEBUG: Ver qué información tiene cada audio
+                format_id = f.get('format_id', 'unknown')
+                lang_code_raw = f.get('language')
+                format_note = f.get('format_note', '')
+                print(f"DEBUG AUDIO: id={format_id}, language={lang_code_raw}, format_note={format_note}")
+                
                 abr = f.get('abr') or f.get('tbr')
                 lang_code = f.get('language')
+                
+                lang_name = "Idioma Desconocido"
+                if lang_code:
+                    norm_code = lang_code.replace('_', '-').lower()
+                    lang_name = self.app.LANG_CODE_MAP.get(norm_code, self.app.LANG_CODE_MAP.get(norm_code.split('-')[0], lang_code))
+                    print(f"  → norm_code={norm_code}, mapeado a: {lang_name}")
+                else:
+                    print(f"  → Sin código de idioma")
+                
+                lang_prefix = f"{lang_name} - " if lang_code else ""
+                note = f.get('format_note') or ''
+                drc_tag = " (DRC)" if 'DRC' in note else ""
+                protocol = f.get('protocol', '')
+                protocol_tag = " [Streaming]" if 'm3u8' in protocol else ""
+                label = f"{lang_prefix}{abr:.0f}kbps ({acodec}, {ext}){drc_tag}{protocol_tag}" if abr else f"{lang_prefix}Audio ({acodec}, {ext}){drc_tag}{protocol_tag}"
+                if acodec in self.app.EDITOR_FRIENDLY_CRITERIA["compatible_acodecs"]: 
+                    label += " ✨"
+                else: 
+                    label += " ⚠️"
+                audio_entries.append({'label': label, 'format': f, 'sort_priority': size_sort_priority})
+                abr = f.get('abr') or f.get('tbr')
+                lang_code = f.get('language')
+                
                 lang_name = "Idioma Desconocido"
                 if lang_code:
                     norm_code = lang_code.replace('_', '-').lower()
@@ -4138,15 +5219,19 @@ class SingleDownloadTab(ctk.CTkFrame):
                 protocol = f.get('protocol', '')
                 protocol_tag = " [Streaming]" if 'm3u8' in protocol else ""
                 label = f"{lang_prefix}{abr:.0f}kbps ({acodec}, {ext}){drc_tag}{protocol_tag}" if abr else f"{lang_prefix}Audio ({acodec}, {ext}){drc_tag}{protocol_tag}"
-                if acodec in self.app.EDITOR_FRIENDLY_CRITERIA["compatible_acodecs"]: label += " ✨"
-                else: label += " ⚠️"
+                if acodec in self.app.EDITOR_FRIENDLY_CRITERIA["compatible_acodecs"]: 
+                    label += " ✨"
+                else: 
+                    label += " ⚠️"
                 audio_entries.append({'label': label, 'format': f, 'sort_priority': size_sort_priority})
+        
         video_entries.sort(key=lambda e: (
             -(e['format'].get('height') or 0),      
             1 if "[Combinado]" in e['label'] else 0, 
             0 if "✨" in e['label'] else 1,         
             -(e['format'].get('tbr') or 0)          
         ))
+        
         def custom_audio_sort_key(entry):
             f = entry['format']
             lang_code_raw = f.get('language') or ''
@@ -4155,17 +5240,45 @@ class SingleDownloadTab(ctk.CTkFrame):
             quality = f.get('abr') or f.get('tbr') or 0
             return (lang_priority, -quality)
         audio_entries.sort(key=custom_audio_sort_key)
-        self.video_formats = {e['label']: {k: e['format'].get(k) for k in ['format_id', 'vcodec', 'acodec', 'ext', 'width', 'height']} | {'is_combined': e.get('is_combined', False)} for e in video_entries}
+        
+        # 🔧 MODIFICADO: Guardar también quality_key en video_formats
+        self.video_formats = {
+            e['label']: {
+                k: e['format'].get(k) for k in ['format_id', 'vcodec', 'acodec', 'ext', 'width', 'height']
+            } | {
+                'is_combined': e.get('is_combined', False),
+                'quality_key': e.get('quality_key')
+            } 
+            for e in video_entries
+        }
+        
         self.audio_formats = {e['label']: {k: e['format'].get(k) for k in ['format_id', 'acodec', 'ext']} for e in audio_entries}
-        has_video_found = bool(video_entries)
-        has_audio_found = bool(audio_entries)
-        if not has_video_found and has_audio_found:
+        
+        # 🔧 AHORA SÍ verificar si hay audio (DESPUÉS de llenar los diccionarios)
+        has_any_audio = bool(audio_entries) or any(
+            v.get('is_combined', False) for v in self.video_formats.values()
+        )
+        
+        print(f"DEBUG: audio_entries={len(audio_entries)}, has_any_audio={has_any_audio}")
+        print(f"DEBUG: video_formats con audio combinado: {sum(1 for v in self.video_formats.values() if v.get('is_combined'))}")
+        
+        # 🆕 Deshabilitar modo "Solo Audio" si no hay audio
+        if not has_any_audio:
+            self.mode_selector.set("Video+Audio")
+            self.mode_selector.configure(state="disabled", values=["Video+Audio"])
+            print("⚠️ ADVERTENCIA: No hay pistas de audio disponibles. Modo Solo Audio deshabilitado.")
+        elif not video_entries and audio_entries:
             self.mode_selector.set("Solo Audio")
             self.mode_selector.configure(state="disabled", values=["Solo Audio"])
+            print("✅ Solo hay audio. Modo Solo Audio activado.")
         else:
             current_mode = self.mode_selector.get()
             self.mode_selector.configure(state="normal", values=["Video+Audio", "Solo Audio"])
             self.mode_selector.set(current_mode)
+            print(f"✅ Ambos modos disponibles. Modo actual: {current_mode}")
+        
+        self.on_mode_change(self.mode_selector.get())
+            
         self.on_mode_change(self.mode_selector.get())
         v_opts = list(self.video_formats.keys()) or ["- Sin Formatos de Video -"]
         a_opts = list(self.audio_formats.keys()) or ["- Sin Pistas de Audio -"]
@@ -4214,3 +5327,31 @@ class SingleDownloadTab(ctk.CTkFrame):
         else:
             self._clear_subtitle_menus()
         self.toggle_manual_subtitle_button()
+
+    def _send_url_to_batch(self, url: str):
+        """
+        Toma una URL y la envía a la pestaña de Lotes para análisis
+        y la cambia a esa pestaña.
+        """
+        try:
+            print(f"INFO: Enviando URL a la pestaña de Lotes: {url}")
+            
+            # 1. Obtener la pestaña de lotes
+            batch_tab = self.app.batch_tab
+            if not batch_tab:
+                print("ERROR: No se encontró la pestaña de lotes (batch_tab).")
+                return
+                
+            # 2. Poner la URL en la caja de texto de lotes
+            batch_tab.url_entry.delete(0, 'end')
+            batch_tab.url_entry.insert(0, url)
+            
+            # 3. Iniciar el análisis en lotes
+            # (Usamos 'after' para que la UI se refresque antes de que el análisis empiece)
+            self.app.after(10, batch_tab._on_analyze_click)
+            
+            # 4. Cambiar el foco a la pestaña de lotes
+            self.app.tab_view.set("Descarga por Lotes")
+            
+        except Exception as e:
+            print(f"ERROR: No se pudo enviar la URL a Lotes: {e}")

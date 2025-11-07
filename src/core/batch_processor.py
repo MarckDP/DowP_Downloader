@@ -4,6 +4,10 @@ from uuid import uuid4
 import os
 import yt_dlp
 
+import requests
+from PIL import Image
+from io import BytesIO
+
 from src.core.downloader import download_media
 from src.core.exceptions import UserCancelledError
 
@@ -11,6 +15,30 @@ from src.core.constants import (
     EDITOR_FRIENDLY_CRITERIA, LANGUAGE_ORDER, DEFAULT_PRIORITY,
     VIDEO_EXTENSIONS, AUDIO_EXTENSIONS
 )
+
+
+def get_smart_thumbnail_extension(image_data):
+    """
+    Detecta el formato óptimo para guardar la miniatura:
+    - PNG si tiene transparencia
+    - JPG en otros casos (más compacto)
+    """
+    try:
+        from PIL import Image
+        import io
+        
+        img = Image.open(io.BytesIO(image_data))
+        
+        # Verificar transparencia
+        if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+            return '.png'
+        
+        # Por defecto JPG (más compacto)
+        return '.jpg'
+        
+    except Exception as e:
+        print(f"ERROR detectando formato de miniatura: {e}")
+        return '.jpg'  # Fallback seguro
 
 class Job:
     """
@@ -23,6 +51,7 @@ class Job:
         self.status: str = "PENDING"
         self.progress_message: str = ""
         self.final_filepath: str | None = None
+        self.total_items: int = 0
 
 class QueueManager:
     """
@@ -32,16 +61,19 @@ class QueueManager:
     def __init__(self, main_app, ui_callback):
         self.main_app = main_app
         self.ui_callback = ui_callback
+
+        self.analysis_cache = {}
         
         self.jobs: list[Job] = []
         self.jobs_lock = threading.Lock()
         
         self.run_thread = None
         self.pause_event = threading.Event()
-        self.pause_event.set()  # Iniciar PAUSADO por defecto
+        self.pause_event.set() 
         self.stop_event = threading.Event()
         
-        self.user_paused: bool = False # <-- AÑADIR ESTE FLAG
+        self.user_paused: bool = False
+        self.jobs_completed: int = 0 
         
         print("INFO: QueueManager inicializado.")
 
@@ -89,6 +121,33 @@ class QueueManager:
                     print(f"ERROR: Falló el trabajo {job_to_run.job_id}: {e}")
                     job_to_run.status = "FAILED"
                     self.ui_callback(job_to_run.job_id, "FAILED", f"Error: {str(e)[:100]}")
+                
+                # --- INICIO DE MODIFICACIÓN (Progreso Global) ---
+                # Este bloque se ejecuta SIEMPRE, ya sea que el job haya fallado,
+                # se haya completado, o se haya omitido (dentro de _execute_job)
+                if job_to_run.status not in ("PENDING", "RUNNING"):
+                    with self.jobs_lock:
+                        # Contar todos los trabajos que ya no están en la cola de espera
+                        self.jobs_completed = sum(1 for j in self.jobs if j.status not in ("PENDING", "RUNNING"))
+                        total_jobs = len(self.jobs)
+                        
+                    if total_jobs > 0:
+                        progress_percent = self.jobs_completed / total_jobs
+                        
+                        # Mensaje de progreso
+                        current_title = job_to_run.config.get('title', 'Ítem')
+                        if len(current_title) > 40:
+                            current_title = current_title[:37] + "..."
+                        
+                        progress_message = f"({self.jobs_completed}/{total_jobs}) Completado: {current_title}"
+                        
+                        if job_to_run.status == "FAILED":
+                            progress_message = f"({self.jobs_completed}/{total_jobs}) Falló: {current_title}"
+                        elif job_to_run.status == "SKIPPED":
+                            progress_message = f"({self.jobs_completed}/{total_jobs}) Omitido: {current_title}"
+                        
+                        self.ui_callback("GLOBAL_PROGRESS", "UPDATE", progress_message, progress_percent)
+                # --- FIN DE MODIFICACIÓN ---
             
             else:
                 # No hay trabajos pendientes
@@ -154,6 +213,12 @@ class QueueManager:
         with self.jobs_lock:
             return next((j for j in self.jobs if j.job_id == job_id), None)
 
+    def reset_progress(self):
+        """Resetea el contador de progreso global."""
+        print("INFO: Reseteando el progreso global de la cola.")
+        self.jobs_completed = 0
+        self.ui_callback("GLOBAL_PROGRESS", "RESET", "Esperando para iniciar la cola...", 0.0)
+
     def _execute_job(self, job: Job):
         """
         Ejecuta un único trabajo (descarga).
@@ -218,28 +283,101 @@ class QueueManager:
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     job.analysis_data = ydl.extract_info(url, download=False)
+                
+                # 🆕 CRÍTICO: Normalizar si falta información
+                job.analysis_data = self._normalize_info_dict(job.analysis_data)
                     
             except Exception as e:
                 raise Exception(f"No se pudo analizar el video: {e}")
 
-        if not job.analysis_data:
-            raise Exception("Datos de análisis no encontrados en el Job.")
+        # 🆕 Verificación adicional
+        if not job.analysis_data or 'formats' not in job.analysis_data:
+            raise Exception("No se pudo extraer información de formatos del video")
+        
+        extractor_key = job.analysis_data.get('extractor_key', '').lower()
+
+        # TWITCH: Deshabilitar subtítulos (no funciona bien)
+        if 'twitch' in extractor_key:
+            print("DEBUG: Twitch detectado, deshabilitando subtítulos")
+            job.analysis_data['subtitles'] = {}
+            job.analysis_data['automatic_captions'] = {}
+
+        # TWITTER/X: Usar mejor opción disponible
+        if any(x in extractor_key for x in ['twitter', 'x.com']):
+            print("DEBUG: Twitter/X detectado, usando estrategia especial")
+            # Ya se maneja con fallback
+
+        # SOUNDCLOUD: Audio directo
+        if 'soundcloud' in extractor_key:
+            print("DEBUG: SoundCloud detectado (audio directo)")
+            mode = "Solo Audio"  # Forzar modo audio
+
+        # IMGUR/GIF: Sin audio
+        if any(x in extractor_key for x in ['imgur', 'gfycat', 'giphy']):
+            print("DEBUG: Sitio de GIF/video detectado")
+            job.analysis_data['subtitles'] = {}
+            job.analysis_data['automatic_captions'] = {}
 
         # Encontrar los format_id
         (job_video_formats, job_audio_formats) = self._rebuild_format_maps(job.analysis_data)
+
+        if mode == "Solo Audio" and not job_audio_formats:
+            print(f"DEBUG: Job {job.job_id} omitido (modo 'Solo Audio' pero no hay audio).")
+            job.status = "NO_AUDIO" # Asignar nuevo estado
+            self.ui_callback(job.job_id, "NO_AUDIO", "Este ítem no tiene audio.")
+            return # Salir de la ejecución del job
+
+        # --- INICIO DE LA CORRECCIÓN 1 ---
+        # Lógica de fallback mejorada para encontrar el formato "✨"
         
         if v_label == "-" or v_label not in job_video_formats:
-            v_label = list(job_video_formats.keys())[0] if job_video_formats else "-"
-        
+            v_opts = list(job_video_formats.keys())
+            if v_opts:
+                default_video_selection = v_opts[0] # Fallback por si no hay "✨"
+                for option in v_opts:
+                    if "✨" in option:
+                        default_video_selection = option
+                        break
+                v_label = default_video_selection
+            else:
+                v_label = "-"
+
         if a_label == "-" or a_label not in job_audio_formats:
-            a_label = list(job_audio_formats.keys())[0] if job_audio_formats else "-"
+            a_opts = list(job_audio_formats.keys())
+            if a_opts:
+                default_audio_selection = a_opts[0] # Fallback
+                for option in a_opts:
+                    if "✨" in option:
+                        default_audio_selection = option
+                        break
+                a_label = default_audio_selection
+            else:
+                a_label = "-"
 
         v_format_dict = job_video_formats.get(v_label)
         a_format_dict = job_audio_formats.get(a_label)
 
-        v_id = v_format_dict.get('format_id') if v_format_dict else None
-        a_id = a_format_dict.get('format_id') if a_format_dict else None
+        # 🆕 Prioridad 1: IDs guardados explícitamente
+        v_id = job.config.get('resolved_video_format_id')
+        a_id = job.config.get('resolved_audio_format_id')
+
+        # 🆕 Fallback: Extraer de los formatos si no hay IDs guardados
+        if not v_id:
+            v_id = v_format_dict.get('format_id') if v_format_dict else None
+        if not a_id:
+            a_id = a_format_dict.get('format_id') if a_format_dict else None
+
+        print(f"DEBUG: Descargando con v_id={v_id}, a_id={a_id}")
+
+        # 🆕 Si es combinado multiidioma, usar el ID del idioma seleccionado
         is_combined = v_format_dict.get('is_combined', False) if v_format_dict else False
+        if is_combined and v_format_dict:
+            quality_key = v_format_dict.get('quality_key')
+            batch_tab = self.main_app.batch_tab
+            if quality_key and hasattr(batch_tab, 'combined_audio_map') and batch_tab.combined_audio_map:
+                if a_label in batch_tab.combined_audio_map:
+                    v_id = batch_tab.combined_audio_map[a_label]
+                    print(f"DEBUG: Usando format_id de variante multiidioma: {v_id}")
 
         precise_selector = ""
         if mode == "Video+Audio":
@@ -252,9 +390,19 @@ class QueueManager:
         elif mode == "Solo Audio":
             precise_selector = a_id
         
+        # 🆕 FALLBACK INTELIGENTE: Si no hay selector precisó
         if not precise_selector:
-            precise_selector = "bv+ba/b"
-            self.ui_callback(job.job_id, "RUNNING", "Calidad no especificada, usando mejor...")
+            self.ui_callback(job.job_id, "RUNNING", "Selector no especificado, usando fallback...")
+            
+            # Intentar estrategia 1: best
+            if mode == "Video+Audio":
+                precise_selector = "bv+ba/b"  # best video + best audio
+            elif mode == "Solo Audio":
+                precise_selector = "ba"  # best audio
+            else:
+                precise_selector = "best"  # anything
+            
+            print(f"DEBUG: Fallback selector: {precise_selector}")
 
         # Resolver Conflictos de Archivo
         predicted_ext = self._predict_final_extension(v_format_dict, a_format_dict, mode)
@@ -272,16 +420,31 @@ class QueueManager:
             self.ui_callback(job.job_id, "SKIPPED", "Omitido: El archivo ya existe") # <-- CAMBIADO
             return # Salir de _execute_job
             
+        # 1. Extraer el nombre base (sin extensión) del archivo que resolvimos
+        title_with_conflict_resolution = os.path.splitext(os.path.basename(final_filepath))[0]
+        
+        # 2. Crear un template de salida para que yt-dlp elija la extensión
+        output_template = os.path.join(output_dir, f"{title_with_conflict_resolution}.%(ext)s")
+
         # Preparar Opciones de yt-dlp
         ydl_opts = {
-            'outtmpl': final_filepath,
+            'outtmpl': output_template, # <-- AHORA USAMOS EL TEMPLATE
             'overwrites': True,
-            'noplaylist': True,
             'ffmpeg_location': self.main_app.ffmpeg_processor.ffmpeg_path,
             'format': precise_selector,
             'restrictfilenames': True,
         }
         
+        playlist_index = job.config.get('playlist_index')
+        if playlist_index is not None:
+            # Le dice a yt-dlp que SOLO descargue este ítem
+            ydl_opts['playlist_items'] = str(playlist_index)
+            print(f"DEBUG: Configurando --playlist-items para {playlist_index}")
+        else:
+            # Esto no es de una playlist, así que forzamos 'noplaylist'
+            ydl_opts['noplaylist'] = True
+            print(f"DEBUG: Configurando --noplaylist (video único)")
+
         if speed_limit:
             try: 
                 ydl_opts['ratelimit'] = float(speed_limit) * 1024 * 1024
@@ -309,7 +472,18 @@ class QueueManager:
                     downloaded = d.get('downloaded_bytes', 0)
                     percentage = (downloaded / total) * 100
                     speed = d.get('speed')
-                    speed_str = f"{speed / 1024 / 1024:.1f} MB/s" if speed else "N/A"
+
+                    if speed:
+                        speed_mb = speed / 1024 / 1024
+                        if speed_mb >= 1.0:
+                            speed_str = f"{speed_mb:.1f} MB/s"
+                        else:
+                            speed_kb = speed / 1024
+                            speed_str = f"{speed_kb:.0f} KB/s" # KB/s sin decimales
+                    else:
+                        speed_str = "N/A"
+                    # --- FIN DE MODIFICACIÓN ---
+
                     self.ui_callback(job.job_id, "RUNNING", f"Descargando... {percentage:.1f}% ({speed_str})")
             
             elif d['status'] == 'finished':
@@ -325,15 +499,52 @@ class QueueManager:
             # Limpiar backup si todo salió bien
             if backup_path and os.path.exists(backup_path):
                 os.remove(backup_path)
-
+            
+            thumbnail_path = None # Inicializar
+            
             # Descargar miniatura si está habilitado
             if should_download_thumbnail:
-                self._download_thumbnail_alongside_video(job, final_filepath)
+                # Capturar la ruta devuelta
+                thumbnail_path = self._download_thumbnail_alongside_video(job, final_filepath)
 
             job.status = "COMPLETED"
             job.final_filepath = final_filepath
             self.ui_callback(job.job_id, "COMPLETED", f"Completado: {os.path.basename(final_filepath)}")
 
+            # --- LÓGICA DE IMPORTACIÓN AUTOMÁTICA ---
+            
+            # 1. Verificar si el usuario quiere importar
+            batch_tab = self.main_app.batch_tab
+            # (Usamos tu nuevo texto "Import Pr/Ae" para encontrar el checkbox)
+            if batch_tab and batch_tab.auto_import_checkbox.get():
+                
+                # 2. Verificar si hay una extensión de Adobe conectada
+                active_target = self.main_app.ACTIVE_TARGET_SID_accessor()
+                if active_target:
+                    
+                    # 3. Determinar la papelera (bin) de destino
+                    target_bin_name = None
+                    if hasattr(self, 'subfolder_path') and self.subfolder_path:
+                        # self.subfolder_path es la RUTA COMPLETA (ej: C:/.../DowP List 01)
+                        # Necesitamos solo el nombre final.
+                        try:
+                            target_bin_name = os.path.basename(os.path.normpath(self.subfolder_path))
+                        except Exception:
+                            target_bin_name = None # Fallback
+                    
+                    # 4. Armar el paquete de archivos
+                    file_package = {
+                        "video": job.final_filepath.replace('\\', '/'),
+                        "thumbnail": thumbnail_path.replace('\\', '/') if thumbnail_path else None,
+                        "subtitle": None,
+                        "targetBin": target_bin_name # <-- AÑADIDO
+                    }
+                    
+                    print(f"INFO: [Lote] Enviando paquete a CEP: {file_package}")
+                    
+                    # 5. Enviar el paquete por el socket
+                    self.main_app.socketio.emit('new_file', {'filePackage': file_package}, to=active_target)
+            
         except Exception as e:
             # Si falló, restaurar el backup si existía
             if backup_path and os.path.exists(backup_path):
@@ -377,22 +588,35 @@ class QueueManager:
             image_data = response.content
             
             # Detectar formato inteligente
-            smart_ext = batch_tab.get_smart_thumbnail_extension(image_data)
+            smart_ext = get_smart_thumbnail_extension(image_data) # <-- USAR NUEVA FUNCIÓN
             
             # Nombre del archivo
             title = single_tab.sanitize_filename(job.config.get('title', 'thumbnail'))
-            final_path = os.path.join(thumbnails_dir, f"{title}{smart_ext}")
+            final_path_smart = os.path.join(thumbnails_dir, f"{title}{smart_ext}") # <-- Usar smart_ext
             
             # Resolver conflictos
             conflict_policy = batch_tab.conflict_policy_menu.get()
-            final_path, backup_path = self._resolve_batch_conflict(final_path, conflict_policy)
+            final_path, backup_path = self._resolve_batch_conflict(final_path_smart, conflict_policy) # <-- Usar ruta smart
             
             if final_path is None:
-                raise UserCancelledError("Omitido (archivo ya existe)")
-            
-            # Guardar miniatura
-            with open(final_path, 'wb') as f:
-                f.write(image_data)
+                # Si se omite, no es un error, solo se salta
+                job.status = "SKIPPED"
+                job.final_filepath = final_path_smart
+                self.ui_callback(job.job_id, "SKIPPED", "Omitido: Miniatura ya existe")
+                return # Salir limpiamente
+
+            # Re-codificar imagen con PIL (preservando transparencia)
+            try:
+                pil_image = Image.open(BytesIO(image_data))
+                if smart_ext == '.png':
+                    pil_image.save(final_path, "PNG")
+                else:
+                    pil_image.convert("RGB").save(final_path, "JPEG", quality=95)
+            except Exception as pil_e:
+                print(f"ERROR: Falló el procesamiento de la imagen (PIL): {pil_e}")
+                # Fallback: guardar el archivo original (podría fallar la importación)
+                with open(final_path, 'wb') as f:
+                    f.write(image_data)
             
             # Limpiar backup si existía
             if backup_path and os.path.exists(backup_path):
@@ -401,6 +625,39 @@ class QueueManager:
             job.status = "COMPLETED"
             job.final_filepath = final_path
             self.ui_callback(job.job_id, "COMPLETED", f"Miniatura guardada: {os.path.basename(final_path)}")
+
+            # 1. Verificar si el usuario quiere importar
+            batch_tab = self.main_app.batch_tab
+            if batch_tab and batch_tab.auto_import_checkbox.get():
+                
+                # 2. Verificar si hay una extensión de Adobe conectada
+                active_target = self.main_app.ACTIVE_TARGET_SID_accessor()
+                if active_target:
+                    
+                    # 3. Determinar el nombre del bin (LÓGICA CORREGIDA)
+                    base_bin_name = None
+                    # Comprobar si hay una subcarpeta de lote (ej: "Mi Lote 01")
+                    if hasattr(self, 'subfolder_path') and self.subfolder_path:
+                        base_bin_name = os.path.basename(os.path.normpath(self.subfolder_path))
+
+                    target_bin_name = "Thumbnails" # Nombre por defecto
+                    
+                    # Si había una carpeta de lote, crear un nombre combinado
+                    if base_bin_name:
+                        target_bin_name = f"{base_bin_name} - Thumbnails"
+                    
+                    # 4. Armar el paquete (solo contiene la miniatura)
+                    file_package = {
+                        "video": None, # Importante: video es null
+                        "thumbnail": final_path.replace('\\', '/'), # Ruta de la imagen
+                        "subtitle": None,
+                        "targetBin": target_bin_name # ej: "Thumbnails" o "Mi Lote 01 - Thumbnails"
+                    }
+                    
+                    print(f"INFO: [Lote Miniaturas] Enviando paquete a CEP: {file_package}")
+                    
+                    # 5. Enviar el paquete
+                    self.main_app.socketio.emit('new_file', {'filePackage': file_package}, to=active_target)
             
         except Exception as e:
             # Restaurar backup si falló
@@ -429,33 +686,90 @@ class QueueManager:
             image_data = response.content
             
             # Detectar formato inteligente
-            batch_tab = self.main_app.batch_tab
-            smart_ext = batch_tab.get_smart_thumbnail_extension(image_data)
+            smart_ext = get_smart_thumbnail_extension(image_data) # <-- USAR NUEVA FUNCIÓN
             
-            # Generar nombre basado en el video (mismo nombre, diferente extensión)
+            # Generar nombre basado en el video
             video_dir = os.path.dirname(video_filepath)
             video_name = os.path.splitext(os.path.basename(video_filepath))[0]
-            thumbnail_path = os.path.join(video_dir, f"{video_name}{smart_ext}")
-            
-            # Guardar miniatura
-            with open(thumbnail_path, 'wb') as f:
-                f.write(image_data)
-            
-            print(f"INFO: Miniatura guardada: {thumbnail_path}")
+            thumbnail_path_smart = os.path.join(video_dir, f"{video_name}{smart_ext}") # <-- Usar smart_ext
+
+            # Re-codificar imagen con PIL (preservando transparencia)
+            try:
+                pil_image = Image.open(BytesIO(image_data))
+                if smart_ext == '.png':
+                    pil_image.save(thumbnail_path_smart, "PNG")
+                else:
+                    pil_image.convert("RGB").save(thumbnail_path_smart, "JPEG", quality=95)
+                
+                print(f"INFO: Miniatura (re-codificada) guardada: {thumbnail_path_smart}")
+                return thumbnail_path_smart # Devolvemos la ruta
+            # --- FIN DE CORRECCIÓN ---
+            except Exception as pil_e:
+                print(f"ERROR: Falló el procesamiento de la imagen (PIL): {pil_e}")
+                # Fallback: guardar el archivo original (podría fallar la importación)
+                # Usamos el nombre .jpg original para consistencia
+                with open(thumbnail_path_smart, 'wb') as f:
+                    f.write(image_data)
+                print(f"INFO: Miniatura (raw) guardada: {thumbnail_path_smart}")
+                return thumbnail_path_smart
             
         except Exception as e:
             print(f"ERROR al descargar miniatura para {job.job_id}: {e}")
             # No fallar el job completo si solo falla la miniatura
+            return None
 
     def _rebuild_format_maps(self, info: dict) -> tuple[dict, dict]:
         """
-        Re-crea los mapas de formatos a partir de los datos de análisis.
+        Re-crea los mapas de formatos con soporte para multiidioma.
         """
         formats = info.get('formats', [])
         video_duration = info.get('duration', 0)
         
         job_video_formats = {}
         job_audio_formats = {}
+        combined_variants = {}  # 🆕 Para agrupar variantes multiidioma
+
+        # 🆕 PASADA PREVIA: Agrupar variantes combinadas
+        for f in formats:
+            format_type = self._classify_format(f)
+            
+            if format_type in ['VIDEO', 'VIDEO_ONLY']:
+                vcodec_raw = f.get('vcodec')
+                acodec_raw = f.get('acodec')
+                vcodec = vcodec_raw.split('.')[0] if vcodec_raw else 'none'
+                acodec = acodec_raw.split('.')[0] if acodec_raw else 'none'
+                is_combined = acodec != 'none' and acodec is not None
+                
+                if is_combined:
+                    fps = f.get('fps')
+                    height = f.get('height', 0)
+                    fps_val = int(fps) if fps else 0
+                    ext = f.get('ext', 'N/A')
+                    
+                    tbr = f.get('tbr', 0)
+                    tbr_rounded = round(tbr / 100) * 100 if tbr else 0
+                    
+                    quality_key = f"{height}p{fps_val}_{ext}_{vcodec}_{acodec}_tbr{tbr_rounded}"
+                    
+                    if quality_key not in combined_variants:
+                        combined_variants[quality_key] = []
+                    combined_variants[quality_key].append(f)
+        
+        # 🆕 Filtrar grupos REALMENTE multiidioma (2+ idiomas DIFERENTES)
+        real_multilang_keys = set()
+        for quality_key, variants in combined_variants.items():
+            unique_languages = set()
+            for variant in variants:
+                lang = variant.get('language', '')
+                if lang:
+                    unique_languages.add(lang)
+            
+            if len(unique_languages) >= 2:
+                real_multilang_keys.add(quality_key)
+                print(f"DEBUG: Grupo multiidioma detectado: {quality_key}")
+
+        # 🆕 Tracking de deduplicación
+        combined_keys_seen = set()
 
         for f in formats:
             format_type = self._classify_format(f)
@@ -476,20 +790,48 @@ class QueueManager:
             acodec = acodec_raw.split('.')[0] if acodec_raw else 'none'
             ext = f.get('ext', 'N/A')
             
-            if format_type == 'VIDEO':
+            if format_type in ['VIDEO', 'VIDEO_ONLY']:  # 🆕 Incluir VIDEO_ONLY
                 is_combined = acodec != 'none' and acodec is not None
                 fps = f.get('fps')
                 fps_tag = f"{fps:.0f}" if fps else ""
+                
+                quality_key = None
+                if is_combined:
+                    height = f.get('height', 0)
+                    fps_val = int(fps) if fps else 0
+                    tbr = f.get('tbr', 0)
+                    tbr_rounded = round(tbr / 100) * 100 if tbr else 0
+                    quality_key = f"{height}p{fps_val}_{ext}_{vcodec}_{acodec}_tbr{tbr_rounded}"
+                    
+                    # 🆕 Solo deduplicar si es REALMENTE multiidioma
+                    if quality_key in real_multilang_keys:
+                        if quality_key in combined_keys_seen:
+                            continue
+                        combined_keys_seen.add(quality_key)
+                
                 label_base = f"{f.get('height', 'Video')}p{fps_tag} ({ext}"
                 label_codecs = f", {vcodec}+{acodec}" if is_combined else f", {vcodec}"
+                
+                # 🆕 [Sin Audio] solo si NO hay audio
+                no_audio_tag = ""
+                if format_type == 'VIDEO_ONLY':
+                    no_audio_tag = " [Sin Audio]"
+                
+                # 🆕 [Multiidioma] solo si es REALMENTE multiidioma
+                audio_lang_tag = ""
+                if is_combined and quality_key:
+                    if quality_key in real_multilang_keys:
+                        audio_lang_tag = " [Multiidioma]"
+                
                 label_tag = " [Combinado]" if is_combined else ""
                 note = f.get('format_note') or ''
-                note_tag = ""  
+                note_tag = ""
                 if any(k in note.lower() for k in ['hdr', 'premium', 'dv', 'hlg', 'storyboard']):
                     note_tag = f" [{note}]"
                 protocol = f.get('protocol', '')
                 protocol_tag = " [Streaming]" if 'm3u8' in protocol else ""
-                label = f"{label_base}{label_codecs}){label_tag}{note_tag}{protocol_tag} - {size_mb_str}"
+                
+                label = f"{label_base}{label_codecs}){label_tag}{audio_lang_tag}{no_audio_tag}{note_tag}{protocol_tag} - {size_mb_str}"
 
                 tags = []
                 compatibility_issues, _ = self._get_format_compatibility_issues(f)
@@ -500,7 +842,12 @@ class QueueManager:
                 if tags: 
                     label += f" {' '.join(tags)}"
                 
-                job_video_formats[label] = {**f, 'is_combined': is_combined}
+                # 🆕 Guardar también quality_key y is_combined
+                job_video_formats[label] = {
+                    **f, 
+                    'is_combined': is_combined,
+                    'quality_key': quality_key
+                }
 
             elif format_type == 'AUDIO':
                 abr = f.get('abr') or f.get('tbr')
@@ -508,7 +855,10 @@ class QueueManager:
                 lang_name = "Idioma Desconocido"
                 if lang_code:
                     norm_code = lang_code.replace('_', '-').lower()
-                    lang_name = self.main_app.LANG_CODE_MAP.get(norm_code, self.main_app.LANG_CODE_MAP.get(norm_code.split('-')[0], lang_code))
+                    lang_name = self.main_app.LANG_CODE_MAP.get(
+                        norm_code, 
+                        self.main_app.LANG_CODE_MAP.get(norm_code.split('-')[0], lang_code)
+                    )
                 
                 lang_prefix = f"{lang_name} - " if lang_code else ""
                 note = f.get('format_note') or ''
@@ -523,7 +873,55 @@ class QueueManager:
                     label += " ⚠️"
                 
                 job_audio_formats[label] = f
+        
+        # 1. Convertir los dicts a listas de entradas (como en single_tab)
+        video_entries = []
+        for label, data in job_video_formats.items():
+            video_entries.append({
+                'label': label,
+                'format': data, # El 'format' aquí es el dict de formato completo
+                'is_combined': data.get('is_combined', False),
+                'quality_key': data.get('quality_key')
+            })
 
+        audio_entries = []
+        for label, data in job_audio_formats.items():
+            audio_entries.append({
+                'label': label,
+                'format': data
+            })
+
+        # 2. Copiar la LÓGICA DE ORDENAMIENTO EXACTA de single_download_tab.py
+        
+        # Ordenar Video
+        video_entries.sort(key=lambda e: (
+            -(e['format'].get('height') or 0),      
+            1 if "[Combinado]" in e['label'] else 0, 
+            0 if "✨" in e['label'] else 1,         
+            -(e['format'].get('tbr') or 0)          
+        ))
+        
+        # Ordenar Audio
+        def custom_audio_sort_key(entry):
+            f = entry['format']
+            lang_code_raw = f.get('language') or ''
+            norm_code = lang_code_raw.replace('_', '-')
+            # Usar los constantes importados
+            lang_priority = self.main_app.LANGUAGE_ORDER.get(
+                norm_code, 
+                self.main_app.LANGUAGE_ORDER.get(norm_code.split('-')[0], self.main_app.DEFAULT_PRIORITY)
+            )
+            quality = f.get('abr') or f.get('tbr') or 0
+            return (lang_priority, -quality)
+            
+        audio_entries.sort(key=custom_audio_sort_key)
+
+        # 3. Reconstruir los diccionarios (ahora ordenados)
+        # Se usa dict() para crear un nuevo diccionario ordenado
+        job_video_formats = {e['label']: e['format'] for e in video_entries}
+        job_audio_formats = {e['label']: e['format'] for e in audio_entries}
+
+        
         return job_video_formats, job_audio_formats
 
     def _resolve_batch_conflict(self, desired_filepath, policy):
@@ -588,24 +986,119 @@ class QueueManager:
 
     def _classify_format(self, f):
         """
-        Clasifica un formato de yt-dlp.
+        Clasifica un formato (v3.2 - Manejo de codecs 'unknown')
         """
-        if f.get('height') or f.get('width'): 
-            return 'VIDEO'
+        ext = f.get('ext', '')
+        vcodec = f.get('vcodec', '')
+        acodec = f.get('acodec', '')
         format_id = (f.get('format_id') or '').lower()
         format_note = (f.get('format_note') or '').lower()
-        if 'audio' in format_id or 'audio' in format_note: 
-            return 'AUDIO'
-        vcodec = f.get('vcodec')
-        acodec = f.get('acodec')
-        if (vcodec == 'none' or not vcodec) and (acodec and acodec != 'none'): 
-            return 'AUDIO'
-        if f.get('ext') in AUDIO_EXTENSIONS: 
-            return 'AUDIO'
-        if f.get('ext') in VIDEO_EXTENSIONS: 
+        protocol = f.get('protocol', '')
+        
+        # 🆕 REGLA -1: Formato sintético
+        if 'audio directo' in format_note or 'livestream' in format_note:
+            if 'audio' in format_note:
+                return 'AUDIO'
             return 'VIDEO'
-        if vcodec == 'none': 
+        
+        # 🆕 REGLA 0: Casos especiales de vcodec literal
+        vcodec_special_cases = {
+            'audio only': 'AUDIO',
+            'images': 'VIDEO',
+            'slideshow': 'VIDEO',
+        }
+        
+        if vcodec in vcodec_special_cases:
+            return vcodec_special_cases[vcodec]
+        
+        # 📋 REGLA 1: GIF explícito
+        if ext == 'gif' or vcodec == 'gif':
+            return 'VIDEO'
+        
+        # 📋 REGLA 2: Tiene dimensiones → VIDEO (con o sin audio)
+        if f.get('height') or f.get('width'):
+            # 🆕 CRÍTICO: Si ambos codecs son 'unknown' o faltan → ASUMIR COMBINADO
+            vcodec_is_unknown = not vcodec or vcodec in ['unknown', 'N/A', '']
+            acodec_is_unknown = not acodec or acodec in ['unknown', 'N/A', '']
+            
+            if vcodec_is_unknown and acodec_is_unknown:
+                print(f"DEBUG: Formato {f.get('format_id')} con codecs desconocidos → asumiendo VIDEO combinado")
+                return 'VIDEO'
+            
+            if acodec in ['none']:
+                return 'VIDEO_ONLY'
+            
+            return 'VIDEO'
+        
+        # 🆕 REGLA 2.5: Livestreams
+        if f.get('is_live') or 'live' in format_id:
+            return 'VIDEO'
+        
+        # 📋 REGLA 3: Resolución en format_note
+        resolution_patterns = ['144p', '240p', '360p', '480p', '720p', '1080p', '1440p', '2160p', '4320p']
+        if any(res in format_note for res in resolution_patterns):
+            if acodec in ['none']:
+                return 'VIDEO_ONLY'
+            return 'VIDEO'
+        
+        # 📋 REGLA 4: "audio" explícito en IDs
+        if 'audio' in format_id or 'audio' in format_note:
             return 'AUDIO'
+        
+        # 🆕 REGLA 4.5: "video" explícito en IDs
+        if 'video' in format_id or 'video' in format_note:
+            if f.get('height') or (vcodec == 'unknown' and acodec == 'unknown'):
+                return 'VIDEO'
+            return 'VIDEO_ONLY' if acodec in ['none'] else 'VIDEO'
+        
+        # 📋 REGLA 5: Extensión tiene MÁXIMA PRIORIDAD
+        if ext in self.main_app.AUDIO_EXTENSIONS:
+            return 'AUDIO'
+        
+        # 🆕 REGLA 6: Audio sin video (codec EXPLÍCITAMENTE 'none')
+        if vcodec == 'none' and acodec and acodec not in ['none', '', 'N/A', 'unknown']:
+            return 'AUDIO'
+        
+        # 🆕 REGLA 7: Video sin audio (codec EXPLÍCITAMENTE 'none')
+        if acodec == 'none' and vcodec and vcodec not in ['none', '', 'N/A', 'unknown']:
+            return 'VIDEO_ONLY'
+        
+        # 📋 REGLA 8: Extensión de video + codecs válidos o desconocidos
+        if ext in self.main_app.VIDEO_EXTENSIONS:
+            if vcodec in ['unknown', ''] and acodec in ['unknown', '']:
+                return 'VIDEO'
+            return 'VIDEO'
+        
+        # 📋 REGLA 9: Ambos codecs explícitamente válidos
+        valid_vcodecs = ['h264', 'h265', 'vp8', 'vp9', 'av1', 'hevc', 'mpeg4', 'xvid', 'theora']
+        valid_acodecs = ['aac', 'mp3', 'opus', 'vorbis', 'flac', 'ac3', 'eac3', 'pcm']
+        
+        vcodec_lower = (vcodec or '').lower()
+        acodec_lower = (acodec or '').lower()
+        
+        if vcodec_lower in valid_vcodecs:
+            if acodec_lower in valid_acodecs:
+                return 'VIDEO'
+            else:
+                return 'VIDEO_ONLY'
+        
+        # 📋 REGLA 10: Protocolo m3u8/dash
+        if 'm3u8' in protocol or 'dash' in protocol:
+            return 'VIDEO'
+        
+        # 🆕 REGLA 11: Casos de formatos sin codecs claros pero con metadata
+        if f.get('tbr') and not f.get('abr'):
+            return 'VIDEO'
+        elif f.get('abr') and not f.get('vbr'):
+            return 'AUDIO'
+        
+        # 🆕 REGLA 12: Fallback para casos ambiguos con extensión de video
+        if ext in self.main_app.VIDEO_EXTENSIONS:
+            print(f"⚠️ ADVERTENCIA: Formato {f.get('format_id')} ambiguo → asumiendo VIDEO combinado por extensión")
+            return 'VIDEO'
+        
+        # 📋 REGLA 13: Si llegamos aquí → UNKNOWN
+        print(f"⚠️ ADVERTENCIA: Formato sin clasificación clara: {f.get('format_id')} (vcodec={vcodec}, acodec={acodec}, ext={ext})")
         return 'UNKNOWN'
 
     def _get_format_compatibility_issues(self, format_dict):
@@ -623,3 +1116,57 @@ class QueueManager:
         if vcodec != 'none' and ext not in EDITOR_FRIENDLY_CRITERIA["compatible_exts"]:
             issues.append(f"contenedor (.{ext})")
         return issues, []
+    
+    def _normalize_info_dict(self, info):
+        """
+        Normaliza el diccionario de info para casos donde yt-dlp no devuelve 'formats'.
+        Maneja contenido de audio directo.
+        """
+        if not info:
+            return info
+        
+        formats = info.get('formats', [])
+        
+        if formats:
+            return info
+        
+        # Detectar contenido de audio directo
+        url = info.get('url')
+        ext = info.get('ext')
+        vcodec = info.get('vcodec', 'none')
+        acodec = info.get('acodec')
+        
+        is_audio_content = False
+        
+        if url and ext and (vcodec == 'none' or not vcodec) and acodec and acodec != 'none':
+            is_audio_content = True
+        elif ext in self.main_app.AUDIO_EXTENSIONS:
+            is_audio_content = True
+            if not acodec or acodec == 'none':
+                acodec = {'mp3': 'mp3', 'opus': 'opus', 'aac': 'aac', 'm4a': 'aac'}.get(ext, ext)
+        elif info.get('extractor_key', '').lower() in ['applepodcasts', 'soundcloud', 'audioboom', 'spreaker']:
+            is_audio_content = True
+            if not acodec:
+                acodec = 'mp3'
+        
+        if is_audio_content:
+            print(f"DEBUG: 🎵 Contenido de audio directo detectado (ext={ext})")
+            
+            synthetic_format = {
+                'format_id': '0',
+                'url': url or info.get('manifest_url') or '',
+                'ext': ext or 'mp3',
+                'vcodec': 'none',
+                'acodec': acodec or 'unknown',
+                'abr': info.get('abr'),
+                'tbr': info.get('tbr'),
+                'filesize': info.get('filesize'),
+                'filesize_approx': info.get('filesize_approx'),
+                'protocol': info.get('protocol', 'https'),
+                'format_note': 'Audio directo',
+            }
+            
+            info['formats'] = [synthetic_format]
+            print(f"DEBUG: ✅ Formato sintético creado")
+        
+        return info

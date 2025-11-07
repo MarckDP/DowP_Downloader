@@ -7,7 +7,7 @@ import re
 import sys
 import time
 from .exceptions import UserCancelledError
-from main import BIN_DIR
+from main import FFMPEG_BIN_DIR
 
 CODEC_PROFILES = {
     "Video": {
@@ -285,7 +285,7 @@ CODEC_PROFILES = {
 class FFmpegProcessor:
     def __init__(self):
         ffmpeg_exe_name = "ffmpeg.exe" if os.name == 'nt' else "ffmpeg"
-        self.ffmpeg_path = os.path.join(BIN_DIR, ffmpeg_exe_name)
+        self.ffmpeg_path = os.path.join(FFMPEG_BIN_DIR, ffmpeg_exe_name)
 
         self.gpu_vendor = None
         self.is_detection_complete = False
@@ -602,55 +602,109 @@ class FFmpegProcessor:
             print(f"ERROR: No se pudo extraer el fotograma: {e}")
             return None
 
-def clean_and_convert_vtt_to_srt(srt_path):
+def clean_and_convert_vtt_to_srt(input_path):
     """
-    Lee un archivo de subtítulos (idealmente .srt), elimina las etiquetas de
-    estilo karaoke (comunes en VTT) y se asegura de que tenga un formato SRT limpio.
-    Sobrescribe el archivo si se realizan cambios.
+    Convierte un archivo VTT a SRT limpio, o limpia un SRT existente.
+    Elimina etiquetas de formato, marcas de tiempo duplicadas y texto de karaoke.
     """
+    import re
+    
+    output_path = input_path
+    is_vtt = input_path.lower().endswith('.vtt')
+    
+    # Si es VTT, cambiar la extensión a SRT
+    if is_vtt:
+        output_path = os.path.splitext(input_path)[0] + '.srt'
+    
     try:
-        if not srt_path.lower().endswith('.srt'):
-            print(f"DEBUG: Se omitió la limpieza de {os.path.basename(srt_path)} porque no es un archivo SRT.")
-            return srt_path
-        with open(srt_path, 'r', encoding='utf-8') as f:
+        with open(input_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        if '<c>' not in content and '<v' not in content and 'X-word-ms' not in content and 'WEBVTT' not in content:
-            print(f"DEBUG: El archivo '{os.path.basename(srt_path)}' ya es SRT estándar. No se requiere limpieza.")
-            return srt_path
-        print(f"DEBUG: Detectado formato no estándar en '{srt_path}'. Limpiando a SRT puro...")
-        lines = content.splitlines()
-        srt_content = []
-        cue_index = 1
-        current_cue_text = []
+        
+        lines = content.split('\n')
+        cleaned_lines = []
+        counter = 1
+        skip_next = False
+        
         for i, line in enumerate(lines):
+            # Saltar el encabezado WEBVTT
+            if line.strip().startswith('WEBVTT') or line.strip().startswith('Kind:') or line.strip().startswith('Language:'):
+                continue
+            
+            # Saltar líneas de estilo
+            if line.strip().startswith('STYLE') or '::cue' in line:
+                skip_next = True
+                continue
+            
+            if skip_next:
+                if line.strip() == '':
+                    skip_next = False
+                continue
+            
+            # 🔧 CRÍTICO: Limpiar texto de karaoke y etiquetas HTML
+            if line.strip() and '-->' not in line and not line.strip().isdigit():
+                # Eliminar etiquetas de formato VTT como <c>, <v>, etc.
+                cleaned = re.sub(r'<[^>]+>', '', line)
+                # Eliminar marcas de tiempo embebidas (karaoke)
+                cleaned = re.sub(r'<\d{2}:\d{2}:\d{2}\.\d{3}>', '', cleaned)
+                # Eliminar etiquetas de color y estilo
+                cleaned = re.sub(r'\{[^}]+\}', '', cleaned)
+                cleaned = cleaned.strip()
+                
+                if cleaned:
+                    cleaned_lines.append(cleaned)
+                continue
+            
+            # Mantener timestamps y números de secuencia
+            if '-->' in line or line.strip().isdigit() or line.strip() == '':
+                cleaned_lines.append(line.strip())
+        
+        # Reconstruir el archivo SRT
+        srt_content = []
+        i = 0
+        while i < len(cleaned_lines):
+            line = cleaned_lines[i]
+            
+            # Si es un timestamp
             if '-->' in line:
-                if current_cue_text:
-                    srt_content.append("\n".join(current_cue_text))
-                    srt_content.append("")
-                    current_cue_text = []
-                srt_content.append(str(cue_index))
-                timestamps = line.split('-->')
-                start_time = timestamps[0].strip().replace('.', ',')
-                end_time = timestamps[1].strip().split(' ')[0].replace('.', ',')
-                srt_content.append(f"{start_time} --> {end_time}")
-                cue_index += 1
-            elif line.strip() and '-->' not in line and 'WEBVTT' not in line:
-                clean_line = re.sub(r'<[^>]+>', '', line).strip()
-                if clean_line:
-                    current_cue_text.append(clean_line)
-            elif not line.strip() and current_cue_text:
-                srt_content.append("\n".join(current_cue_text))
-                srt_content.append("")
-                current_cue_text = []
-        if current_cue_text:
-            srt_content.append("\n".join(current_cue_text))
-            srt_content.append("")
-        if not srt_content:
-            return srt_path 
-        with open(srt_path, 'w', encoding='utf-8') as f:
+                # Agregar número de secuencia
+                srt_content.append(str(counter))
+                # Convertir formato de tiempo VTT a SRT si es necesario
+                timestamp = line.replace('.', ',')  # VTT usa punto, SRT usa coma
+                srt_content.append(timestamp)
+                
+                # Recoger todas las líneas de texto hasta la siguiente línea vacía
+                i += 1
+                text_lines = []
+                while i < len(cleaned_lines) and cleaned_lines[i].strip() != '':
+                    if '-->' not in cleaned_lines[i]:
+                        text_lines.append(cleaned_lines[i])
+                    else:
+                        i -= 1
+                        break
+                    i += 1
+                
+                if text_lines:
+                    srt_content.extend(text_lines)
+                
+                srt_content.append('')  # Línea vacía entre subtítulos
+                counter += 1
+            
+            i += 1
+        
+        # Guardar el archivo limpio
+        with open(output_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(srt_content))
-        print(f"DEBUG: Subtítulo limpiado exitosamente en '{srt_path}'")
-        return srt_path
+        
+        # Si era VTT, eliminar el archivo original
+        if is_vtt and output_path != input_path:
+            try:
+                os.remove(input_path)
+            except:
+                pass
+        
+        print(f"DEBUG: Subtítulo limpiado y guardado en: {output_path}")
+        return output_path
+        
     except Exception as e:
-        print(f"ERROR: Falló la limpieza de subtítulo en '{srt_path}': {e}")
-        return srt_path 
+        print(f"ERROR al limpiar subtítulo: {e}")
+        return input_path
