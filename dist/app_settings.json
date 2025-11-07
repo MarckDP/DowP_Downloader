@@ -1,0 +1,19 @@
+{
+    "default_download_path": "C:\\Users\\Marco\\Downloads",
+    "ffmpeg_update_snooze_until": null,
+    "custom_presets": [],
+    "cookies_path": "",
+    "cookies_mode": "No usar",
+    "selected_browser": "firefox",
+    "browser_profile": "",
+    "apply_quick_preset_enabled": false,
+    "keep_original_quick_enabled": true,
+    "quick_preset_saved": "Archivo - H.265 Normal",
+    "recode_settings": {
+        "keep_original": true,
+        "recode_video_enabled": false,
+        "recode_audio_enabled": false
+    },
+    "batch_playlist_analysis": true,
+    "batch_auto_import": true
+}
