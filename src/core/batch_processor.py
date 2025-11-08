@@ -3,6 +3,7 @@ import time
 from uuid import uuid4
 import os
 import yt_dlp
+import shutil
 
 import requests
 from PIL import Image
@@ -44,7 +45,7 @@ class Job:
     """
     Contiene la información y el estado de un único trabajo en la cola.
     """
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, job_type: str = "DOWNLOAD"):
         self.job_id: str = str(uuid4()) 
         self.config: dict = config 
         self.analysis_data: dict | None = None
@@ -52,6 +53,7 @@ class Job:
         self.progress_message: str = ""
         self.final_filepath: str | None = None
         self.total_items: int = 0
+        self.job_type: str = job_type
 
 class QueueManager:
     """
@@ -111,8 +113,16 @@ class QueueManager:
             
             if job_to_run:
                 try:
-                    self._execute_job(job_to_run)
-                    
+                    # --- INICIO DE MODIFICACIÓN: Lógica de enrutamiento ---
+                    if job_to_run.job_type == "DOWNLOAD":
+                        self._execute_download_job(job_to_run)
+                    elif job_to_run.job_type == "LOCAL_RECODE":
+                        # (Crearemos esta función en el Paso 4)
+                        self._execute_recode_job(job_to_run) 
+                    else:
+                        raise Exception(f"Tipo de trabajo desconocido: {job_to_run.job_type}")
+                    # --- FIN DE MODIFICACIÓN ---
+
                 except UserCancelledError as e:
                     job_to_run.status = "PENDING"
                     self.ui_callback(job_to_run.job_id, "PENDING", f"Pausado: {e}")
@@ -219,9 +229,9 @@ class QueueManager:
         self.jobs_completed = 0
         self.ui_callback("GLOBAL_PROGRESS", "RESET", "Esperando para iniciar la cola...", 0.0)
 
-    def _execute_job(self, job: Job):
+    def _execute_download_job(self, job: Job):
         """
-        Ejecuta un único trabajo (descarga).
+        Ejecuta un único trabajo de DESCARGA (desde URL).
         """
         self.ui_callback(job.job_id, "RUNNING", "Iniciando...")
         batch_tab = self.main_app.batch_tab
@@ -507,6 +517,57 @@ class QueueManager:
                 # Capturar la ruta devuelta
                 thumbnail_path = self._download_thumbnail_alongside_video(job, final_filepath)
 
+            # --- INICIO DE LA LÓGICA DE RECODIFICACIÓN ---
+            
+            if job.config.get('recode_enabled', False):
+                self.ui_callback(job.job_id, "RUNNING", "Recodificación en cola...")
+                
+                preset_name = job.config.get('recode_preset_name')
+                if not preset_name or preset_name.startswith('-'):
+                    raise Exception("Preset de recodificación no válido seleccionado.")
+                
+                preset_params = self._find_preset_params(preset_name)
+                if not preset_params:
+                    raise Exception(f"No se encontraron parámetros para el preset '{preset_name}'.")
+                
+                # Obtener el directorio y nombre base del archivo descargado
+                output_dir = os.path.dirname(final_filepath)
+                base_name = os.path.splitext(os.path.basename(final_filepath))[0]
+                recoded_base_name = f"{base_name}_recoded"
+
+                # Ejecutar la recodificación
+                recoded_filepath = self._execute_recode_master(
+                    job=job,
+                    input_file=final_filepath,
+                    output_dir=output_dir,
+                    base_filename=recoded_base_name,
+                    recode_options=preset_params
+                )
+                
+                # Manejar el archivo original
+                if not job.config.get('recode_keep_original', True):
+                    try:
+                        os.remove(final_filepath)
+                        print(f"DEBUG: Archivo original (sin recodificar) eliminado: {final_filepath}")
+                        
+                        # Si se borró el original, renombrar la miniatura si existe
+                        if thumbnail_path and os.path.exists(thumbnail_path):
+                            thumb_dir, thumb_name = os.path.split(thumbnail_path)
+                            if thumb_name.startswith(base_name):
+                                new_thumb_name = thumb_name.replace(base_name, recoded_base_name, 1)
+                                new_thumbnail_path = os.path.join(thumb_dir, new_thumb_name)
+                                os.rename(thumbnail_path, new_thumbnail_path)
+                                thumbnail_path = new_thumbnail_path
+                                print(f"DEBUG: Miniatura renombrada a: {new_thumbnail_path}")
+
+                    except OSError as e:
+                        print(f"ADVERTENCIA: No se pudo eliminar el archivo original: {e}")
+                
+                # El archivo final ahora es el recodificado
+                final_filepath = recoded_filepath
+            
+            # --- FIN DE LA LÓGICA DE RECODIFICACIÓN ---
+
             job.status = "COMPLETED"
             job.final_filepath = final_filepath
             self.ui_callback(job.job_id, "COMPLETED", f"Completado: {os.path.basename(final_filepath)}")
@@ -552,6 +613,124 @@ class QueueManager:
                     os.remove(final_filepath)
                 os.rename(backup_path, final_filepath)
             raise e
+        
+    def _execute_recode_job(self, job: Job):
+        """
+        Ejecuta un único trabajo de RECODIFICACIÓN LOCAL (desde archivo).
+        """
+        # (Necesitaremos 'os' y 'shutil' para mover la miniatura)
+        import os
+        import shutil
+
+        final_filepath = None
+        try:
+            self.ui_callback(job.job_id, "RUNNING", "Iniciando recodificación local...")
+            
+            # 1. Verificar si la recodificación está activada
+            if not job.config.get('recode_enabled', False):
+                job.status = "SKIPPED"
+                self.ui_callback(job.job_id, "SKIPPED", "Omitido: La recodificación no está activada.")
+                return
+
+            # 2. Validar el Preset
+            preset_name = job.config.get('recode_preset_name')
+            if not preset_name or preset_name.startswith('-'):
+                raise Exception("Preset de recodificación no válido seleccionado.")
+                
+            preset_params = self._find_preset_params(preset_name)
+            if not preset_params:
+                raise Exception(f"No se encontraron parámetros para el preset '{preset_name}'.")
+
+            # 3. Validar el archivo de entrada
+            input_file = job.config.get('local_file_path')
+            if not input_file or not os.path.exists(input_file):
+                raise Exception(f"No se encontró el archivo local: {input_file}")
+
+            # 4. Determinar la carpeta de salida
+            batch_tab = self.main_app.batch_tab
+            output_dir = batch_tab.output_path_entry.get()
+            if hasattr(self, 'subfolder_path') and self.subfolder_path:
+                output_dir = self.subfolder_path
+            
+            if not output_dir:
+                raise Exception("Carpeta de salida no especificada.")
+
+            # 5. Determinar el nombre del archivo de salida
+            base_name = os.path.splitext(os.path.basename(input_file))[0]
+            recoded_base_name = f"{base_name}_recoded"
+
+            # 6. Ejecutar la recodificación (usando la misma función maestra)
+            recoded_filepath = self._execute_recode_master(
+                job=job,
+                input_file=input_file,
+                output_dir=output_dir,
+                base_filename=recoded_base_name,
+                recode_options=preset_params
+            )
+            
+            # 7. Manejar el archivo original (si no se quiere conservar)
+            if not job.config.get('recode_keep_original', True):
+                try:
+                    os.remove(input_file)
+                    print(f"DEBUG: Archivo local original eliminado: {input_file}")
+                except OSError as e:
+                    print(f"ADVERTENCIA: No se pudo eliminar el archivo local original: {e}")
+            
+            final_filepath = recoded_filepath
+            
+            # 8. Marcar como completado
+            job.status = "COMPLETED"
+            job.final_filepath = final_filepath
+            self.ui_callback(job.job_id, "COMPLETED", f"Recodificado: {os.path.basename(final_filepath)}")
+
+            # 9. Lógica de Importación Automática (adaptada para locales)
+            thumbnail_path = None
+            if batch_tab and batch_tab.auto_import_checkbox.get():
+                active_target = self.main_app.ACTIVE_TARGET_SID_accessor()
+                if active_target:
+                    
+                    # Generar una miniatura sobre la marcha para la importación
+                    try:
+                        print(f"DEBUG: Generando miniatura para importación automática...")
+                        duration = self._get_job_media_duration(job, final_filepath)
+                        temp_thumb_path = self.main_app.ffmpeg_processor.get_frame_from_video(final_filepath, duration)
+                        
+                        if temp_thumb_path and os.path.exists(temp_thumb_path):
+                            # Mover la miniatura junto al video recodificado
+                            thumb_dir = os.path.dirname(final_filepath)
+                            thumb_name = os.path.splitext(os.path.basename(final_filepath))[0] + ".jpg"
+                            thumbnail_path = os.path.join(thumb_dir, thumb_name)
+                            
+                            if os.path.exists(thumbnail_path):
+                                os.remove(thumbnail_path) # Sobrescribir si ya existe
+                                
+                            shutil.move(temp_thumb_path, thumbnail_path)
+                            print(f"DEBUG: Miniatura generada para importación: {thumbnail_path}")
+                    except Exception as e:
+                        print(f"ADVERTENCIA: No se pudo generar la miniatura para importar: {e}")
+
+                    # Determinar el 'bin' de destino
+                    target_bin_name = None
+                    if hasattr(self, 'subfolder_path') and self.subfolder_path:
+                        target_bin_name = os.path.basename(os.path.normpath(self.subfolder_path))
+                    
+                    # Armar el paquete de archivos
+                    file_package = {
+                        "video": final_filepath.replace('\\', '/'),
+                        "thumbnail": thumbnail_path.replace('\\', '/') if thumbnail_path else None,
+                        "subtitle": None,
+                        "targetBin": target_bin_name
+                    }
+                    
+                    print(f"INFO: [Lote Local] Enviando paquete a CEP: {file_package}")
+                    
+                    # Enviar el paquete
+                    self.main_app.socketio.emit('new_file', {'filePackage': file_package}, to=active_target)
+
+        except Exception as e:
+            # Si falla, la excepción será capturada por _worker_thread
+            print(f"ERROR: Falló el trabajo de recodificación local {job.job_id}: {e}")
+            raise e # Re-lanzar para que el worker lo marque como FAILED
         
     def _download_thumbnail_only(self, job: Job):
         """
@@ -1170,3 +1349,268 @@ class QueueManager:
             print(f"DEBUG: ✅ Formato sintético creado")
         
         return info
+    
+    def _find_preset_params(self, preset_name):
+        """
+        Busca un preset por su nombre (personalizados y luego integrados).
+        Adaptado de batch_download_tab.py, busca en single_tab.
+        """
+        # Buscar en personalizados
+        for preset in getattr(self.main_app.single_tab, 'custom_presets', []):
+            if preset.get("name") == preset_name:
+                return preset.get("data", {})
+        
+        # Buscar en integrados
+        if preset_name in self.main_app.single_tab.built_in_presets:  
+            return self.main_app.single_tab.built_in_presets[preset_name]
+            
+        return {}
+
+    def _get_job_media_duration(self, job: Job, input_file: str) -> float:
+        """
+        Obtiene la duración del medio, priorizando los datos del análisis
+        y usando ffprobe como fallback.
+        """
+        # 1. Prioridad: Datos del análisis (más rápido)
+        if job.analysis_data:
+            duration = job.analysis_data.get('duration')
+            if duration:
+                return float(duration)
+        
+        # 2. Fallback: Usar ffprobe (más lento pero preciso)
+        try:
+            media_info = self.main_app.ffmpeg_processor.get_local_media_info(input_file)
+            if media_info:
+                return float(media_info['format']['duration'])
+        except Exception as e:
+            print(f"ADVERTENCIA: No se pudo obtener duración con ffprobe: {e}")
+            
+        return 0.0 # No se pudo determinar
+
+    def _execute_recode_master(self, job: Job, input_file, output_dir, base_filename, recode_options):
+        """
+        Función maestra que maneja la lógica de recodificación para un job.
+        Adaptada de single_download_tab.py.
+        """
+        final_recoded_path = None
+        backup_file_path = None
+        
+        try:
+            self.ui_callback(job.job_id, "RUNNING", "Preparando recodificación...")
+            
+            final_container = recode_options["recode_container"]
+            if not recode_options['recode_video_enabled'] and not recode_options['recode_audio_enabled']:
+                _, original_extension = os.path.splitext(input_file)
+                final_container = original_extension
+
+            final_filename_with_ext = f"{base_filename}{final_container}"
+            desired_recoded_path = os.path.join(output_dir, final_filename_with_ext)
+            
+            # Resolver conflictos de archivo
+            final_recoded_path, backup_file_path = self._resolve_batch_conflict(desired_recoded_path, "Sobrescribir")
+
+            temp_output_path = final_recoded_path + ".temp"
+
+            final_ffmpeg_params = []
+            pre_params = []
+
+            # --- INICIO DE CORRECCIÓN (Muxer vs Contenedor) ---
+            container_ext = recode_options['recode_container']
+            
+            # Buscar un muxer específico en el mapa (ej: .m4a -> mp4)
+            # Usamos self.main_app.FORMAT_MUXER_MAP
+            muxer_name = self.main_app.FORMAT_MUXER_MAP.get(container_ext, container_ext.lstrip('.'))
+            
+            final_ffmpeg_params.extend(['-f', muxer_name])
+            print(f"DEBUG: [Muxer] Contenedor: {container_ext}, Muxer: {muxer_name}")
+            # --- FIN DE CORRECCIÓN ---
+
+            # ====== PROCESAMIENTO DE VIDEO ======
+            if recode_options['mode_compatibility'] != "Solo Audio":
+                if recode_options["recode_video_enabled"]:
+                    final_ffmpeg_params.extend(["-metadata:s:v:0", "rotate=0"])
+                    proc = recode_options["recode_proc"]
+                    codec_db = self.main_app.ffmpeg_processor.available_encoders[proc]["Video"]
+                    codec_data = codec_db.get(recode_options["recode_codec_name"])
+                    ffmpeg_codec_name = next((k for k in codec_data if k != 'container'), None)
+                    profile_params_list = codec_data[ffmpeg_codec_name].get(recode_options["recode_profile_name"])
+
+                    if profile_params_list == "CUSTOM_GIF":
+                        try:
+                            fps = int(recode_options["custom_gif_fps"] or "15")
+                            width = int(recode_options["custom_gif_width"] or "480")
+                            filter_string = f"[0:v] fps={fps},scale={width}:-1,split [a][b];[a] palettegen [p];[b][p] paletteuse"
+                            final_ffmpeg_params.extend(['-filter_complex', filter_string])
+                        except (ValueError, TypeError):
+                            raise Exception("Valores de FPS/Ancho para GIF no son válidos.")
+
+                    elif isinstance(profile_params_list, str) and "CUSTOM_BITRATE" in profile_params_list:
+                        bitrate_mbps = float(recode_options["custom_bitrate_value"] or "8")
+                        bitrate_k = int(bitrate_mbps * 1000)
+                        if "nvenc" in ffmpeg_codec_name:
+                            params_str = f"-c:v {ffmpeg_codec_name} -preset p5 -rc vbr -b:v {bitrate_k}k -maxrate {bitrate_k}k"
+                        else:
+                            params_str = f"-c:v {ffmpeg_codec_name} -b:v {bitrate_k}k -maxrate {bitrate_k}k -bufsize {bitrate_k*2}k -pix_fmt yuv420p"
+                        final_ffmpeg_params.extend(params_str.split())
+                    else: 
+                        final_ffmpeg_params.extend(profile_params_list)
+
+                    # Filtros de video (FPS y resolución)
+                    video_filters = []
+                    if recode_options.get("fps_force_enabled") and recode_options.get("fps_value"):
+                        video_filters.append(f'fps={recode_options["fps_value"]}')
+                    
+                    if recode_options.get("resolution_change_enabled"):
+                        # (La lógica de preset/personalizado ya está resuelta en el preset)
+                        try:
+                            target_w = int(recode_options["res_width"])
+                            target_h = int(recode_options["res_height"])
+
+                            if target_w > 0 and target_h > 0:
+                                if recode_options.get("no_upscaling_enabled"):
+                                    # Obtener resolución original
+                                    media_info = self.main_app.ffmpeg_processor.get_local_media_info(input_file)
+                                    original_width = 0
+                                    original_height = 0
+                                    if media_info and media_info.get('streams'):
+                                        video_stream = next((s for s in media_info['streams'] if s.get('codec_type') == 'video'), None)
+                                        if video_stream:
+                                            original_width = video_stream.get('width', 0)
+                                            original_height = video_stream.get('height', 0)
+                                    
+                                    if original_width > 0 and target_w > original_width:
+                                        target_w = original_width
+                                    if original_height > 0 and target_h > original_height:
+                                        target_h = original_height
+                                
+                                video_filters.append(f'scale={target_w}:{target_h}')
+                        except (ValueError, TypeError):
+                            pass # Ignorar si los valores de res están vacíos
+
+                    if video_filters and "filter_complex" not in final_ffmpeg_params:
+                        final_ffmpeg_params.extend(['-vf', ",".join(video_filters)])
+                else:
+                    final_ffmpeg_params.extend(["-c:v", "copy"])
+            else:
+                # Modo Solo Audio, asegurarse de no incluir video
+                final_ffmpeg_params.extend(["-vn"])
+
+            # ====== PROCESAMIENTO DE AUDIO ======
+            is_gif_format = "GIF" in recode_options.get("recode_codec_name", "")
+
+            if not is_gif_format:
+                is_pro_video_format = False
+                if recode_options.get("recode_video_enabled", False):
+                    if any(x in recode_options.get("recode_codec_name", "") for x in ["ProRes", "DNxH"]):
+                        is_pro_video_format = True
+                
+                if is_pro_video_format:
+                    final_ffmpeg_params.extend(["-c:a", "pcm_s16le"])
+                elif recode_options.get("recode_audio_enabled", False):
+                    audio_codec_db = self.main_app.ffmpeg_processor.available_encoders["CPU"]["Audio"]
+                    audio_codec_data = audio_codec_db.get(recode_options["recode_audio_codec_name"])
+                    ffmpeg_audio_codec = next((k for k in audio_codec_data if k != 'container'), None)
+                    audio_profile_params = audio_codec_data[ffmpeg_audio_codec].get(recode_options["recode_audio_profile_name"])
+                    if audio_profile_params:
+                        final_ffmpeg_params.extend(audio_profile_params)
+                else:
+                    final_ffmpeg_params.extend(["-c:a", "copy"])
+            else:
+                final_ffmpeg_params.extend(["-an"]) # Es un GIF, eliminar audio
+
+            # --- INICIO DE CORRECCIÓN (Soporte Multipista Local v2) ---
+            
+            # 1. Determinar el índice de audio
+            selected_audio_idx = None
+            if not is_gif_format:
+                # Por defecto, "all" (comportamiento anterior para descargas)
+                selected_audio_idx = "all" 
+                
+                # Comprobar si es un trabajo local
+                if job.job_type == "LOCAL_RECODE":
+                    # Leer el estado del checkbox "Usar todas las pistas"
+                    use_all_tracks = job.config.get('recode_all_audio_tracks', False)
+                    
+                    if use_all_tracks:
+                        selected_audio_idx = "all"
+                        print(f"DEBUG: [Recodificación Local] Usando 'all' pistas de audio (checkbox activado).")
+                    else:
+                        # Checkbox no activado, buscar el índice específico guardado
+                        saved_idx = job.config.get('resolved_audio_stream_index')
+                        if saved_idx is not None:
+                            selected_audio_idx = int(saved_idx)
+                            print(f"DEBUG: [Recodificación Local] Usando pista de audio específica: {selected_audio_idx}")
+                        else:
+                            # Fallback: no hay índice guardado, usar la primera pista de audio (índice 0)
+                            # Esto es más seguro que "all" para evitar el error del muxer
+                            try:
+                                audio_streams = job.analysis_data.get('local_info', {}).get('audio_streams', [])
+                                if audio_streams:
+                                    selected_audio_idx = audio_streams[0].get('index', 0)
+                                    print(f"ADVERTENCIA: [Recodificación Local] No se encontró índice de audio guardado. Usando fallback a la primera pista (índice {selected_audio_idx}).")
+                                else:
+                                    selected_audio_idx = None # No hay audio
+                            except Exception:
+                                selected_audio_idx = 0 # Fallback final
+                
+            # 2. Determinar el índice de video (asumir el primero si existe)
+            selected_video_idx = None
+            if "-filter_complex" not in final_ffmpeg_params and recode_options.get('mode_compatibility') != "Solo Audio":
+                if job.job_type == "LOCAL_RECODE":
+                    try:
+                        video_stream = job.analysis_data.get('local_info', {}).get('video_stream')
+                        if video_stream:
+                            selected_video_idx = video_stream.get('index', 0)
+                    except Exception:
+                        selected_video_idx = 0 # Fallback
+                else:
+                    selected_video_idx = 0 # Fallback para descargas
+
+            # --- FIN DE CORRECCIÓN ---
+
+            command_options = {
+                "input_file": input_file, 
+                "output_file": temp_output_path,
+                "duration": self._get_job_media_duration(job, input_file), 
+                "ffmpeg_params": final_ffmpeg_params,
+                "pre_params": pre_params, 
+                "mode": recode_options.get('mode_compatibility'),
+                "selected_video_stream_index": selected_video_idx, # <-- CORREGIDO
+                "selected_audio_stream_index": selected_audio_idx   # <-- CORREGIDO
+            }
+
+            # Función de callback de progreso para este job
+            def recode_progress_callback(percentage, message):
+                self.ui_callback(job.job_id, "RUNNING", message)
+
+            # Ejecutar recodificación
+            self.main_app.ffmpeg_processor.execute_recode(
+                command_options, 
+                recode_progress_callback, 
+                self.pause_event # Usar el pause_event de la cola
+            )
+
+            if self.pause_event.is_set():
+                raise UserCancelledError("Proceso pausado por el usuario.")
+
+            # Renombrar archivo temporal al nombre final
+            if os.path.exists(temp_output_path):
+                os.rename(temp_output_path, final_recoded_path)
+            
+            # Eliminar backup si existía
+            if backup_file_path and os.path.exists(backup_file_path):
+                os.remove(backup_file_path)
+            
+            return final_recoded_path
+            
+        except Exception as e:
+            # Limpieza en caso de error
+            if os.path.exists(temp_output_path):
+                try: os.remove(temp_output_path)
+                except OSError: pass
+            
+            if backup_file_path and os.path.exists(backup_file_path):
+                try: os.rename(backup_file_path, final_recoded_path)
+                except OSError: pass
+            
+            raise e # Re-lanzar la excepción

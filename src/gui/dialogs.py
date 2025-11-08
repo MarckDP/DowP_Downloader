@@ -286,7 +286,7 @@ class Tooltip:
         """Crea y muestra la ventana del tooltip."""
         
         # Colores (ajustados para el tema oscuro)
-        bg_color = "#2B2B2B"
+        bg_color = "#131212"
         fg_color = "#DCE4EE"
         border_color = "#565b5f"
         

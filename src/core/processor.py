@@ -529,8 +529,12 @@ class FFmpegProcessor:
         Usa ffprobe para obtener información detallada de un archivo local.
         Esta versión usa Popen para un manejo más robusto de timeouts y streams.
         """
+        ffprobe_exe_name = "ffprobe.exe" if os.name == 'nt' else "ffprobe"
+        ffprobe_path = os.path.join(os.path.dirname(self.ffmpeg_path), ffprobe_exe_name)
+        
         command = [
-            self.ffmpeg_path.replace('ffmpeg', 'ffprobe'),
+            ffprobe_path, # <--- Usar la ruta recién construida
+            '-v', 'quiet',
             '-v', 'quiet',
             '-print_format', 'json',
             '-show_format',

@@ -421,6 +421,8 @@ class MainWindow(ctk.CTk):
         self.tab_view.add("Proceso por Lotes")
         self.batch_tab = BatchDownloadTab(master=self.tab_view.tab("Proceso por Lotes"), app=self)
 
+        
+
         self.run_initial_setup()
         self._check_for_ui_requests()
         self._last_clipboard_check = "" 
@@ -472,7 +474,7 @@ class MainWindow(ctk.CTk):
         
         # 6. Detección de códecs (esto se ejecuta siempre, pero es local, no usa API)
         self.ffmpeg_processor.run_detection_async(self.on_ffmpeg_detection_complete) # CORREGIDO
-
+        
     def on_update_check_complete(self, update_info):
         """Callback que se ejecuta cuando la comprobación de versión termina. Ahora inicia la descarga."""
         if update_info.get("update_available"):

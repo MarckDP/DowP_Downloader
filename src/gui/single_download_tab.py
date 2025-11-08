@@ -49,7 +49,7 @@ class SingleDownloadTab(ctk.CTkFrame):
     Esta clase contendrá TODA la UI y la lógica de la
     pestaña de descarga única.
     """
-    APP_VERSION = "1.2.3"
+    APP_VERSION = "1.2.4"
 
 
     DOWNLOAD_BTN_COLOR = "#28A745"       
@@ -135,8 +135,25 @@ class SingleDownloadTab(ctk.CTkFrame):
     def _initialize_ui_settings(self):
 
         self.output_path_entry.delete(0, 'end')
-        self.output_path_entry.insert(0, self.app.default_download_path)
-        self.cookie_mode_menu.set(self.app.cookies_mode_saved) 
+        
+        # --- INICIO DE LA MODIFICACIÓN ---
+        if self.app.default_download_path:
+            self.output_path_entry.insert(0, self.app.default_download_path)
+        else:
+            # Fallback a la carpeta de Descargas si la config está vacía
+            try:
+                from pathlib import Path # Importar aquí para uso local
+                downloads_path = Path.home() / "Downloads"
+                if downloads_path.exists() and downloads_path.is_dir():
+                    self.output_path_entry.insert(0, str(downloads_path))
+                    # Actualizar el path global para que se guarde al cerrar
+                    self.app.default_download_path = str(downloads_path) 
+            except Exception as e:
+                print(f"No se pudo establecer la carpeta de descargas por defecto: {e}")
+        # --- FIN DE LA MODIFICACIÓN ---
+
+        self.cookie_mode_menu.set(self.app.cookies_mode_saved)
+
         if self.app.cookies_path: 
             self.cookie_path_entry.insert(0, self.app.cookies_path) 
         
@@ -261,7 +278,14 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.clean_subtitle_check = ctk.CTkCheckBox(subtitle_options_frame, text="Convertir y estandarizar a formato SRT")
         self.clean_subtitle_check.pack(padx=10, pady=(0, 5), anchor="w")
 
-        ctk.CTkLabel(options_scroll_frame, text="Cookies", font=ctk.CTkFont(weight="bold")).pack(fill="x", padx=10, pady=(5, 2))
+        cookies_label = ctk.CTkLabel(options_scroll_frame, text="Cookies", font=ctk.CTkFont(weight="bold"))
+        cookies_label.pack(fill="x", padx=10, pady=(5, 2))
+        
+        # --- AÑADIR ESTAS LÍNEAS (TOOLTIP 6) ---
+        cookies_tooltip_text = "Configura las cookies para acceder a contenido protegido.\n\nÚtil para:\n• Videos con restricción de edad\n• Videos privados o solo para suscriptores\n• Contenido que requiere iniciar sesión"
+        Tooltip(cookies_label, cookies_tooltip_text, delay_ms=1000)
+        # --- FIN DEL TOOLTIP ---
+
         cookie_options_frame = ctk.CTkFrame(options_scroll_frame)
         cookie_options_frame.pack(fill="x", padx=5, pady=(0, 10))
 
@@ -317,18 +341,33 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.title_entry = ctk.CTkEntry(details_frame, font=("", 14))
         self.title_entry.pack(fill="x", padx=5, pady=(0,10))
         self.title_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.title_entry))
+
         options_frame = ctk.CTkFrame(details_frame)
         options_frame.pack(fill="x", padx=5, pady=5)
-        ctk.CTkLabel(options_frame, text="Modo:").pack(side="left", padx=(0, 10))
+        
+        # --- MODIFICACIÓN: Asignar la etiqueta a una variable ---
+        mode_label = ctk.CTkLabel(options_frame, text="Modo:")
+        mode_label.pack(side="left", padx=(0, 10))
+        # --- FIN DE LA MODIFICACIÓN ---
+        
         self.mode_selector = ctk.CTkSegmentedButton(options_frame, values=["Video+Audio", "Solo Audio"], command=self.on_mode_change)
         self.mode_selector.set("Video+Audio")
         self.mode_selector.pack(side="left", expand=True, fill="x")
+
+        # --- AÑADIR ESTAS LÍNEAS (TOOLTIP 13) ---
+        mode_tooltip_text = "• Video+Audio: Descarga el video y el audio juntos.\n• Solo Audio: Descarga únicamente la pista de audio.\n\nEsta selección filtra las opciones de calidad y recodificación."
+        Tooltip(mode_label, mode_tooltip_text, delay_ms=1000)
+        
         self.video_quality_label = ctk.CTkLabel(details_frame, text="Calidad de Video:", anchor="w")
         self.video_quality_menu = ctk.CTkOptionMenu(details_frame, state="disabled", values=["-"], command=self.on_video_quality_change)
         self.audio_options_frame = ctk.CTkFrame(details_frame, fg_color="transparent")
         self.audio_quality_label = ctk.CTkLabel(self.audio_options_frame, text="Calidad de Audio:", anchor="w")
         self.audio_quality_menu = ctk.CTkOptionMenu(self.audio_options_frame, state="disabled", values=["-"], command=lambda _: (self._update_warnings(), self._validate_recode_compatibility()))
         self.use_all_audio_tracks_check = ctk.CTkCheckBox(self.audio_options_frame, text="Aplicar la recodificación a todas las pistas de audio", command=self._on_use_all_audio_tracks_change)
+
+        multi_track_tooltip_text = "Aplica la recodificación seleccionada a TODAS las pistas de audio por separado (no las fusiona).\n\n• Advertencia: Esta función depende del formato de salida. No todos los contenedores (ej: `.mp3`) admiten audio multipista."
+        Tooltip(self.use_all_audio_tracks_check, multi_track_tooltip_text, delay_ms=1000)
+
         self.audio_quality_label.pack(fill="x", padx=5, pady=(10,0))
         self.audio_quality_menu.pack(fill="x", padx=5, pady=(0,5))
         legend_text = (         
@@ -346,7 +385,11 @@ class SingleDownloadTab(ctk.CTkFrame):
         )
         self.recode_main_frame = ctk.CTkScrollableFrame(details_frame)
 
-        ctk.CTkLabel(self.recode_main_frame, text="Opciones de Recodificación", font=ctk.CTkFont(weight="bold")).pack(pady=(5,10))
+        recode_title_label = ctk.CTkLabel(self.recode_main_frame, text="Opciones de Recodificación", font=ctk.CTkFont(weight="bold"))
+        recode_title_label.pack(pady=(5,10))
+
+        recode_tooltip_text = "Permite convertir el archivo a un formato diferente.\nÚtil para mejorar la compatibilidad con editores \n(ej: Premiere, After Effects) o para reducir el tamaño del archivo."
+        Tooltip(recode_title_label, recode_tooltip_text, delay_ms=1000)
 
         recode_mode_frame = ctk.CTkFrame(self.recode_main_frame, fg_color="transparent")
         recode_mode_frame.pack(fill="x", padx=10, pady=(0, 10))
@@ -367,7 +410,10 @@ class SingleDownloadTab(ctk.CTkFrame):
         
         self.quick_recode_options_frame = ctk.CTkFrame(self.recode_quick_frame, fg_color="transparent")
         
-        ctk.CTkLabel(self.quick_recode_options_frame, text="Preset de Conversión:", font=ctk.CTkFont(weight="bold")).pack(pady=10, padx=10)
+        # --- MODIFICACIÓN: Asignar la etiqueta a una variable ---
+        preset_label = ctk.CTkLabel(self.quick_recode_options_frame, text="Preset de Conversión:", font=ctk.CTkFont(weight="bold"))
+        preset_label.pack(pady=10, padx=10)
+        # --- FIN DE LA MODIFICACIÓN ---
         
         def on_preset_change(selection):
             self.update_download_button_state()
@@ -376,6 +422,11 @@ class SingleDownloadTab(ctk.CTkFrame):
         
         self.recode_preset_menu = ctk.CTkOptionMenu(self.quick_recode_options_frame, values=["- Aún no disponible -"], command=on_preset_change)
         self.recode_preset_menu.pack(pady=10, padx=10, fill="x")
+
+        # --- AÑADIR ESTAS LÍNEAS (TOOLTIP 10) ---
+        preset_tooltip_text = "Perfiles pre-configurados para tareas comunes.\n\n• Puedes crear y guardar tus propios presets desde el 'Modo Manual'.\n• Tus presets guardados aparecerán en esta lista."
+        Tooltip(preset_label, preset_tooltip_text, delay_ms=1000)
+        Tooltip(self.recode_preset_menu, preset_tooltip_text, delay_ms=1000)
         
         preset_actions_frame = ctk.CTkFrame(self.quick_recode_options_frame, fg_color="transparent")
         preset_actions_frame.pack(fill="x", padx=10, pady=(0, 10))
@@ -428,8 +479,20 @@ class SingleDownloadTab(ctk.CTkFrame):
 
         self.recode_video_checkbox = ctk.CTkCheckBox(self.recode_toggle_frame, text="Recodificar Video", command=self._toggle_recode_panels, state="disabled")
         self.recode_video_checkbox.grid(row=0, column=0, padx=10, pady=(5, 5), sticky="w")
+
+        # --- AÑADIR TOOLTIP VIDEO (TOOLTIP 11) ---
+        video_recode_tooltip = "Re-codifica solo la pista de video pero copia el audio si 'Recodificar Audio' está desmarcado."
+        Tooltip(self.recode_video_checkbox, video_recode_tooltip, delay_ms=1000)
+        # --- FIN DEL TOOLTIP ---
+
         self.recode_audio_checkbox = ctk.CTkCheckBox(self.recode_toggle_frame, text="Recodificar Audio", command=self._toggle_recode_panels, state="disabled")
         self.recode_audio_checkbox.grid(row=0, column=1, padx=10, pady=(5, 5), sticky="w")
+
+        # --- AÑADIR TOOLTIP AUDIO (TOOLTIP 12) ---
+        audio_recode_tooltip = "Re-codifica solo la pista de audio pero copia el video si 'Recodificar Video' está desmarcado."
+        Tooltip(self.recode_audio_checkbox, audio_recode_tooltip, delay_ms=1000)
+        # --- FIN DEL TOOLTIP ---
+
         self.keep_original_checkbox = ctk.CTkCheckBox(self.recode_toggle_frame, text="Mantener los archivos originales", state="disabled", command=self.save_settings)
         self.keep_original_checkbox.grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="w")
 
@@ -443,13 +506,27 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.recode_options_frame = ctk.CTkFrame(self.recode_manual_frame)
         ctk.CTkLabel(self.recode_options_frame, text="Opciones de Video", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 10), padx=10)
         self.proc_type_var = ctk.StringVar(value="")
+
         proc_frame = ctk.CTkFrame(self.recode_options_frame, fg_color="transparent")
         proc_frame.pack(fill="x", padx=10, pady=5)
         self.cpu_radio = ctk.CTkRadioButton(proc_frame, text="CPU", variable=self.proc_type_var, value="CPU", command=self.update_codec_menu)
         self.cpu_radio.pack(side="left", padx=10)
+        
+        # --- AÑADIR TOOLTIP PARA CPU (TOOLTIP 8) ---
+        cpu_tooltip_text = "Usa el procesador (CPU) para la recodificación.\nEs más lento que la GPU, pero ofrece la máxima calidad y compatibilidad con todos los códecs de software."
+        Tooltip(self.cpu_radio, cpu_tooltip_text, delay_ms=1000)
+        # --- FIN DEL TOOLTIP ---
+
         self.gpu_radio = ctk.CTkRadioButton(proc_frame, text="GPU", variable=self.proc_type_var, value="GPU", state="disabled", command=self.update_codec_menu)
         self.gpu_radio.pack(side="left", padx=20)
+
+        # --- AÑADIR TOOLTIP PARA GPU (TOOLTIP 9) ---
+        gpu_tooltip_text = "Usa la tarjeta gráfica (GPU) para una recodificación acelerada por hardware (más rápida).\nSolo se listarán códecs compatibles con la GPU (ej: NVENC, AMF, QSV)."
+        Tooltip(self.gpu_radio, gpu_tooltip_text, delay_ms=1000)
+        # --- FIN DEL TOOLTIP ---
+
         codec_options_frame = ctk.CTkFrame(self.recode_options_frame)
+
         codec_options_frame.pack(fill="x", padx=10, pady=5)
         codec_options_frame.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(codec_options_frame, text="Codec:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
@@ -480,12 +557,20 @@ class SingleDownloadTab(ctk.CTkFrame):
         container_value_frame.grid(row=3, column=1, padx=5, pady=0, sticky="ew")
         self.recode_container_label = ctk.CTkLabel(container_value_frame, text="-", font=ctk.CTkFont(weight="bold"))
         self.recode_container_label.pack(side="left", padx=5, pady=5)
+
         self.fps_frame = ctk.CTkFrame(self.recode_options_frame)
         self.fps_frame.pack(fill="x", padx=10, pady=(10, 5))
         self.fps_frame.grid_columnconfigure(1, weight=1)
         self.fps_checkbox = ctk.CTkCheckBox(self.fps_frame, text="Forzar FPS Constantes (CFR)", command=self.toggle_fps_entry_panel)
         self.fps_checkbox.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky="w")
+
+        # --- AÑADIR ESTAS LÍNEAS (TOOLTIP 14) ---
+        fps_tooltip_text = "Fuerza una tasa de fotogramas constante (CFR).\n\nMuchos videos de internet usan FPS Variable (VFR), lo que causa problemas de audio desincronizado en editores como Premiere o After Effects. Activando esto se soluciona."
+        Tooltip(self.fps_checkbox, fps_tooltip_text, delay_ms=1000)
+        # --- FIN DEL TOOLTIP ---
+
         self.fps_value_label = ctk.CTkLabel(self.fps_frame, text="Valor FPS:")
+
         self.fps_entry = ctk.CTkEntry(self.fps_frame, placeholder_text="Ej: 23.976, 25, 29.97, 30, 60")
         self.toggle_fps_entry_panel()
         self.resolution_frame = ctk.CTkFrame(self.recode_options_frame)
@@ -576,13 +661,7 @@ class SingleDownloadTab(ctk.CTkFrame):
                                      fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER,
                                      text_color_disabled=self.DISABLED_TEXT_COLOR)
         self.download_button.pack(side="left", padx=(5, 10))
-        if not self.app.default_download_path:
-            try:
-                downloads_path = Path.home() / "Downloads"
-                if downloads_path.exists() and downloads_path.is_dir():
-                    self.output_path_entry.insert(0, str(downloads_path))
-            except Exception as e:
-                print(f"No se pudo establecer la carpeta de descargas por defecto: {e}")
+
         progress_frame = ctk.CTkFrame(self)
         progress_frame.pack(pady=(0, 10), padx=10, fill="x")
         self.progress_label = ctk.CTkLabel(progress_frame, text="Esperando...")
@@ -2145,19 +2224,30 @@ class SingleDownloadTab(ctk.CTkFrame):
                 # Restaurar las opciones de audio originales
                 a_opts = list(self.audio_formats.keys()) or ["- Sin Pistas de Audio -"]
                 
-                # Buscar la mejor opción (la que tenga ✨)
+                # --- INICIO DE LA MODIFICACIÓN (FIX DEL RESETEO) ---
+
+                # 1. Obtener la selección de audio ACTUAL (la que eligió el usuario)
+                current_audio_selection = self.audio_quality_menu.get()
+
+                # 2. Buscar la mejor opción por defecto (fallback)
                 default_audio_selection = a_opts[0]
                 for option in a_opts:
                     if "✨" in option:
                         default_audio_selection = option
                         break
                 
+                # 3. Decidir qué selección usar
+                selection_to_set = default_audio_selection # Usar el fallback por defecto
+                if current_audio_selection in a_opts:
+                    selection_to_set = current_audio_selection # ¡Ahá! Mantener la del usuario
+                
                 # Restaurar el menú
                 self.audio_quality_menu.configure(
                     state="normal" if self.audio_formats else "disabled",
                     values=a_opts
                 )
-                self.audio_quality_menu.set(default_audio_selection)
+                self.audio_quality_menu.set(selection_to_set) # <-- Usar la selección decidida
+                # --- FIN DE LA MODIFICACIÓN ---
             
             # Actualizar dimensiones si están disponibles
             new_width = selected_format_info.get('width')
@@ -2576,6 +2666,8 @@ class SingleDownloadTab(ctk.CTkFrame):
                 json.dump(presets_data, f, indent=4)
             
             self._populate_preset_menu()
+            self.app.batch_tab._populate_batch_preset_menu()
+            self.app.batch_tab._populate_global_preset_menu()
             
             messagebox.showinfo(
                 "Importado",
@@ -2631,6 +2723,8 @@ class SingleDownloadTab(ctk.CTkFrame):
                 json.dump(presets_data, f, indent=4)
             
             self._populate_preset_menu()
+            self.app.batch_tab._populate_batch_preset_menu()
+            self.app.batch_tab._populate_global_preset_menu()
             
             messagebox.showinfo(
                 "Eliminado",
@@ -2706,6 +2800,8 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.custom_presets = presets_data.get("custom_presets", [])
             
             self._populate_preset_menu()
+            self.app.batch_tab._populate_batch_preset_menu()
+            self.app.batch_tab._populate_global_preset_menu()
             
             messagebox.showinfo(
                 "Éxito",
@@ -3629,8 +3725,17 @@ class SingleDownloadTab(ctk.CTkFrame):
 
             final_ffmpeg_params = []
             pre_params = []
+
+            # --- INICIO DE CORRECCIÓN (Muxer vs Contenedor) ---
+            container_ext = recode_options['recode_container']
             
-            final_ffmpeg_params.extend(['-f', recode_options['recode_container'].lstrip('.')])
+            # Buscar un muxer específico en el mapa (ej: .m4a -> mp4)
+            # Usamos self.app.FORMAT_MUXER_MAP
+            muxer_name = self.app.FORMAT_MUXER_MAP.get(container_ext, container_ext.lstrip('.'))
+            
+            final_ffmpeg_params.extend(['-f', muxer_name])
+            print(f"DEBUG: [Muxer] Contenedor: {container_ext}, Muxer: {muxer_name}")
+            # --- FIN DE CORRECCIÓN ---
 
             if recode_options.get("fragment_enabled"):
                 if recode_options.get("start_time"): 
