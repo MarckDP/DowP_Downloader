@@ -49,7 +49,7 @@ class SingleDownloadTab(ctk.CTkFrame):
     Esta clase contendrá TODA la UI y la lógica de la
     pestaña de descarga única.
     """
-    APP_VERSION = "1.2.4"
+    APP_VERSION = "1.2.5"
 
 
     DOWNLOAD_BTN_COLOR = "#28A745"       
@@ -74,8 +74,9 @@ class SingleDownloadTab(ctk.CTkFrame):
         'app' es la referencia a la ventana principal (MainWindow).
         """
         super().__init__(master, fg_color="transparent")
+        self.app = app 
+        self.is_initializing = True 
         self.pack(expand=True, fill="both")
-        self.app = app # Guardamos la referencia a la app principal
         
         # Hacemos "atajos" a objetos globales que usaremos mucho
         self.ffmpeg_processor = self.app.ffmpeg_processor
@@ -192,6 +193,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         print("DEBUG: Panel de recodificación forzado a mostrarse en inicialización")
         
         self.app.after(100, self._update_save_preset_visibility)
+        self.is_initializing = False
         
     def _create_widgets(self):
         url_frame = ctk.CTkFrame(self)
@@ -812,16 +814,21 @@ class SingleDownloadTab(ctk.CTkFrame):
         """
         Corta un fragmento de un archivo de video/audio usando FFmpeg en modo de copia de stream.
         
+        🆕 NUEVO: Ahora interpreta correctamente:
+        - Solo inicio → Desde ese tiempo hasta el final
+        - Solo fin → Desde el principio hasta ese tiempo
+        - Ambos → Fragmento específico
+        
         Args:
             input_filepath (str): La ruta al archivo de medios original.
-            start_time (str): El tiempo de inicio del corte (formato HH:MM:SS).
-            end_time (str): El tiempo de finalizaciÃ³n del corte (formato HH:MM:SS).
+            start_time (str): El tiempo de inicio del corte (formato HH:MM:SS o vacío).
+            end_time (str): El tiempo de finalización del corte (formato HH:MM:SS o vacío).
             
         Returns:
-            str: La ruta al archivo de medios reciÃ©n creado y cortado.
+            str: La ruta al archivo de medios recién creado y cortado.
         
         Raises:
-            UserCancelledError: Si la operaciÃ³n es cancelada por el usuario.
+            UserCancelledError: Si la operación es cancelada por el usuario.
             Exception: Si FFmpeg falla durante el proceso de corte.
         """
         self.app.after(0, self.update_progress, 98, "Cortando fragmento con ffmpeg...")
@@ -832,9 +839,15 @@ class SingleDownloadTab(ctk.CTkFrame):
 
         clipped_filepath, backup_path = self._resolve_output_path(desired_clipped_filepath)
 
-        # **CORREGIDO: Cálculo correcto de duración del fragmento**
+        # 🆕 CÁLCULO INTELIGENTE DE DURACIÓN
+        # Si no hay start_time, asumir 0
         start_seconds = self.time_str_to_seconds(start_time) if start_time else 0
-        end_seconds = self.time_str_to_seconds(end_time) if end_time else self.video_duration
+        
+        # Si no hay end_time, usar la duración completa del video
+        if end_time:
+            end_seconds = self.time_str_to_seconds(end_time)
+        else:
+            end_seconds = self.video_duration
         
         # Duración real del fragmento
         fragment_duration = end_seconds - start_seconds
@@ -845,15 +858,13 @@ class SingleDownloadTab(ctk.CTkFrame):
         pre_params = []
         ffmpeg_params = []
         
-        # **CORREGIDO: -ss va ANTES de -i para búsqueda rápida**
+        # -ss va ANTES de -i para búsqueda rápida (solo si hay tiempo de inicio)
         if start_time:
             pre_params.extend(['-ss', start_time])
         
-        # **CORREGIDO: Usar -t (duración) en lugar de -to (tiempo absoluto)**
-        if end_time:
-            # Calcular duración desde el punto de inicio
-            duration_str = self._seconds_to_time_str(fragment_duration)
-            ffmpeg_params.extend(['-t', duration_str])
+        # Usar -t (duración) para especificar cuánto cortar desde el punto de inicio
+        duration_str = self._seconds_to_time_str(fragment_duration)
+        ffmpeg_params.extend(['-t', duration_str])
 
         # Usamos 'copy' para un corte rápido y sin recodificar
         ffmpeg_params.extend(['-c:v', 'copy', '-c:a', 'copy', '-map', '0:v?', '-map', '0:a?'])
@@ -863,7 +874,7 @@ class SingleDownloadTab(ctk.CTkFrame):
             "output_file": clipped_filepath,
             "ffmpeg_params": ffmpeg_params,
             "pre_params": pre_params,
-            "duration": fragment_duration  # **CORREGIDO: Pasar duración del fragmento, no del video completo**
+            "duration": fragment_duration
         }
         
         # Ejecuta el comando de corte a través del procesador de FFmpeg
@@ -892,6 +903,8 @@ class SingleDownloadTab(ctk.CTkFrame):
         Verifica si se necesita un recorte y lo ejecuta.
         Maneja la eliminación del archivo original si es necesario.
         
+        🆕 NUEVO: Ahora verifica si el archivo ya fue cortado por yt-dlp
+        
         Args:
             downloaded_filepath (str): La ruta al archivo recién descargado.
             options (dict): El diccionario de opciones de la operación.
@@ -905,7 +918,14 @@ class SingleDownloadTab(ctk.CTkFrame):
             # No hay que cortar, devolvemos la ruta original sin cambios.
             return downloaded_filepath
 
-        # Si hay que cortar, llamamos a la función de recorte.
+        # 🆕 NUEVO: Verificar si ya fue cortado por yt-dlp
+        # Si fragment_enabled es False, significa que yt-dlp ya lo cortó
+        if not options.get("fragment_enabled"):
+            print("DEBUG: ✅ El fragmento ya fue descargado directamente por yt-dlp. Saltando corte.")
+            return downloaded_filepath
+
+        # Si llegamos aquí, necesitamos cortar con FFmpeg
+        print("DEBUG: 🎬 El video completo fue descargado. Procediendo a cortar con FFmpeg...")
         clipped_filepath = self._execute_fragment_clipping(
             input_filepath=downloaded_filepath,
             start_time=options.get("start_time"),
@@ -920,7 +940,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         # Manejamos la eliminación del archivo original completo.
         try:
             if not options.get("keep_original_on_clip"):
-                os.remove(downloaded_filepath) # 'downloaded_filepath' aquí es el archivo completo.
+                os.remove(downloaded_filepath)
                 print(f"DEBUG: Archivo original completo eliminado tras el recorte: {downloaded_filepath}")
         except OSError as err:
             print(f"ADVERTENCIA: No se pudo eliminar el archivo completo original tras el recorte: {err}")
@@ -1025,11 +1045,16 @@ class SingleDownloadTab(ctk.CTkFrame):
 
     def time_str_to_seconds(self, time_str):
         """Convierte un string HH:MM:SS a segundos."""
-        if not time_str: return 0
+        if not time_str: 
+            return None
         parts = time_str.split(':')
         seconds = 0
         if len(parts) == 3:
             seconds = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        elif len(parts) == 2:
+            seconds = int(parts[0]) * 60 + int(parts[1])
+        elif len(parts) == 1:
+            seconds = int(parts[0])
         return seconds
 
     def _get_compatible_audio_codecs(self, target_container):
@@ -1071,15 +1096,23 @@ class SingleDownloadTab(ctk.CTkFrame):
             next_widget.select_range(0, 'end')
 
     def _get_formatted_time(self, h_widget, m_widget, s_widget):
-        """Lee los campos de tiempo segmentados y los formatea como HH:MM:SS."""
-        h = h_widget.get()
-        m = m_widget.get()
-        s = s_widget.get()
+        """
+        Lee los campos de tiempo segmentados y los formatea como HH:MM:SS.
+        NUEVO: Retorna "" si todos los campos están vacíos (se interpreta como "sin límite").
+        """
+        h = h_widget.get().strip()
+        m = m_widget.get().strip()
+        s = s_widget.get().strip()
+        
+        # Si todos los campos están vacíos, retornar string vacío
         if not h and not m and not s:
-            return "" 
+            return ""
+        
+        # Si algún campo tiene valor, rellenar con ceros
         h = h.zfill(2) if h else "00"
         m = m.zfill(2) if m else "00"
         s = s.zfill(2) if s else "00"
+        
         return f"{h}:{m}:{s}"
 
     def _clean_ansi_codes(self, text):
@@ -1284,6 +1317,8 @@ class SingleDownloadTab(ctk.CTkFrame):
     def _execute_local_recode(self, options):
         """
         Función que gestiona el procesamiento de archivos locales, incluyendo recorte y/o recodificación.
+        
+        🆕 CORREGIDO: Ahora mantiene correctamente el sufijo "_fragmento" en todos los casos.
         """
         clipped_temp_file = None
         
@@ -1321,10 +1356,16 @@ class SingleDownloadTab(ctk.CTkFrame):
             if self.save_in_same_folder_check.get() == 1:
                 output_dir = os.path.dirname(source_path)
 
+            # 🆕 LÓGICA CORREGIDA DE NOMBRES
             base_filename = self.sanitize_filename(options['title'])
-            # Si solo recodificamos, añadimos el sufijo. Si cortamos y recodificamos, el sufijo ya está.
-            if not clipped_temp_file:
-                 base_filename += "_recoded"
+            
+            # 🔧 PASO 1: Si se cortó, agregar "_fragmento"
+            if is_fragment_mode:
+                base_filename += "_fragmento"
+            
+            # 🔧 PASO 2: Si se recodifica, agregar "_recoded"
+            # (Esto se ejecuta siempre que lleguemos aquí porque ya validamos is_recode_mode arriba)
+            base_filename += "_recoded"
 
             selected_audio_stream_index = None
             if self.use_all_audio_tracks_check.get() == 1 and len(self.audio_formats) > 1:
@@ -1340,7 +1381,14 @@ class SingleDownloadTab(ctk.CTkFrame):
             
             options['selected_audio_stream_index'] = selected_audio_stream_index
             options['selected_video_stream_index'] = selected_video_stream_index
-            options['duration'] = self.video_duration
+            
+            # 🆕 CRÍTICO: Actualizar la duración para el recorte
+            if is_fragment_mode:
+                start_seconds = self.time_str_to_seconds(options.get("start_time")) if options.get("start_time") else 0
+                end_seconds = self.time_str_to_seconds(options.get("end_time")) if options.get("end_time") else self.video_duration
+                options['duration'] = end_seconds - start_seconds
+            else:
+                options['duration'] = self.video_duration
 
             final_output_path = self._execute_recode_master(
                 input_file=input_for_recode,
@@ -1651,15 +1699,53 @@ class SingleDownloadTab(ctk.CTkFrame):
             if local_mode_ready and self.save_in_same_folder_check.get() == 1:
                 output_path_is_valid = True
 
+            # 🆕 VALIDACIÓN MEJORADA DE TIEMPOS
             times_are_valid = True
             self.time_warning_label.configure(text="")
+            
             if self.fragment_checkbox.get() == 1 and self.video_duration > 0:
                 start_str = self._get_formatted_time(self.start_h, self.start_m, self.start_s)
                 end_str = self._get_formatted_time(self.end_h, self.end_m, self.end_s)
-                start_seconds = self.time_str_to_seconds(start_str)
-                end_seconds = self.time_str_to_seconds(end_str)
-                if start_seconds >= self.video_duration or (end_seconds > 0 and end_seconds > self.video_duration) or (end_seconds > 0 and start_seconds >= end_seconds):
+                
+                # Casos válidos:
+                # 1. Solo inicio (start_str existe, end_str vacío) → Desde inicio hasta el final
+                # 2. Solo fin (start_str vacío, end_str existe) → Desde el principio hasta fin
+                # 3. Ambos (start_str y end_str existen) → Desde inicio hasta fin
+                # 4. Ninguno (ambos vacíos) → Error, no tiene sentido activar el checkbox sin tiempos
+                
+                if not start_str and not end_str:
+                    # No hay tiempos definidos
                     times_are_valid = False
+                    self.time_warning_label.configure(
+                        text="⚠️ Debes especificar al menos un tiempo\n       (inicio o final)",
+                        text_color="orange"
+                    )
+                else:
+                    # Validar que los tiempos estén dentro del rango del video
+                    start_seconds = self.time_str_to_seconds(start_str) if start_str else 0
+                    end_seconds = self.time_str_to_seconds(end_str) if end_str else self.video_duration
+                    
+                    # Verificar que inicio no sea mayor que la duración
+                    if start_seconds >= self.video_duration:
+                        times_are_valid = False
+                        self.time_warning_label.configure(
+                            text=f"⚠️ El tiempo de inicio ({start_str}) supera la duración del video",
+                            text_color="orange"
+                        )
+                    # Verificar que fin no supere la duración
+                    elif end_seconds > self.video_duration:
+                        times_are_valid = False
+                        self.time_warning_label.configure(
+                            text=f"⚠️ El tiempo final ({end_str}) supera la duración del video",
+                            text_color="orange"
+                        )
+                    # Verificar que inicio sea menor que fin (si ambos están definidos)
+                    elif start_str and end_str and start_seconds >= end_seconds:
+                        times_are_valid = False
+                        self.time_warning_label.configure(
+                            text=f"⚠️ El tiempo de inicio debe ser menor que el final",
+                            text_color="orange"
+                        )
 
             recode_config_is_valid = True
             
@@ -1735,6 +1821,9 @@ class SingleDownloadTab(ctk.CTkFrame):
         Actualiza la configuración de la app principal (self.app).
         La ventana principal se encargará de escribir el archivo JSON.
         """
+        if not hasattr(self, 'app') or self.is_initializing: # <-- MODIFICA ESTA LÍNEA
+            return
+        
         if not hasattr(self, 'app'): # Prevenir error si se llama antes de tiempo
             return
 
@@ -3905,109 +3994,140 @@ class SingleDownloadTab(ctk.CTkFrame):
         mode = options["mode"]
         output_template = os.path.join(options["output_path"], f"{user_facing_title}.%(ext)s")
         
-        # 🔧 PASO 1: Determinar los format_ids correctos ANTES de todo
+        # 🔧 PASO 1: Determinar los format_ids correctos
         video_format_id = video_format_info.get('format_id')
         audio_format_id = audio_format_info.get('format_id')
         
-        # 🔧 PASO 2: Si es combinado multiidioma, reemplazar con el idioma seleccionado
+        # 🔧 PASO 2: Si es combinado multiidioma
         if hasattr(self, 'combined_audio_map') and self.combined_audio_map:
             selected_audio_label = options.get("audio_format_label")
             if selected_audio_label in self.combined_audio_map:
                 video_format_id = self.combined_audio_map[selected_audio_label]
                 print(f"DEBUG: ✅ Reemplazando format_id con variante de idioma: {video_format_id}")
         
-        # 🆕 PASO 2.5: Detectar si el formato es "simple" con validación robusta
+        # Detectar formato simple
         total_formats = len(self.video_formats) + len(self.audio_formats)
         is_combined = video_format_info.get('is_combined', False)
+        is_simple_format = (total_formats == 1 and (is_combined or not self.audio_formats))
 
-        # 🔒 VALIDACIÓN: Un formato es "simple" solo si:
-        # 1. Hay exactamente 1 formato total
-        # 2. Y (es combinado O es el único video disponible)
-        is_simple_format = (
-            total_formats == 1 and 
-            (is_combined or not self.audio_formats)
-        )
-
-        # 🔒 VALIDACIÓN EXTRA: Verificar que el format_id sea válido para selector directo
         if is_simple_format and video_format_id:
-            # IDs válidos para selector directo:
-            # - Numéricos: "0", "1", "123"
-            # - Protocolos: "http", "https", "m3u8"
-            # - Especiales: "default", "best"
-            # - IDs cortos: hasta 10 caracteres
-            
-            # 🆕 Lista de IDs de protocolo conocidos
             protocol_ids = ['http', 'https', 'm3u8', 'm3u8_native', 'hls', 'dash']
-            
             is_simple_id = (
-                video_format_id.isdigit() or                    # "0", "1", "123"
-                video_format_id in ['default', 'best'] or       # IDs especiales
-                video_format_id in protocol_ids or              # 🆕 IDs de protocolo
-                (len(video_format_id) <= 10 and '+' not in video_format_id)  # IDs cortos sin '+'
+                video_format_id.isdigit() or
+                video_format_id in ['default', 'best'] or
+                video_format_id in protocol_ids or
+                (len(video_format_id) <= 10 and '+' not in video_format_id)
             )
-            
             if not is_simple_id:
-                print(f"DEBUG: ⚠️ Format_id '{video_format_id}' no es simple. Usando lógica estándar.")
                 is_simple_format = False
-
-        if is_simple_format:
-            print(f"DEBUG: 🎯 Formato simple detectado (total={total_formats}, id={video_format_id})")
         
         # 🔧 PASO 3: Construir el selector preciso
         precise_selector = ""
         
         if audio_extraction_fallback:
             precise_selector = video_format_id
-            print(f"DEBUG: Fallback activado. Selector: {precise_selector}")
             
         elif mode == "Video+Audio":
-            # 🆕 CASO ESPECIAL: Si es formato simple Y validado
             if is_simple_format and video_format_id:
                 precise_selector = video_format_id
-                print(f"DEBUG: PASO 1 (simple): Selector directo: {precise_selector}")
-                
-            # CASO NORMAL: Formato combinado multiidioma o estándar
             elif is_combined and video_format_id:
                 precise_selector = video_format_id
-                print(f"DEBUG: PASO 1: Selector combinado: {precise_selector}")
-                
-            # CASO NORMAL: Formatos separados
             elif video_format_id and audio_format_id:
                 precise_selector = f"{video_format_id}+{audio_format_id}"
-                print(f"DEBUG: PASO 1: Selector separado: {precise_selector}")
                 
         elif mode == "Solo Audio":
             precise_selector = audio_format_id
-            print(f"DEBUG: PASO 1: Selector audio: {precise_selector}")
         
-        # 🔧 PASO 4: Configurar yt-dlp con el selector ya definido
+        print(f"DEBUG: 📌 Selector de formato: {precise_selector}")
+        
+        # 🔧 PASO 4: Configurar yt-dlp base
         if getattr(sys, 'frozen', False):
             project_root = os.path.dirname(sys.executable)
         else:
             project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-        bin_dir = os.path.join(project_root, "bin")
         
         ydl_opts = {
             'outtmpl': output_template,
+            'format': precise_selector,
             'postprocessors': [],
             'noplaylist': True,
             'ffmpeg_location': self.ffmpeg_processor.ffmpeg_path,
             'retries': 2,
             'fragment_retries': 2,
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'referer': options["url"],
         }
+        
+        # 🆕 CORRECCIÓN CRÍTICA: Manejo correcto de fragmentos
+        is_fragment_mode = options.get("fragment_enabled") and (options.get("start_time") or options.get("end_time"))
+
+        if is_fragment_mode:
+            start_time_str = options.get("start_time") or ""  # 🆕 Puede estar vacío
+            end_time_str = options.get("end_time") or ""      # 🆕 Puede estar vacío
+            
+            # 🆕 VALIDACIÓN: Al menos uno debe estar definido
+            if not start_time_str and not end_time_str:
+                print("DEBUG: ⚠️ Modo fragmento activado pero sin tiempos definidos")
+                is_fragment_mode = False
+            else:
+                # Convertir tiempos a segundos (usar 0 si está vacío el inicio)
+                start_seconds = self.time_str_to_seconds(start_time_str) if start_time_str else 0
+                
+                # Usar None si no hay tiempo final (significa "hasta el final")
+                end_seconds = self.time_str_to_seconds(end_time_str) if end_time_str else None
+                
+                print(f"DEBUG: 🎬 Configurando descarga de fragmento:")
+                print(f"  - Inicio: {start_time_str if start_time_str else '00:00:00 (desde el principio)'} ({start_seconds}s)")
+                
+                if end_seconds is not None:
+                    print(f"  - Fin: {end_time_str} ({end_seconds}s)")
+                else:
+                    print(f"  - Fin: (hasta el final del video)")
+                
+                # La API correcta de yt-dlp para rangos de descarga
+                try:
+                    from yt_dlp.utils import download_range_func
+                    
+                    # Crear el rango con SEGUNDOS (int/float), no strings
+                    if end_seconds is not None:
+                        ranges = [(start_seconds, end_seconds)]
+                    else:
+                        ranges = [(start_seconds, float('inf'))]  # Hasta el infinito = hasta el final
+                    
+                    ydl_opts['download_ranges'] = download_range_func(None, ranges)
+                    ydl_opts['force_keyframes_at_cuts'] = True
+                    
+                    print(f"DEBUG: ✅ download_ranges configurado: {ranges}")
+                    
+                except Exception as e:
+                    print(f"DEBUG: ⚠️ Error configurando download_ranges: {e}")
+                    print(f"DEBUG: 🔥 Fallback: se descargará completo y se cortará con FFmpeg")
+                    is_fragment_mode = False
+                
+                # 🆕 LOGGING: Comando CLI actualizado
+                if end_time_str:
+                    download_section = f"*{start_time_str if start_time_str else '0'}-{end_time_str}"
+                else:
+                    download_section = f"*{start_time_str if start_time_str else '0'}-inf"
+            
+            cli_command = f"yt-dlp -f \"{precise_selector}\" --download-sections \"{download_section}\" --force-keyframes-at-cuts \"{options['url']}\" -o \"{output_template}\""
+            
+            print(f"\n{'='*80}")
+            print(f"🔍 COMANDO EQUIVALENTE DE CLI:")
+            print(f"{cli_command}")
+            print(f"{'='*80}\n")
+        
+        # Resto de configuración (subtítulos, cookies, etc.)
         if mode == "Solo Audio" and audio_format_info.get('extract_only'):
-            ydl_opts['postprocessors'] = [{
+            ydl_opts['postprocessors'].append({
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
-            }]
+            })
         
         if options["download_subtitles"] and options.get("selected_subtitle_info"):
             subtitle_info = options["selected_subtitle_info"]
             if subtitle_info:
-                # 🔧 Verificar si se debe convertir a SRT
                 should_convert_to_srt = self.clean_subtitle_check.winfo_ismapped() and self.clean_subtitle_check.get() == 1
                 
                 ydl_opts.update({
@@ -4017,7 +4137,6 @@ class SingleDownloadTab(ctk.CTkFrame):
                     'embedsubtitles': mode == "Video+Audio"
                 })
                 
-                # 🔧 NUEVO: Si está marcado convertir a SRT
                 if should_convert_to_srt:
                     ydl_opts['subtitlesformat'] = 'best/vtt/best'
                     ydl_opts['convertsubtitles'] = 'srt'
@@ -4039,35 +4158,94 @@ class SingleDownloadTab(ctk.CTkFrame):
                 browser_arg += f":{options['browser_profile']}"
             ydl_opts['cookiesfrombrowser'] = (browser_arg,)
         
-        # 🔧 CRÍTICO: Usar el precise_selector que ya calculamos
+        # 🆕 Logging detallado de opciones
+        print(f"DEBUG: 📋 Opciones de yt-dlp:")
+        important_opts = ['format', 'download_ranges', 'force_keyframes_at_cuts', 'postprocessors']
+        for key in important_opts:
+            if key in ydl_opts:
+                print(f"  - {key}: {ydl_opts[key]}")
+        
+        # 🔧 INTENTOS DE DESCARGA
         if audio_extraction_fallback:
-            ydl_opts['format'] = precise_selector
             print(f"DEBUG: [FALLBACK] Descargando video: {precise_selector}")
             downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
             temp_video_for_extraction = downloaded_filepath
             return downloaded_filepath, temp_video_for_extraction 
         else:
             try:
-                # 🔧 INTENTO 1: Usar el selector preciso
                 if not precise_selector:
                     raise yt_dlp.utils.DownloadError("Selector preciso no válido")
                 
-                ydl_opts['format'] = precise_selector
-                print(f"DEBUG: INTENTO 1: Descargando con selector: {precise_selector}")
-                downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                print(f"DEBUG: 🚀 INTENTO 1: Descargando con yt-dlp...")
+                
+                # 🆕 Si es modo fragmento, intentar descarga directa
+                if is_fragment_mode:
+                    try:
+                        print(f"DEBUG: 🎬 Intentando descarga directa de fragmento")
+                        downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                        print(f"DEBUG: ✅ Fragmento descargado: {downloaded_filepath}")
+                        
+                        # Desactivar recorte post-descarga
+                        options["fragment_enabled"] = False
+                        options["start_time"] = ""
+                        options["end_time"] = ""
+                        
+                        return downloaded_filepath, temp_video_for_extraction
+                        
+                    except Exception as fragment_error:
+                        print(f"DEBUG: ❌ Error en descarga de fragmento: {fragment_error}")
+                        print(f"DEBUG: 🔍 Tipo de error: {type(fragment_error).__name__}")
+                        
+                        # 🆕 Preguntar al usuario
+                        self.app.ui_request_data = {
+                            "type": "ask_yes_no",
+                            "title": "Descarga de Fragmento Fallida",
+                            "message": (
+                                f"No se pudo descargar el fragmento directamente.\n\n"
+                                f"Error: {str(fragment_error)[:100]}\n\n"
+                                f"¿Deseas descargar el video completo y luego cortarlo?\n\n"
+                                f"(Esto tomará más tiempo y espacio en disco)"
+                            )
+                        }
+                        self.app.ui_response_event.clear()
+                        self.app.ui_request_event.set()
+                        self.app.ui_response_event.wait()
+                        
+                        user_choice = self.app.ui_response_data.get("result", False)
+                        
+                        if not user_choice:
+                            raise UserCancelledError("El usuario canceló la descarga del video completo.")
+                        
+                        # Usuario aceptó: descargar completo
+                        print(f"DEBUG: 📥 Descargando video completo para cortar después...")
+                        ydl_opts_full = ydl_opts.copy()
+                        ydl_opts_full.pop('download_ranges', None)
+                        ydl_opts_full.pop('force_keyframes_at_cuts', None)
+                        ydl_opts_full.pop('_fragment_range', None)
+                        
+                        # Limpiar postprocessors relacionados con fragmentos
+                        ydl_opts_full['postprocessors'] = [
+                            pp for pp in ydl_opts_full.get('postprocessors', [])
+                            if pp.get('key') != 'FFmpegVideoRemuxer'
+                        ]
+                        
+                        options["fragment_enabled"] = True  # Mantener para corte con FFmpeg
+                        
+                        downloaded_filepath = download_media(options["url"], ydl_opts_full, self.update_progress, self.cancellation_event)
+                else:
+                    # Descarga normal sin fragmento
+                    downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
                 
             except yt_dlp.utils.DownloadError as e:
                 print(f"DEBUG: Falló el intento 1. Error: {e}")
                 print("DEBUG: Pasando al Paso 2 (selector flexible).")
                 
                 try:
-                    # 🆕 INTENTO 2 MEJORADO: Lógica adaptativa
+                    # INTENTO 2 MEJORADO: Lógica adaptativa
                     if is_simple_format:
-                        # Para formatos simples, 'best' es más seguro
                         strict_flexible_selector = 'best'
                         print(f"DEBUG: INTENTO 2 (simple): Usando selector 'best'")
                     
-                    # 🆕 CASO ESPECIAL: Twitter/X (extractor específico)
                     elif 'twitter' in options["url"] or 'x.com' in options["url"]:
                         strict_flexible_selector = 'best'
                         print(f"DEBUG: INTENTO 2 (Twitter): Usando selector 'best'")
@@ -4076,7 +4254,6 @@ class SingleDownloadTab(ctk.CTkFrame):
                         strict_flexible_selector = 'best'
                         
                     else:
-                        # 🔒 LÓGICA COMPLEJA ORIGINAL
                         info_dict = self.analysis_cache.get(options["url"], {}).get('data', {})
                         selected_audio_details = next((f for f in info_dict.get('formats', []) if f.get('format_id') == audio_format_id), None)
                         language_code = selected_audio_details.get('language') if selected_audio_details else None
@@ -4104,7 +4281,6 @@ class SingleDownloadTab(ctk.CTkFrame):
                     details_ready_event = threading.Event()
                     compromise_details = {"text": "Obteniendo detalles..."}
                     def get_details_thread():
-                        """Este hilo ejecuta la simulación en segundo plano."""
                         compromise_details["text"] = self.app._get_best_available_info(options["url"], options)
                         details_ready_event.set() 
                     self.app.after(0, self.update_progress, 50, "Calidad no disponible. Obteniendo detalles de alternativa...")
@@ -4128,7 +4304,9 @@ class SingleDownloadTab(ctk.CTkFrame):
                     else:
                         raise UserCancelledError("Descarga cancelada por el usuario en el diálogo de compromiso.")
             except Exception as final_e:
-                    raise final_e
+                print(f"DEBUG: ❌ Error inesperado: {final_e}")
+                raise
+                
             if not downloaded_filepath or not os.path.exists(downloaded_filepath):
                 raise Exception("La descarga falló o el archivo no se encontró.")
             
@@ -4542,20 +4720,37 @@ class SingleDownloadTab(ctk.CTkFrame):
 
     def update_progress(self, percentage, message):
         """
-        Actualiza la barra de progreso. AHORA es inteligente y acepta
-        valores en escala 0-100 (de descargas/recodificación) o 0.0-1.0.
+        Actualiza la barra de progreso. AHORA es inteligente y acepta:
+        - Valores en escala 0-100 (de descargas/recodificación)
+        - Valores en escala 0.0-1.0
+        - Valor especial -1 para activar modo INDETERMINADO
         """
         try:
             progress_value = float(percentage)
         except (ValueError, TypeError):
             progress_value = 0.0
 
+        # 🆕 NUEVO: Detectar modo indeterminado
+        if progress_value == -1:
+            def _update():
+                self.progress_bar.configure(mode="indeterminate")
+                self.progress_bar.start()  # Inicia animación
+                self.progress_label.configure(text=message)
+            self.app.after(0, _update)
+            return
+
+        # Normalizar valores normales
         if progress_value > 1.0:
             progress_value = progress_value / 100.0
 
         capped_percentage = max(0.0, min(progress_value, 1.0))
         
         def _update():
+            # 🆕 Volver a modo determinado si estaba en indeterminado
+            if self.progress_bar.cget("mode") == "indeterminate":
+                self.progress_bar.stop()
+                self.progress_bar.configure(mode="determinate")
+            
             self.progress_bar.set(capped_percentage)
             self.progress_label.configure(text=message)
             

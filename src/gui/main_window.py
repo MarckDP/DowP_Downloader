@@ -30,6 +30,7 @@ from src.core.processor import clean_and_convert_vtt_to_srt
 from contextlib import redirect_stdout
 from .batch_download_tab import BatchDownloadTab
 from .single_download_tab import SingleDownloadTab
+
 from .dialogs import ConflictDialog, LoadingWindow, CompromiseDialog, SimpleMessageDialog, SavePresetDialog, PlaylistErrorDialog
 from src.core.constants import (
     VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, SINGLE_STREAM_AUDIO_CONTAINERS,
@@ -314,7 +315,7 @@ class MainWindow(ctk.CTk):
                 "• Intentar más tarde si hay límite de peticiones"
             )
 
-    def __init__(self, launch_target=None):
+    def __init__(self, launch_target=None, project_root=None):
         super().__init__()
 
         self.VIDEO_EXTENSIONS = VIDEO_EXTENSIONS
@@ -327,21 +328,35 @@ class MainWindow(ctk.CTk):
         self.EDITOR_FRIENDLY_CRITERIA = EDITOR_FRIENDLY_CRITERIA
         self.COMPATIBILITY_RULES = COMPATIBILITY_RULES
 
-        global main_app_instance, ACTIVE_TARGET_SID, LATEST_FILE_LOCK, socketio, SETTINGS_FILE, PRESETS_FILE
+        global main_app_instance, ACTIVE_TARGET_SID, LATEST_FILE_LOCK, socketio
         main_app_instance = self
 
         # --- Adjuntar globales para pasarlos a las pestañas ---
-        self.ACTIVE_TARGET_SID_accessor = lambda: ACTIVE_TARGET_SID # Usamos una función para obtener el valor *actual*
+        self.ACTIVE_TARGET_SID_accessor = lambda: ACTIVE_TARGET_SID
         self.LATEST_FILE_LOCK = LATEST_FILE_LOCK
         self.socketio = socketio
-        self.SETTINGS_FILE = SETTINGS_FILE
-        self.PRESETS_FILE = PRESETS_FILE
+
+        # --- ¡AQUÍ ESTÁ LA CORRECCIÓN! ---
+        # 2. Determina la ruta base
+        if getattr(sys, 'frozen', False):
+            # Modo .exe: la ruta es el directorio del ejecutable
+            self.APP_BASE_PATH = os.path.dirname(sys.executable)
+        elif project_root:
+            # Modo Dev: usamos la ruta pasada desde main.py
+            self.APP_BASE_PATH = project_root
+        else:
+            # Fallback (no debería usarse, pero es seguro tenerlo)
+            self.APP_BASE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+        # 3. Define las rutas de configuración COMO ATRIBUTOS DE INSTANCIA
+        self.SETTINGS_FILE = os.path.join(self.APP_BASE_PATH, "app_settings.json")
+        self.PRESETS_FILE = os.path.join(self.APP_BASE_PATH, "presets.json")
 
         self.launch_target = launch_target
         self.is_shutting_down = False
         self.cancellation_event = threading.Event()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self.title("DowP")
+        self.title(f"DowP {SingleDownloadTab.APP_VERSION}")
         self.iconbitmap(resource_path("DowP-icon.ico"))
         win_width = 835
         win_height = 950
@@ -367,6 +382,7 @@ class MainWindow(ctk.CTk):
         # --- INICIALIZAR VALORES POR DEFECTO ---
         # Define todos los atributos ANTES del bloque try
         self.default_download_path = ""
+        self.batch_download_path = "" # <-- AÑADE ESTA LÍNEA
         self.cookies_path = ""
         self.cookies_mode_saved = "No usar"
         self.selected_browser_saved = "firefox"
@@ -382,12 +398,13 @@ class MainWindow(ctk.CTk):
         
         # --- INTENTAR CARGAR CONFIGURACIÓN GUARDADA ---
         try:
-            print(f"DEBUG: Intentando cargar configuración desde: {SETTINGS_FILE}")
-            if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, 'r') as f:
+            print(f"DEBUG: Intentando cargar configuración desde: {self.SETTINGS_FILE}")
+            if os.path.exists(self.SETTINGS_FILE):
+                with open(self.SETTINGS_FILE, 'r') as f:
                     settings = json.load(f)
                     # Sobrescribe los valores por defecto con los que están guardados
                     self.default_download_path = settings.get("default_download_path", self.default_download_path)
+                    self.batch_download_path = settings.get("batch_download_path", self.batch_download_path)
                     self.cookies_path = settings.get("cookies_path", self.cookies_path)
                     self.cookies_mode_saved = settings.get("cookies_mode", self.cookies_mode_saved)
                     self.selected_browser_saved = settings.get("selected_browser", self.selected_browser_saved)
@@ -761,16 +778,22 @@ class MainWindow(ctk.CTk):
         Recopila todos los ajustes de la app y los guarda en app_settings.json.
         Esta es la ÚNICA función que debe escribir en el archivo.
         """
-        
-        # 1. Recopilar ajustes de la Pestaña Individual
-        # (Estos son actualizados en la app por la propia pestaña)
-        
-        # 2. Recopilar ajustes de la Pestaña de Lotes
-        # (Estos son actualizados en la app por la propia pestaña)
+        # --- CORRECCIÓN APLICADA: Sincronizar desde las pestañas antes de guardar ---
+        # Guardar primero la pestaña NO activa, luego la ACTIVA, para que la activa tenga prioridad
+        # en los ajustes globales (como default_download_path).
+        current_tab = self.tab_view.get()
+        if current_tab == "Proceso Único":
+             if hasattr(self, 'batch_tab'): self.batch_tab.save_settings()
+             if hasattr(self, 'single_tab'): self.single_tab.save_settings()
+        else:
+             if hasattr(self, 'single_tab'): self.single_tab.save_settings()
+             if hasattr(self, 'batch_tab'): self.batch_tab.save_settings()
+        # --- FIN DE LA CORRECCIÓN ---
 
         # 3. Crear el diccionario de configuración final
         settings_to_save = {
             "default_download_path": self.default_download_path,
+            "batch_download_path": self.batch_download_path,
             "ffmpeg_update_snooze_until": self.ffmpeg_update_snooze_until.isoformat() if self.ffmpeg_update_snooze_until else None,
             "custom_presets": self.custom_presets,
 

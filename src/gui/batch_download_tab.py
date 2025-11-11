@@ -50,6 +50,7 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.pack(expand=True, fill="both")
         
         self.app = app
+        self.is_initializing = True
         self.last_download_path = None
         self.thumbnail_label = None
         self.current_thumbnail_url = None
@@ -543,11 +544,18 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.progress_bar.pack(pady=(0,5), padx=10, fill="x")
 
         # --- Carga Inicial ---
-        if self.app.default_download_path:
+        # 1. Intentar cargar la ruta específica de Lotes
+        batch_path = self.app.batch_download_path
+        
+        # 2. Si está vacía, intentar usar la ruta de la pestaña Única (como fallback)
+        if not batch_path:
+            batch_path = self.app.default_download_path
+
+        if batch_path:
             self.output_path_entry.delete(0, 'end')
-            self.output_path_entry.insert(0, self.app.default_download_path)
+            self.output_path_entry.insert(0, batch_path)
         else:
-            # Fallback a la carpeta de Descargas si la config está vacía (primera ejecución)
+            # Fallback a la carpeta de Descargas si AMBAS están vacías
             try:
                 from pathlib import Path # Importar aquí para uso local
                 downloads_path = Path.home() / "Downloads"
@@ -555,7 +563,7 @@ class BatchDownloadTab(ctk.CTkFrame):
                     self.output_path_entry.delete(0, 'end')
                     self.output_path_entry.insert(0, str(downloads_path))
                     # Actualizar el path global para que se guarde al cerrar
-                    self.app.default_download_path = str(downloads_path) 
+                    self.app.batch_download_path = str(downloads_path) # <-- Guardar en la variable correcta
             except Exception as e:
                 print(f"No se pudo establecer la carpeta de descargas por defecto para Lotes: {e}")
 
@@ -2829,16 +2837,17 @@ class BatchDownloadTab(ctk.CTkFrame):
             self.auto_import_checkbox.select()
         else:
             self.auto_import_checkbox.deselect()
+        self.is_initializing = False
 
     def save_settings(self):
         """
         Guarda la configuración de la pestaña de lotes en la app principal.
         La app principal se encargará de escribir el archivo JSON.
         """
-        if not hasattr(self, 'app'): # Prevenir error si se llama antes de tiempo
+        if not hasattr(self, 'app') or self.is_initializing: # Prevenir error si se llama antes de tiempo
             return
             
-        self.app.default_download_path = self.output_path_entry.get()
+        self.app.batch_download_path = self.output_path_entry.get() 
         self.app.batch_playlist_analysis_saved = self.playlist_analysis_check.get() == 1
         self.app.batch_auto_import_saved = self.auto_import_checkbox.get() == 1
 

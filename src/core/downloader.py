@@ -31,61 +31,95 @@ def download_media(url, ydl_opts, progress_callback, cancellation_event: threadi
     """
     Descarga y procesa el medio, esperando a que todas las etapas (incluida la fusión) terminen.
     Devuelve la ruta final y definitiva del archivo.
-    Se ha añadido un mecanismo de cancelación limpia.
+    
+    🆕 NUEVO: Ahora soporta download_ranges para fragmentos con mejor feedback
     """
-
+    
+    # 🆕 Variables para tracking de progreso en fragmentos
+    is_fragment = 'download_ranges' in ydl_opts
+    fragment_started = False
+    
     def hook(d):
+        nonlocal fragment_started
+        
         if cancellation_event.is_set():
             raise UserCancelledError("Descarga cancelada por el usuario.")
+        
         status = d.get('status', 'N/A')
-
+        
         if status == 'downloading':
+            fragment_started = True
+            
             total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
             downloaded_bytes = d.get('downloaded_bytes', 0)
+            
             if total_bytes > 0:
                 percentage = (downloaded_bytes / total_bytes) * 100
                 speed = d.get('speed')
                 
-                # --- INICIO DE MODIFICACIÓN (Velocidad Dinámica) ---
                 if speed:
                     speed_mb = speed / 1024 / 1024
                     if speed_mb >= 1.0:
                         speed_str = f"{speed_mb:.1f} MB/s"
                     else:
                         speed_kb = speed / 1024
-                        speed_str = f"{speed_kb:.0f} KB/s" # KB/s sin decimales
+                        speed_str = f"{speed_kb:.0f} KB/s"
                 else:
                     speed_str = "N/A"
 
-                progress_callback(percentage, f"Descargando... {percentage:.1f}% a {speed_str}")
+                download_type = "fragmento" if is_fragment else "archivo"
+                progress_callback(percentage, f"Descargando {download_type}... {percentage:.1f}% a {speed_str}")
+            
+            elif is_fragment:
+                # 🆕 Si es fragmento y no hay total_bytes, activar modo indeterminado
+                elapsed = d.get('elapsed', 0)
+                progress_callback(-1, f"Descargando fragmento... {elapsed:.0f}s transcurridos")  # -1 = indeterminado
+        
         elif status == 'finished':
-            progress_callback(100, "Descarga completada. Fusionando archivos si es necesario...")
+            if is_fragment:
+                progress_callback(-1, "Fragmento descargado. Procesando con FFmpeg...")  # Mantener indeterminado
+            else:
+                progress_callback(95, "Descarga completada. Fusionando archivos si es necesario...")
+        
         elif status == 'error':
             raise yt_dlp.utils.DownloadError("yt-dlp reportó un error durante la descarga.")
+    
     ydl_opts['progress_hooks'] = [hook]
     ydl_opts.setdefault('downloader', 'native')
+    
     if 'outtmpl' in ydl_opts:
-        # Asegurar que yt-dlp use el template exacto sin variaciones
         ydl_opts['restrictfilenames'] = True 
     
     try:
         if cancellation_event.is_set():
             raise UserCancelledError("Descarga cancelada por el usuario antes de iniciar.")
+        
+        # 🆕 Activar modo indeterminado desde el inicio si es fragmento
+        if is_fragment:
+            progress_callback(-1, "Descargando fragmento, esto puede tardar...")  # -1 = indeterminado
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
-            
+        
+        # 🆕 Si es fragmento y nunca se disparó el hook, mantener indeterminado
+        if is_fragment and not fragment_started:
+            progress_callback(-1, "Fragmento extraído. Finalizando...")
+        
         final_filepath = info_dict.get('filepath')
         if not final_filepath and 'requested_downloads' in info_dict:
             final_filepath = info_dict['requested_downloads'][0].get('filepath')
             
         if not final_filepath:
             raise PlaylistDownloadError("No se pudo determinar la ruta del archivo descargado después del proceso.")
-            
+        
+        # 🆕 Progreso final: volver a normal (100%)
+        progress_callback(100, "✅ Descarga completada exitosamente")
+        
         return final_filepath
+        
     except UserCancelledError as e:
         print(f"DEBUG: Operación de descarga interrumpida: {e}")
         raise e
     except Exception as e:
         print(f"Error en el proceso de descarga de yt-dlp: {e}")
         raise e
-    

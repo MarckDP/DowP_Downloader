@@ -116,5 +116,5 @@ if __name__ == "__main__":
     print("Iniciando la aplicación...")
     launch_target = sys.argv[1] if len(sys.argv) > 1 else None
     from src.gui.main_window import MainWindow
-    app = MainWindow(launch_target=launch_target)
+    app = MainWindow(launch_target=launch_target, project_root=PROJECT_ROOT)
     app.mainloop()
