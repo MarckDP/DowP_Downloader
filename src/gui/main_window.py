@@ -155,10 +155,6 @@ if getattr(sys, 'frozen', False):
 else:
     APP_BASE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-SETTINGS_FILE = os.path.join(APP_BASE_PATH, "app_settings.json")
-PRESETS_FILE = os.path.join(APP_BASE_PATH, "presets.json") 
-
-
 class LoadingWindow(ctk.CTkToplevel):
     def __init__(self, master):
         super().__init__(master)
@@ -337,7 +333,7 @@ class MainWindow(ctk.CTk):
         self.socketio = socketio
 
         # --- ¡AQUÍ ESTÁ LA CORRECCIÓN! ---
-        # 2. Determina la ruta base
+        # 2. Determina la ruta base (PARA LOS BINARIOS)
         if getattr(sys, 'frozen', False):
             # Modo .exe: la ruta es el directorio del ejecutable
             self.APP_BASE_PATH = os.path.dirname(sys.executable)
@@ -348,9 +344,24 @@ class MainWindow(ctk.CTk):
             # Fallback (no debería usarse, pero es seguro tenerlo)
             self.APP_BASE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-        # 3. Define las rutas de configuración COMO ATRIBUTOS DE INSTANCIA
-        self.SETTINGS_FILE = os.path.join(self.APP_BASE_PATH, "app_settings.json")
-        self.PRESETS_FILE = os.path.join(self.APP_BASE_PATH, "presets.json")
+        # 3. Define las rutas de configuración (PARA LOS DATOS DE USUARIO)
+        
+        # --- INICIO DE LA MODIFICACIÓN (LA BUENA) ---
+        # 1. Definir la carpeta de datos del usuario en %APPDATA%
+        self.APP_DATA_DIR = os.path.join(os.path.expandvars('%APPDATA%'), 'DowP')
+
+        # 2. Asegurarse de que esa carpeta exista
+        try:
+            os.makedirs(self.APP_DATA_DIR, exist_ok=True)
+        except Exception as e:
+            print(f"ERROR: No se pudo crear la carpeta de datos en %APPDATA%: {e}")
+            # Fallback a la carpeta antigua si %APPDATA% falla
+            self.APP_DATA_DIR = self.APP_BASE_PATH
+
+        # 3. Definir las rutas usando la nueva carpeta de datos
+        self.SETTINGS_FILE = os.path.join(self.APP_DATA_DIR, "app_settings.json")
+        self.PRESETS_FILE = os.path.join(self.APP_DATA_DIR, "presets.json") 
+        # --- FIN DE LA MODIFICACIÓN ---
 
         self.launch_target = launch_target
         self.is_shutting_down = False
@@ -461,14 +472,20 @@ class MainWindow(ctk.CTk):
         
         from src.core.setup import check_environment_status
         
-        # 2. Definir la ruta de FFmpeg
+        # 2. Definir rutas
         ffmpeg_exe_name = "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
         ffmpeg_path = os.path.join(BIN_DIR, ffmpeg_exe_name)
         
-        # 3. Comprobar si FFmpeg existe
-        if not os.path.exists(ffmpeg_path):
-            # 4a. NO EXISTE: Es la primera vez. Ejecutar el check completo para descargarlo.
-            print("INFO: FFmpeg no detectado. Ejecutando comprobador de entorno completo...")
+        # --- AÑADIR ESTAS LÍNEAS ---
+        deno_exe_name = "deno.exe" if platform.system() == "Windows" else "deno"
+        # (main.py ya define DENO_BIN_DIR, pero main_window.py necesita su propia referencia)
+        DENO_BIN_DIR = os.path.join(BIN_DIR, "deno")
+        deno_path = os.path.join(DENO_BIN_DIR, deno_exe_name)
+
+        # 3. Comprobar si AMBOS existen
+        if not os.path.exists(ffmpeg_path) or not os.path.exists(deno_path): # <-- MODIFICADO
+            # 4a. NO EXISTE (alguno de los dos): ...
+            print("INFO: FFmpeg o Deno no detectados. Ejecutando comprobador de entorno completo...")
             threading.Thread(
                 target=lambda: self.on_status_check_complete(check_environment_status(lambda text, val: None)),
                 daemon=True
@@ -476,6 +493,7 @@ class MainWindow(ctk.CTk):
         else:
             # 4b. SÍ EXISTE: Cargar solo la versión local, sin llamar a la API.
             print("INFO: FFmpeg detectado localmente. Omitiendo la comprobación de API de GitHub.")
+            
             local_version = "Desconocida"
             version_file = os.path.join(BIN_DIR, "ffmpeg_version.txt")
             if os.path.exists(version_file):
@@ -488,6 +506,19 @@ class MainWindow(ctk.CTk):
             # 5. Actualizar la UI directamente con la info local
             self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Instalado)")
             self.single_tab.update_ffmpeg_button.configure(state="normal", text="Buscar Actualizaciones de FFmpeg")
+
+            # --- AÑADIR Lógica de Deno ---
+            local_deno_version = "Desconocida"
+            deno_version_file = os.path.join(DENO_BIN_DIR, "deno_version.txt")
+            if os.path.exists(deno_version_file):
+                try:
+                    with open(deno_version_file, 'r') as f:
+                        local_deno_version = f.read().strip()
+                except Exception as e:
+                    print(f"ADVERTENCIA: No se pudo leer el archivo de versión de Deno: {e}")
+            
+            self.single_tab.deno_status_label.configure(text=f"Deno: {local_deno_version} \n(Instalado)")
+            self.single_tab.update_deno_button.configure(state="normal", text="Buscar Actualizaciones de Deno")
         
         # 6. Detección de códecs (esto se ejecuta siempre, pero es local, no usa API)
         self.ffmpeg_processor.run_detection_async(self.on_ffmpeg_detection_complete) # CORREGIDO
@@ -544,24 +575,33 @@ class MainWindow(ctk.CTk):
         """
         status = status_info.get("status")
         
-        self.single_tab.update_ffmpeg_button.configure(state="normal", text="Buscar Actualizaciones de FFmpeg") # CORREGIDO
+        self.single_tab.update_ffmpeg_button.configure(state="normal", text="Buscar Actualizaciones de FFmpeg")
+        self.single_tab.update_deno_button.configure(state="normal", text="Buscar Actualizaciones de Deno")
 
         if status == "error":
             messagebox.showerror("Error Crítico de Entorno", status_info.get("message"))
             return
 
+        # --- Variables de FFmpeg ---
         local_version = status_info.get("local_version") or "No encontrado"
         latest_version = status_info.get("latest_version")
         download_url = status_info.get("download_url")
         ffmpeg_exists = status_info.get("ffmpeg_path_exists")
         
-        should_download = False
+        # --- AÑADIR: Variables de Deno ---
+        local_deno_version = status_info.get("local_deno_version") or "No encontrado"
+        latest_deno_version = status_info.get("latest_deno_version")
+        deno_download_url = status_info.get("deno_download_url")
+        deno_exists = status_info.get("deno_path_exists")
         
+        should_download = False
+        should_download_deno = False # <-- AÑADIR
+        
+        # --- Lógica de descarga de FFmpeg (existente) ---
         if not ffmpeg_exists:
             print("INFO: FFmpeg no encontrado. Iniciando descarga automática.")
-            self.single_tab.update_progress(0, "FFmpeg no encontrado. Iniciando descarga automática...") # CORREGIDO
+            self.single_tab.update_progress(0, "FFmpeg no encontrado. Iniciando descarga automática...")
             should_download = True
-        
         else:
             update_available = local_version != latest_version
             snoozed = self.ffmpeg_update_snooze_until and datetime.now() < self.ffmpeg_update_snooze_until
@@ -593,6 +633,31 @@ class MainWindow(ctk.CTk):
             else:
                 self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualizado)") 
 
+        # --- AÑADIR: Lógica de descarga de Deno ---
+        if not deno_exists:
+            print("INFO: Deno no encontrado. Iniciando descarga automática.")
+            self.single_tab.update_progress(0, "Deno (requerido por YouTube) no encontrado. Iniciando descarga...")
+            should_download_deno = True
+        else:
+            deno_update_available = local_deno_version != latest_deno_version
+            # (No hay 'snooze' para Deno por ahora, podemos añadirlo luego si quieres)
+            
+            if deno_update_available and force_check:
+                user_response = messagebox.askyesno(
+                    "Actualización de Deno Disponible",
+                    f"Hay una nueva versión de Deno disponible.\n\n"
+                    f"Versión Actual: {local_deno_version}\n"
+                    f"Versión Nueva: {latest_deno_version}\n\n"
+                    "¿Deseas actualizar ahora?"
+                )
+                self.lift() 
+                if user_response:
+                    should_download_deno = True
+            elif deno_update_available:
+                 self.single_tab.deno_status_label.configure(text=f"Deno: {local_deno_version} \n(Actualización disponible)")
+            else:
+                self.single_tab.deno_status_label.configure(text=f"Deno: {local_deno_version} \n(Actualizado)")
+
         if should_download:
             if not download_url:
                 messagebox.showerror("Error", "No se pudo obtener la URL de descarga para FFmpeg.")
@@ -602,45 +667,79 @@ class MainWindow(ctk.CTk):
             from src.core.setup import download_and_install_ffmpeg
             
             def download_task():
-                success = download_and_install_ffmpeg(latest_version, download_url, self.single_tab._handle_download_progress) # CORREGIDO
+                success = download_and_install_ffmpeg(latest_version, download_url, self.single_tab._handle_download_progress) 
                 if success:
-                    self.after(0, self.ffmpeg_processor.run_detection_async,  # CORREGIDO
+                    # --- AÑADIR ESTE BLOQUE ---
+                    # (main.py define FFMPEG_BIN_DIR, pero necesitamos la ruta aquí)
+                    ffmpeg_bin_path = os.path.join(BIN_DIR, "ffmpeg")
+                    if ffmpeg_bin_path not in os.environ['PATH']:
+                        print(f"INFO: Actualizando PATH en tiempo de ejecución con: {ffmpeg_bin_path}")
+                        os.environ['PATH'] = ffmpeg_bin_path + os.pathsep + os.environ['PATH']
+                    # --- FIN DEL BLOQUE ---
+
+                    self.after(0, self.ffmpeg_processor.run_detection_async,  
                             lambda s, m: self.on_ffmpeg_detection_complete(s, m, show_ready_message=True))
-                    self.after(0, lambda: self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {latest_version} \n(Instalado)")) # CORREGIDO
+                    self.after(0, lambda: self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {latest_version} \n(Instalado)")) 
                 else:
-                    self.after(0, self.single_tab.update_progress, 0, "Falló la descarga de FFmpeg.") # CORREGIDO
+                    self.after(0, self.single_tab.update_progress, 0, "Falló la descarga de FFmpeg.") 
 
             threading.Thread(target=download_task, daemon=True).start()
 
+        # --- AÑADIR: Lógica de Hilo de Descarga (Deno) ---
+        if should_download_deno:
+            if not deno_download_url:
+                messagebox.showerror("Error", "No se pudo obtener la URL de descarga para Deno.")
+                return
+
+            self.single_tab.update_progress(0, f"Iniciando descarga de Deno {latest_deno_version}...") 
+            from src.core.setup import download_and_install_deno # <-- Importar la nueva función
+            
+            def download_deno_task():
+                success = download_and_install_deno(latest_deno_version, deno_download_url, self.single_tab._handle_download_progress) 
+                if success:
+                    # (main.py define DENO_BIN_DIR, pero necesitamos la ruta aquí)
+                    deno_bin_path = os.path.join(BIN_DIR, "deno")
+                    if deno_bin_path not in os.environ['PATH']:
+                        print(f"INFO: Actualizando PATH en tiempo de ejecución con: {deno_bin_path}")
+                        os.environ['PATH'] = deno_bin_path + os.pathsep + os.environ['PATH']
+                    
+                    # Deno no necesita "detección" como los códecs de FFmpeg, solo actualizamos la UI
+                    self.after(0, lambda: self.single_tab.deno_status_label.configure(text=f"Deno: {latest_deno_version} \n(Instalado)")) 
+                    self.after(0, self.single_tab.update_progress, 100, "✅ Deno instalado correctamente. Listo para usar.")
+                else:
+                    self.after(0, self.single_tab.update_progress, 0, "Falló la descarga de Deno.")
+
+            threading.Thread(target=download_deno_task, daemon=True).start()
+
     def on_ffmpeg_detection_complete(self, success, message, show_ready_message=False):
         if success:
-            self.single_tab.recode_video_checkbox.configure(text="Recodificar Video", state="normal") # CORREGIDO
-            self.single_tab.recode_audio_checkbox.configure(text="Recodificar Audio", state="normal") # CORREGIDO
+            self.single_tab.recode_video_checkbox.configure(text="Recodificar Video", state="normal") 
+            self.single_tab.recode_audio_checkbox.configure(text="Recodificar Audio", state="normal")
             
-            self.single_tab.apply_quick_preset_checkbox.configure(text="Activar recodificación Rápida", state="normal") # CORREGIDO
+            self.single_tab.apply_quick_preset_checkbox.configure(text="Activar recodificación Rápida", state="normal")
             
             if self.ffmpeg_processor.gpu_vendor:
-                self.single_tab.gpu_radio.configure(text="GPU", state="normal") # CORREGIDO
-                self.single_tab.cpu_radio.pack_forget() # CORREGIDO
-                self.single_tab.gpu_radio.pack_forget() # CORREGIDO
-                self.single_tab.gpu_radio.pack(side="left", padx=10) # CORREGIDO
-                self.single_tab.cpu_radio.pack(side="left", padx=20) # CORREGIDO
+                self.single_tab.gpu_radio.configure(text="GPU", state="normal")
+                self.single_tab.cpu_radio.pack_forget() 
+                self.single_tab.gpu_radio.pack_forget() 
+                self.single_tab.gpu_radio.pack(side="left", padx=10) 
+                self.single_tab.cpu_radio.pack(side="left", padx=20) 
             else:
-                self.single_tab.gpu_radio.configure(text="GPU (No detectada)") # CORREGIDO
-                self.single_tab.proc_type_var.set("CPU") # CORREGIDO
-                self.single_tab.gpu_radio.configure(state="disabled") # CORREGIDO
+                self.single_tab.gpu_radio.configure(text="GPU (No detectada)")
+                self.single_tab.proc_type_var.set("CPU") 
+                self.single_tab.gpu_radio.configure(state="disabled") 
             
-            self.single_tab.update_codec_menu() # CORREGIDO
+            self.single_tab.update_codec_menu()
             
             if show_ready_message:
-                self.single_tab.update_progress(100, "✅ FFmpeg instalado correctamente. Listo para usar.") # CORREGIDO
+                self.single_tab.update_progress(100, "✅ FFmpeg instalado correctamente. Listo para usar.") 
         else:
             print(f"FFmpeg detection error: {message}")
-            self.single_tab.recode_video_checkbox.configure(text="Recodificación no disponible", state="disabled") # CORREGIDO
-            self.single_tab.recode_audio_checkbox.configure(text="(Error FFmpeg)", state="disabled") # CORREGIDO
+            self.single_tab.recode_video_checkbox.configure(text="Recodificación no disponible", state="disabled") 
+            self.single_tab.recode_audio_checkbox.configure(text="(Error FFmpeg)", state="disabled") 
             
-            self.single_tab.apply_quick_preset_checkbox.configure(text="Recodificación no disponible (Error FFmpeg)", state="disabled") # CORREGIDO
-            self.single_tab.apply_quick_preset_checkbox.deselect() # CORREGIDO
+            self.single_tab.apply_quick_preset_checkbox.configure(text="Recodificación no disponible (Error FFmpeg)", state="disabled") 
+            self.single_tab.apply_quick_preset_checkbox.deselect() 
 
     def _iniciar_auto_actualizacion(self, installer_url, version_str):
         """

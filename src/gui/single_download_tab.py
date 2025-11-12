@@ -49,7 +49,7 @@ class SingleDownloadTab(ctk.CTkFrame):
     Esta clase contendrá TODA la UI y la lógica de la
     pestaña de descarga única.
     """
-    APP_VERSION = "1.2.5"
+    APP_VERSION = "1.2.6"
 
 
     DOWNLOAD_BTN_COLOR = "#28A745"       
@@ -336,6 +336,11 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.ffmpeg_status_label.grid(row=2, column=0, padx=10, pady=(5,5), sticky="ew") 
         self.update_ffmpeg_button = ctk.CTkButton(maintenance_frame, text="Buscar Actualizaciones de FFmpeg", command=self.manual_ffmpeg_update_check)
         self.update_ffmpeg_button.grid(row=3, column=0, padx=10, pady=(0, 10), sticky="ew")
+
+        self.deno_status_label = ctk.CTkLabel(maintenance_frame, text="Deno: Verificando...", wraplength=280, justify="left")
+        self.deno_status_label.grid(row=4, column=0, padx=10, pady=(5,5), sticky="ew") 
+        self.update_deno_button = ctk.CTkButton(maintenance_frame, text="Buscar Actualizaciones de Deno", command=self.manual_deno_update_check)
+        self.update_deno_button.grid(row=5, column=0, padx=10, pady=(0, 10), sticky="ew")
 
         details_frame = ctk.CTkFrame(info_frame)
         details_frame.pack(side="left", fill="both", expand=True, padx=(0,10), pady=10)
@@ -1636,6 +1641,19 @@ class SingleDownloadTab(ctk.CTkFrame):
         """Inicia una comprobación manual de la actualización de FFmpeg, usando el callback de progreso seguro."""
         self.update_ffmpeg_button.configure(state="disabled", text="Buscando...")
         self.ffmpeg_status_label.configure(text="FFmpeg: Verificando...")
+        from src.core.setup import check_environment_status
+        
+        def check_task():
+            status_info = check_environment_status(self._handle_download_progress)
+            self.app.after(0, self.app.on_status_check_complete, status_info, True)
+
+        self.setup_thread = threading.Thread(target=check_task, daemon=True)
+        self.setup_thread.start()
+
+    def manual_deno_update_check(self):
+        """Inicia una comprobación manual de la actualización de Deno."""
+        self.update_deno_button.configure(state="disabled", text="Buscando...")
+        self.deno_status_label.configure(text="Deno: Verificando...")
         from src.core.setup import check_environment_status
         
         def check_task():

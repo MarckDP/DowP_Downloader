@@ -9,6 +9,8 @@ import requests
 from packaging import version
 from main import PROJECT_ROOT, BIN_DIR, FFMPEG_BIN_DIR
 
+DENO_BIN_DIR = os.path.join(BIN_DIR, "deno")
+DENO_VERSION_FILE = os.path.join(DENO_BIN_DIR, "deno_version.txt")
 FFMPEG_VERSION_FILE = os.path.join(FFMPEG_BIN_DIR, "ffmpeg_version.txt")
 
 def check_and_install_python_dependencies(progress_callback):
@@ -121,6 +123,85 @@ def download_and_install_ffmpeg(tag, url, progress_callback):
     except Exception as e:
         progress_callback(f"Error al instalar FFmpeg: {e}", -1)
         return False
+    
+
+def get_latest_deno_info(progress_callback):
+    """Consulta la API de GitHub para la última versión de Deno."""
+    progress_callback("Consultando la última versión de Deno...", 5)
+    try:
+        api_url = "https://api.github.com/repos/denoland/deno/releases/latest"
+        response = requests.get(api_url, timeout=15)
+        response.raise_for_status()
+        latest_release_data = response.json()
+        
+        tag_name = latest_release_data["tag_name"]
+        
+        system = platform.system()
+        file_identifier = ""
+        if system == "Windows": file_identifier = "deno-x86_64-pc-windows-msvc.zip"
+        elif system == "Linux": file_identifier = "deno-x86_64-unknown-linux-gnu.zip"
+        elif system == "Darwin": file_identifier = "deno-x86_64-apple-darwin.zip"
+        else: return None, None
+        
+        for asset in latest_release_data["assets"]:
+            if file_identifier in asset["name"]:
+                progress_callback("Información de Deno encontrada.", 10)
+                return tag_name, asset["browser_download_url"]
+                
+        return tag_name, None
+    except requests.RequestException as e:
+        progress_callback(f"Error de red al buscar Deno: {e}", -1)
+        return None, None
+    except (IndexError, KeyError) as e:
+        progress_callback(f"Error en respuesta de API de Deno: {e}", -1)
+        return None, None
+
+def download_and_install_deno(tag, url, progress_callback):
+    """Descarga e instala Deno en la carpeta bin/deno/."""
+    try:
+        file_name = url.split('/')[-1]
+        archive_name = os.path.join(PROJECT_ROOT, file_name)
+        last_reported_progress = -1
+        
+        with requests.get(url, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            total_size = int(r.headers.get('content-length', 0))
+            downloaded_size = 0
+            with open(archive_name, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if not chunk: continue
+                    f.write(chunk)
+                    downloaded_size += len(chunk)
+                    if total_size > 0:
+                        progress = 40 + (downloaded_size / total_size) * 40
+                        if int(progress) > last_reported_progress:
+                            progress_callback(f"Descargando Deno: {downloaded_size / 1024 / 1024:.1f}/{total_size / 1024 / 1024:.1f} MB", progress)
+                            last_reported_progress = int(progress)
+                            
+        progress_callback("Extrayendo archivos de Deno...", 85)
+        
+        # Crear el directorio de Deno (bin/deno/)
+        os.makedirs(DENO_BIN_DIR, exist_ok=True)
+        
+        # Extraer el zip
+        with zipfile.ZipFile(archive_name, 'r') as zip_ref:
+            # El zip de Deno solo contiene el ejecutable (ej: deno.exe)
+            for member in zip_ref.namelist():
+                if member.lower().startswith('deno'):
+                    zip_ref.extract(member, DENO_BIN_DIR)
+                    # Moverlo si está en un subdirectorio (aunque Deno no suele hacerlo)
+                    extracted_path = os.path.join(DENO_BIN_DIR, member)
+                    final_path = os.path.join(DENO_BIN_DIR, os.path.basename(member))
+                    if extracted_path != final_path:
+                         shutil.move(extracted_path, final_path)
+        
+        os.remove(archive_name)
+        with open(DENO_VERSION_FILE, "w") as f: f.write(tag)
+        progress_callback(f"Deno {tag} instalado.", 95)
+        return True
+    except Exception as e:
+        progress_callback(f"Error al instalar Deno: {e}", -1)
+        return False
 
 def check_environment_status(progress_callback):
     """
@@ -130,25 +211,47 @@ def check_environment_status(progress_callback):
     try:
         if not check_and_install_python_dependencies(progress_callback):
             return {"status": "error", "message": "Fallo crítico: No se pudieron instalar las dependencias de Python."}
-        latest_tag, download_url = get_latest_ffmpeg_info(progress_callback)
-        if not latest_tag or not download_url:
-            ffmpeg_path = os.path.join(FFMPEG_BIN_DIR, "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg")
-            if os.path.exists(ffmpeg_path):
-                 return {"status": "warning", "message": "No se pudo verificar la última versión de FFmpeg. Se usará la versión local."}
-            else:
-                 return {"status": "error", "message": "No se pudo descargar FFmpeg y no hay una versión local."}
-        local_tag = ""
+        
+        # --- Paso 1: Comprobar existencia de archivos locales ---
         ffmpeg_path = os.path.join(FFMPEG_BIN_DIR, "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg")
+        ffmpeg_exists = os.path.exists(ffmpeg_path)
+        
+        deno_exe_name = "deno.exe" if platform.system() == "Windows" else "deno"
+        deno_path = os.path.join(DENO_BIN_DIR, deno_exe_name)
+        deno_exists = os.path.exists(deno_path)
+
+        # --- Paso 2: Obtener versiones locales ---
+        local_tag = ""
         if os.path.exists(FFMPEG_VERSION_FILE):
             with open(FFMPEG_VERSION_FILE, 'r') as f:
                 local_tag = f.read().strip()
+
+        local_deno_tag = ""
+        if os.path.exists(DENO_VERSION_FILE):
+            with open(DENO_VERSION_FILE, 'r') as f:
+                local_deno_tag = f.read().strip()
+
+        # --- Paso 3: Intentar obtener información de la API ---
+        # (Estos pueden ser None si falla la conexión)
+        latest_tag, download_url = get_latest_ffmpeg_info(progress_callback)
+        latest_deno_tag, deno_download_url = get_latest_deno_info(progress_callback)
+
+        # --- Paso 4: Construir el diccionario de estado FINAL ---
+        # Este diccionario siempre se devuelve, incluso si las API fallan.
         return {
-            "status": "success",
-            "ffmpeg_path_exists": os.path.exists(ffmpeg_path),
+            "status": "success", # <-- Siempre es 'success' si Python está bien
+            
+            "ffmpeg_path_exists": ffmpeg_exists,
             "local_version": local_tag,
-            "latest_version": latest_tag,
-            "download_url": download_url
+            "latest_version": latest_tag,     # (puede ser None)
+            "download_url": download_url,     # (puede ser None)
+            
+            "deno_path_exists": deno_exists,
+            "local_deno_version": local_deno_tag,
+            "latest_deno_version": latest_deno_tag, # (puede ser None)
+            "deno_download_url": deno_download_url  # (puede ser None)
         }
+        
     except Exception as e:
         return {"status": "error", "message": f"Error en la verificación del entorno: {e}"}
     

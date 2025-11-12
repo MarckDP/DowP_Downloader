@@ -13,6 +13,7 @@ else:
 
 BIN_DIR = os.path.join(PROJECT_ROOT, "bin")
 FFMPEG_BIN_DIR = os.path.join(BIN_DIR, "ffmpeg")
+DENO_BIN_DIR = os.path.join(BIN_DIR, "deno")
 
 class SingleInstance:
     def __init__(self):
@@ -112,6 +113,10 @@ if __name__ == "__main__":
     # Añadir el subdirectorio de FFmpeg
     if os.path.isdir(FFMPEG_BIN_DIR) and FFMPEG_BIN_DIR not in os.environ['PATH']:
         os.environ['PATH'] = FFMPEG_BIN_DIR + os.pathsep + os.environ['PATH']
+
+    # Añadir el subdirectorio de Deno 
+    if os.path.isdir(DENO_BIN_DIR) and DENO_BIN_DIR not in os.environ['PATH']:
+        os.environ['PATH'] = DENO_BIN_DIR + os.pathsep + os.environ['PATH']
         
     print("Iniciando la aplicación...")
     launch_target = sys.argv[1] if len(sys.argv) > 1 else None
