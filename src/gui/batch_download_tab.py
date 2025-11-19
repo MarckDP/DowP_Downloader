@@ -9,15 +9,24 @@ import yt_dlp
 import io
 import time
 
+from tkinter import StringVar, Menu 
+from customtkinter import filedialog
 from contextlib import redirect_stdout
+
 from src.core.exceptions import UserCancelledError 
 from src.core.downloader import get_video_info
 from src.core.batch_processor import Job
-from .dialogs import Tooltip 
+from .dialogs import Tooltip, messagebox 
 
 import requests
 from PIL import Image
 from io import BytesIO
+
+try:
+    from tkinterdnd2 import DND_FILES
+except ImportError:
+    print("ERROR: tkinterdnd2 no encontrado en batch_tab")
+    DND_FILES = None
 
 
 # Define widget types that can be disabled
@@ -111,7 +120,14 @@ class BatchDownloadTab(ctk.CTkFrame):
 
         self.analyze_button = ctk.CTkButton(self.input_frame, text="Analizar", width=100, command=self._on_analyze_click)
         self.analyze_button.grid(row=0, column=2, padx=5, pady=0)
-        self.import_button = ctk.CTkButton(self.input_frame, text="Importar", width=100, state="normal", command=self._on_import_local_files_click)
+        # ✅ CAMBIO: El comando ahora abre un menú de opciones
+        self.import_button = ctk.CTkButton(
+            self.input_frame, 
+            text="Importar ▼", # Indicador visual de menú
+            width=100, 
+            state="normal", 
+            command=self._show_import_menu # Nueva función
+        )
         self.import_button.grid(row=0, column=3, padx=(0, 10), pady=0)
 
         import_tooltip_text = "Activa el modo de recodificación local.\nPermite seleccionar múltiples archivos de video/audio de tu PC para añadirlos a la cola y procesarlos."
@@ -271,10 +287,41 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.global_recode_preset_menu.pack(side="left", padx=(0, 5))
 
         # --- 4. Panel de Cola (IZQUIERDA) ---
-        self.queue_scroll_frame = ctk.CTkScrollableFrame(self)
+        self.queue_scroll_frame = ctk.CTkScrollableFrame(
+            self, 
+            fg_color="#1D1D1D", 
+            border_width=1, 
+            border_color="#565B5E"
+        )
         self.queue_scroll_frame.grid(row=3, column=0, padx=(10, 5), pady=(0, 10), sticky="nsew")
-        self.queue_placeholder_label = ctk.CTkLabel(self.queue_scroll_frame, text="Aquí aparecerá la cola de trabajos...", font=ctk.CTkFont(size=14))
+        
+        self.queue_placeholder_label = ctk.CTkLabel(
+            self.queue_scroll_frame, 
+            text="Arrastra videos/carpetas aquí\no pega una URL arriba", 
+            font=ctk.CTkFont(size=14),
+            text_color="gray"
+        )
         self.queue_placeholder_label.pack(expand=True, pady=50, padx=20)
+
+        # ✅ SOLUCIÓN DRAG & DROP BLOQUEADO
+        if DND_FILES:
+            try:
+                # 1. Registrar el marco principal
+                self.queue_scroll_frame.drop_target_register(DND_FILES)
+                self.queue_scroll_frame.dnd_bind('<<Drop>>', self._on_batch_drop)
+                
+                # 2. CRÍTICO: Registrar el CANVAS INTERNO (donde realmente ocurre el drop)
+                # En CTk, el canvas se llama _parent_canvas
+                self.queue_scroll_frame._parent_canvas.drop_target_register(DND_FILES)
+                self.queue_scroll_frame._parent_canvas.dnd_bind('<<Drop>>', self._on_batch_drop)
+                
+                # 3. Registrar la etiqueta de texto (Empty State)
+                self.queue_placeholder_label.drop_target_register(DND_FILES)
+                self.queue_placeholder_label.dnd_bind('<<Drop>>', self._on_batch_drop)
+                
+                print("DEBUG: Drag & Drop activado en TODAS las capas de la cola")
+            except Exception as e:
+                print(f"ADVERTENCIA: No se pudo activar DnD en lotes: {e}")
         
         # --- 5. Panel de Configuración (DERECHA) ---
         self.config_panel = ctk.CTkFrame(self)
@@ -956,6 +1003,11 @@ class BatchDownloadTab(ctk.CTkFrame):
             self.create_placeholder_label(self.thumbnail_container, "Miniatura")
         
         if not self.job_widgets:
+            # ✅ RESTAURAR TEXTO ORIGINAL
+            self.queue_placeholder_label.configure(
+                text="Arrastra videos/carpetas aquí\no pega una URL arriba"
+            )
+            
             self.queue_placeholder_label.pack(expand=True, pady=50, padx=20)
             self.start_queue_button.configure(state="disabled")
             self.progress_label.configure(text="Cola vacía. Analiza una URL para empezar.")
@@ -1178,17 +1230,18 @@ class BatchDownloadTab(ctk.CTkFrame):
                 self._populate_batch_preset_menu()
                 
                 # Mostrar u ocultar el frame de opciones DIRECTAMENTE
+                # Mostrar u ocultar el frame de opciones DIRECTAMENTE
                 if is_recode_enabled:
                     self.batch_quick_recode_options_frame.pack(fill="x", padx=0, pady=0)
-                    self.batch_keep_original_quick_checkbox.configure(state="normal")
+                    # Para modo local, la casilla siempre debe estar deshabilitada y seleccionada
+                    self.batch_keep_original_quick_checkbox.select()
+                    self.batch_keep_original_quick_checkbox.configure(state="disabled")
                 else:
                     self.batch_quick_recode_options_frame.pack_forget()
                     self.batch_keep_original_quick_checkbox.configure(state="disabled")
                 
-                # --- AÑADIR ESTA LÍNEA ---
                 # Validar compatibilidad del preset con multipista
                 self._validate_batch_recode_compatibility()
-                # --- FIN DE MODIFICACIÓN ---
             
             # La lógica original para "DOWNLOAD" (yt-dlp) continúa aquí abajo
             else:
@@ -2858,7 +2911,17 @@ class BatchDownloadTab(ctk.CTkFrame):
         """
         if self.batch_apply_quick_preset_checkbox.get() == 1:
             self.batch_quick_recode_options_frame.pack(fill="x", padx=0, pady=0)
-            self.batch_keep_original_quick_checkbox.configure(state="normal") 
+
+            # --- INICIO DE CORRECCIÓN ---
+            # Comprobar si estamos en modo local ANTES de habilitar
+            job = self.queue_manager.get_job_by_id(self.selected_job_id)
+            if job and job.job_type == "LOCAL_RECODE":
+                self.batch_keep_original_quick_checkbox.select()
+                self.batch_keep_original_quick_checkbox.configure(state="disabled")
+            else:
+                self.batch_keep_original_quick_checkbox.configure(state="normal")
+            # --- FIN DE CORRECCIÓN ---
+            
         else:
             self.batch_quick_recode_options_frame.pack_forget()
             self.batch_keep_original_quick_checkbox.configure(state="disabled")
@@ -3182,6 +3245,49 @@ class BatchDownloadTab(ctk.CTkFrame):
 
             self.progress_label.configure(text="Cola vacía. Analiza una URL para empezar.")
 
+    def _show_import_menu(self):
+        """Despliega un menú para elegir entre archivos o carpeta."""
+        menu = Menu(self, tearoff=0)
+        menu.add_command(label="Seleccionar Archivos...", command=self._on_import_local_files_click)
+        menu.add_command(label="Escanear Carpeta Completa...", command=self._import_folder_action)
+        
+        # Mostrar debajo del botón
+        try:
+            x = self.import_button.winfo_rootx()
+            y = self.import_button.winfo_rooty() + self.import_button.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _import_folder_action(self):
+        """Pide una carpeta y lanza el escaneo en segundo plano."""
+        folder_path = filedialog.askdirectory(title="Seleccionar carpeta para analizar")
+        
+        # Recuperar foco
+        self.app.lift()
+        self.app.focus_force()
+        
+        if not folder_path:
+            return
+
+        # Preparar UI
+        if not self.is_local_mode:
+            self._on_clear_list_click()
+            self._set_local_batch_mode(True)
+            
+        if self.queue_placeholder_label.winfo_ismapped():
+            self.queue_placeholder_label.pack_forget()
+
+        print(f"INFO: Escaneando carpeta seleccionada: {folder_path}")
+        
+        # Reutilizar el hilo de escaneo que ya creamos para el Drop
+        # pero envolviendo la ruta en una lista
+        threading.Thread(
+            target=self._scan_batch_drop_thread, # Reutilizamos la lógica de escaneo
+            args=([folder_path],), # Pasamos la carpeta como una lista de 1 elemento
+            daemon=True
+        ).start()
+
     def _on_import_local_files_click(self):
         """
         Abre el diálogo para seleccionar múltiples archivos locales
@@ -3423,3 +3529,90 @@ class BatchDownloadTab(ctk.CTkFrame):
             return f"{num / den:.2f}"
         except (ValueError, TypeError):
             return "FPS N/A"
+        
+    def _on_batch_drop(self, event):
+        """
+        Maneja archivos/carpetas soltados en la cola de lotes.
+        """
+        try:
+            paths = self.tk.splitlist(event.data)
+            if not paths: return
+
+            print(f"INFO: Drop en Lotes detectado ({len(paths)} elementos). Escaneando...")
+            
+            # Feedback visual
+            if self.queue_placeholder_label.winfo_ismapped():
+                self.queue_placeholder_label.configure(text="Escaneando archivos...")
+
+            # Lanzar hilo de escaneo
+            threading.Thread(
+                target=self._scan_batch_drop_thread,
+                args=(paths,),
+                daemon=True
+            ).start()
+            
+        except Exception as e:
+            print(f"ERROR en Batch Drag & Drop: {e}")
+
+    def _scan_batch_drop_thread(self, paths):
+        """
+        (HILO) Escanea rutas buscando videos/audios válidos.
+        Funciona para Drops y para Importar Carpeta.
+        """
+        valid_files = []
+        # Extensiones permitidas
+        valid_exts = self.app.VIDEO_EXTENSIONS.union(self.app.AUDIO_EXTENSIONS)
+        
+        try:
+            for path in paths:
+                path = path.strip('"')
+                
+                if os.path.isfile(path):
+                    ext = os.path.splitext(path)[1].lower().lstrip('.')
+                    if ext in valid_exts:
+                        valid_files.append(path)
+                
+                elif os.path.isdir(path):
+                    print(f"DEBUG: Escaneando carpeta: {path}")
+                    for root, _, filenames in os.walk(path):
+                        for f in filenames:
+                            ext = os.path.splitext(f)[1].lower().lstrip('.')
+                            if ext in valid_exts:
+                                full_path = os.path.join(root, f)
+                                valid_files.append(full_path)
+            
+            if valid_files:
+                print(f"INFO: Se encontraron {len(valid_files)} archivos multimedia válidos.")
+                self.app.after(0, self._handle_dropped_batch_files, valid_files)
+            else:
+                print("INFO: No se encontraron archivos multimedia válidos.")
+                self.app.after(0, lambda: messagebox.showinfo("Sin resultados", "No se encontraron archivos de video/audio compatibles en la selección."))
+                # Restaurar label si estaba vacío
+                if not self.job_widgets:
+                     self.app.after(0, lambda: self.queue_placeholder_label.pack(expand=True, pady=50, padx=20))
+
+        except Exception as e:
+            print(f"ERROR escaneando: {e}")
+
+    def _handle_dropped_batch_files(self, filepaths):
+        """
+        (UI PRINCIPAL) Configura el modo local y lanza el análisis.
+        """
+        # 1. Si NO estamos en modo local, cambiar y limpiar la cola anterior
+        if not self.is_local_mode:
+            print("INFO: Drop detectado -> Cambiando a Modo Local automáticamente.")
+            self._on_clear_list_click() # Limpiar residuos
+            self._set_local_batch_mode(True) # Activar UI local
+            
+        # 2. Ocultar el placeholder
+        if self.queue_placeholder_label.winfo_ismapped():
+            self.queue_placeholder_label.pack_forget()
+            
+        # 3. Lanzar el análisis (reutilizamos tu función existente)
+        threading.Thread(
+            target=self._run_local_file_analysis, 
+            args=(filepaths,), 
+            daemon=True
+        ).start()
+
+    

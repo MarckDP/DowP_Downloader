@@ -483,10 +483,12 @@ class FFmpegProcessor:
             stderr_reader_thread.start()
             while process.poll() is None:
                 if cancellation_event.is_set():
+                    # ESTA ES LA LÓGICA DE CANCELACIÓN DE single_tab
+                    self.cancel_current_process()
                     raise UserCancelledError("Recodificación cancelada por el usuario.")
-                time.sleep(0.2) 
+                time.sleep(0.1) # Usar un tiempo de espera más corto
             stdout_reader_thread.join()
-            stderr_reader_thread.join() 
+            stderr_reader_thread.join()
             if process.returncode != 0 and not cancellation_event.is_set():
                 full_error_log = " ".join(error_output_buffer)
                 print(f"\n--- ERROR DETALLADO DE FFmpeg ---\n{full_error_log}\n---------------------------------\n")
@@ -605,6 +607,139 @@ class FFmpegProcessor:
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             print(f"ERROR: No se pudo extraer el fotograma: {e}")
             return None
+        
+    def execute_video_to_images(self, options, progress_callback, cancellation_event: threading.Event):
+            """
+            Convierte un archivo de video en una secuencia de imágenes (ej. JPG o PNG).
+            """
+            process = None
+            try:
+                if cancellation_event.is_set():
+                    raise UserCancelledError("Extracción cancelada por el usuario antes de iniciar.")
+                    
+                input_file = options['input_file']
+                output_folder = os.path.normpath(options['output_folder'])
+                image_format = options.get('image_format', 'png')
+                fps = options.get('fps')
+                jpg_quality = options.get('jpg_quality', '2')  # String por defecto
+
+                # Validar calidad JPG
+                try:
+                    jpg_quality_int = int(jpg_quality)
+                    if not (1 <= jpg_quality_int <= 31):
+                        jpg_quality = '2'  # Fallback a calidad alta
+                except (ValueError, TypeError):
+                    jpg_quality = '2'
+
+                # 1. Asegurarse de que la carpeta de salida exista
+                os.makedirs(output_folder, exist_ok=True)
+                
+                # 2. Construir el comando
+                command = [self.ffmpeg_path, '-y', '-nostdin', '-progress', '-']
+                
+                pre_params = options.get('pre_params', [])
+                if pre_params:
+                    command.extend(pre_params)
+                
+                command.extend(['-i', input_file])
+                
+                final_params = []
+                
+                # 3. Añadir filtro de FPS (si se especificó)
+                if fps:
+                    try:
+                        fps_value = float(fps)
+                        final_params.extend(['-vf', f"fps={fps_value}"])
+                        print(f"INFO: Extrayendo a {fps_value} FPS.")
+                    except (ValueError, TypeError):
+                        print("INFO: FPS inválido, extrayendo todos los fotogramas.")
+                else:
+                    print("INFO: Extrayendo todos los fotogramas (FPS no especificado).")
+                
+                # 4. Añadir opciones de formato de imagen
+                if image_format == 'jpg':
+                    final_params.extend(['-q:v', str(jpg_quality)])
+                    output_pattern = "frame_%06d.jpg"
+                else:  # PNG
+                    output_pattern = "frame_%06d.png"
+
+                command.extend(final_params)
+                command.append(os.path.join(output_folder, output_pattern))
+                
+                print("--- Comando FFmpeg para Extracción de Imágenes ---")
+                print(" ".join(command))
+                print("-------------------------------------------------")
+                
+                # 5. Obtener duración
+                try:
+                    media_info = self.get_local_media_info(input_file)
+                    actual_duration = float(media_info['format']['duration'])
+                except Exception:
+                    actual_duration = options.get('duration', 0)
+
+                # 6. Ejecutar el proceso
+                creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                error_output_buffer = []
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.PIPE, 
+                    text=True, 
+                    encoding='utf-8', 
+                    errors='ignore', 
+                    creationflags=creationflags
+                )
+                self.current_process = process
+
+                def read_stream_into_buffer(stream, buffer):
+                    for line in iter(stream.readline, ''):
+                        buffer.append(line.strip())
+                
+                stdout_reader_thread = threading.Thread(
+                    target=self._read_stdout_for_progress, 
+                    args=(process.stdout, progress_callback, cancellation_event, actual_duration), 
+                    daemon=True
+                )
+                stderr_reader_thread = threading.Thread(
+                    target=read_stream_into_buffer, 
+                    args=(process.stderr, error_output_buffer), 
+                    daemon=True
+                )
+                
+                stdout_reader_thread.start()
+                stderr_reader_thread.start()
+                
+                while process.poll() is None:
+                    if cancellation_event.is_set():
+                        self.cancel_current_process()
+                        raise UserCancelledError("Extracción cancelada por el usuario.")
+                    time.sleep(0.1)
+                
+                stdout_reader_thread.join()
+                stderr_reader_thread.join()
+                
+                if process.returncode != 0 and not cancellation_event.is_set():
+                    full_error_log = " ".join(error_output_buffer)
+                    print(f"\n--- ERROR DETALLADO DE FFmpeg ---\n{full_error_log}\n---------------------------------\n")
+                    raise Exception(f"FFmpeg falló (ver consola para detalles técnicos).")
+                
+                if cancellation_event.is_set():
+                    raise UserCancelledError("Extracción cancelada por el usuario.")
+                
+                # 7. Éxito: Devolver la RUTA DE LA CARPETA
+                return output_folder
+                
+            except UserCancelledError as e:
+                self.cancel_current_process()
+                raise e
+            except Exception as e:
+                self.cancel_current_process()
+                raise Exception(f"Error en extracción de imágenes: {e}")
+            finally:
+                if process:
+                    if process.stdout: process.stdout.close()
+                    if process.stderr: process.stderr.close()
+                self.current_process = None
 
 def clean_and_convert_vtt_to_srt(input_path):
     """
@@ -712,3 +847,4 @@ def clean_and_convert_vtt_to_srt(input_path):
     except Exception as e:
         print(f"ERROR al limpiar subtítulo: {e}")
         return input_path
+    

@@ -1,12 +1,37 @@
 import customtkinter as ctk
 import tkinter
 import re
+import os
+import sys
+
 from tkinter import messagebox
+
+def resource_path(relative_path):
+    """Obtiene la ruta absoluta al recurso (para dev y exe)."""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+def apply_icon(window):
+    """Aplica el icono a una ventana con un retraso para evitar sobreescritura de CTk."""
+    def _set():
+        try:
+            # Ruta relativa directa, asumiendo que DowP-icon.ico está en la raíz junto a main.py
+            # Si usas resource_path, asegúrate de que la ruta sea correcta.
+            icon_path = resource_path("DowP-icon.ico") 
+            window.iconbitmap(icon_path)
+        except Exception:
+            pass
+        
+    window.after(200, _set)
 
 class ConflictDialog(ctk.CTkToplevel):
     def __init__(self, master, filename):
         super().__init__(master)
         self.title("Conflicto de Archivo")
+        apply_icon(self)
         self.lift()
         self.attributes("-topmost", True)
         self.grab_set()
@@ -43,6 +68,7 @@ class LoadingWindow(ctk.CTkToplevel):
     def __init__(self, master):
         super().__init__(master)
         self.title("Iniciando...")
+        apply_icon(self)
         self.geometry("350x120")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", lambda: None) 
@@ -68,6 +94,7 @@ class CompromiseDialog(ctk.CTkToplevel):
         def __init__(self, master, details_message):
             super().__init__(master)
             self.title("Calidad no Disponible")
+            apply_icon(self)
             self.lift()
             self.attributes("-topmost", True)
             self.grab_set()
@@ -109,6 +136,7 @@ class SimpleMessageDialog(ctk.CTkToplevel):
         def __init__(self, master, title, message):
             super().__init__(master)
             self.title(title)
+            apply_icon(self)
             self.lift()
             self.attributes("-topmost", True)
             self.grab_set()
@@ -131,6 +159,7 @@ class SavePresetDialog(ctk.CTkToplevel):
         def __init__(self, master):
             super().__init__(master)
             self.title("Guardar ajuste prestablecido")
+            apply_icon(self)
             self.lift()
             self.attributes("-topmost", True)
             self.grab_set()
@@ -201,6 +230,7 @@ class PlaylistErrorDialog(ctk.CTkToplevel):
     def __init__(self, master, url_fragment):
         super().__init__(master)
         self.title("Error de Playlist")
+        apply_icon(self)
         self.lift()
         self.attributes("-topmost", True)
         self.grab_set()
@@ -256,6 +286,7 @@ class Tooltip:
     """
     Crea un tooltip emergente para cualquier widget de CustomTkinter.
     Se muestra después de un retraso y se oculta al salir el mouse.
+    MEJORADO: Ajusta automáticamente su posición para no salirse de la pantalla.
     """
     def __init__(self, widget, text, delay_ms=2000, wraplength=300):
         self.widget = widget
@@ -282,8 +313,45 @@ class Tooltip:
         self.cancel_timer()
         self.timer_id = self.widget.after(self.delay, self.show_tooltip)
 
+    def _get_monitor_bounds(self, x_mouse, y_mouse):
+        """
+        Detecta los límites del monitor donde está el cursor.
+        Retorna (x_min, y_min, x_max, y_max) del monitor actual.
+        """
+        try:
+            # Intentar obtener info de todos los monitores usando tkinter
+            root = self.widget.winfo_toplevel()
+            
+            # Obtener la geometría de la ventana raíz para calcular monitor virtual completo
+            screen_width = root.winfo_screenwidth()
+            screen_height = root.winfo_screenheight()
+            
+            # Para sistemas multi-monitor, necesitamos calcular en qué monitor está el cursor
+            # Si x_mouse está fuera de la pantalla principal, ajustamos los límites
+            
+            # Detectar el ancho de un solo monitor (asumiendo monitores del mismo tamaño)
+            # En la mayoría de configuraciones, cada monitor tiene el mismo ancho
+            
+            # Calcular en qué "monitor virtual" está el cursor
+            # (esto funciona para configuraciones horizontales estándar)
+            monitor_index = x_mouse // screen_width
+            
+            # Calcular límites del monitor actual
+            monitor_x_min = monitor_index * screen_width
+            monitor_x_max = (monitor_index + 1) * screen_width
+            monitor_y_min = 0
+            monitor_y_max = screen_height
+            
+            return (monitor_x_min, monitor_y_min, monitor_x_max, monitor_y_max)
+            
+        except Exception:
+            # Si falla, usar las dimensiones completas de la pantalla
+            screen_width = self.widget.winfo_screenwidth()
+            screen_height = self.widget.winfo_screenheight()
+            return (0, 0, screen_width, screen_height)
+
     def show_tooltip(self):
-        """Crea y muestra la ventana del tooltip."""
+        """Crea y muestra la ventana del tooltip con posicionamiento inteligente multi-monitor."""
         
         # Colores (ajustados para el tema oscuro)
         bg_color = "#131212"
@@ -295,11 +363,10 @@ class Tooltip:
             
             # Crear la ventana emergente
             self.tooltip_window = ctk.CTkToplevel(self.widget)
-            self.tooltip_window.overrideredirect(True) # Sin barra de título
+            self.tooltip_window.overrideredirect(True)  # Sin barra de título
             self.tooltip_window.configure(fg_color=bg_color)
 
-            # --- CORRECCIÓN ---
-            # 1. Crear un Frame que SÍ acepta bordes
+            # Crear un Frame que SÍ acepta bordes
             frame = ctk.CTkFrame(
                 self.tooltip_window,
                 fg_color=bg_color,
@@ -309,11 +376,11 @@ class Tooltip:
             )
             frame.pack()
 
-            # 2. Crear la Etiqueta DENTRO del frame, sin bordes
+            # Crear la Etiqueta DENTRO del frame, sin bordes
             label = ctk.CTkLabel(
-                frame, # <-- Poner la etiqueta dentro del frame
+                frame,
                 text=self.text,
-                fg_color="transparent", # <-- Hacer transparente para mostrar el color del frame
+                fg_color="transparent",
                 text_color=fg_color,
                 padx=8,
                 pady=5,
@@ -322,7 +389,6 @@ class Tooltip:
                 justify="left"
             )
             label.pack()
-            # --- FIN CORRECCIÓN ---
             
             # Ocultar la ventana inicialmente para calcular su posición
             self.tooltip_window.withdraw()
@@ -330,26 +396,273 @@ class Tooltip:
         # Forzar a la ventana a calcular su tamaño
         self.tooltip_window.update_idletasks() 
 
-        # Calcular la posición
-        x_mouse = self.widget.winfo_pointerx() # Posición X del mouse
-        y_mouse = self.widget.winfo_pointery() # Posición Y del mouse
+        # Obtener dimensiones del tooltip
+        tooltip_width = self.tooltip_window.winfo_reqwidth()
+        tooltip_height = self.tooltip_window.winfo_reqheight()
+
+        # Obtener posición del mouse
+        x_mouse = self.widget.winfo_pointerx()
+        y_mouse = self.widget.winfo_pointery()
         
-        # Posicionar la ventana 15px a la derecha y 10px debajo del cursor
-        x = x_mouse + 15
-        y = y_mouse + 10
+        # Obtener límites del monitor donde está el cursor
+        monitor_x_min, monitor_y_min, monitor_x_max, monitor_y_max = self._get_monitor_bounds(x_mouse, y_mouse)
+        
+        # Offsets predeterminados (tooltip a la derecha y abajo del cursor)
+        offset_x = 15
+        offset_y = 10
+        margin = 10  # Margen desde los bordes
+        
+        # Calcular posición inicial
+        x = x_mouse + offset_x
+        y = y_mouse + offset_y
+        
+        # AJUSTE HORIZONTAL: Si se sale por la derecha del monitor actual
+        if x + tooltip_width > monitor_x_max - margin:
+            x = x_mouse - tooltip_width - offset_x
+            
+            # Si aún así se sale por la izquierda del monitor actual
+            if x < monitor_x_min + margin:
+                x = max(monitor_x_min + margin, x_mouse - tooltip_width // 2)
+        
+        # AJUSTE VERTICAL: Si se sale por abajo del monitor actual
+        if y + tooltip_height > monitor_y_max - margin:
+            y = y_mouse - tooltip_height - offset_y
+            
+            # Si aún así se sale por arriba del monitor actual
+            if y < monitor_y_min + margin:
+                y = max(monitor_y_min + margin, y_mouse - tooltip_height // 2)
+        
+        # Asegurar que nunca quede fuera de los límites del monitor actual
+        x = max(monitor_x_min + margin, min(x, monitor_x_max - tooltip_width - margin))
+        y = max(monitor_y_min + margin, min(y, monitor_y_max - tooltip_height - margin))
         
         self.tooltip_window.geometry(f"+{x}+{y}")
         self.tooltip_window.lift()
-        self.tooltip_window.deiconify() # Mostrar la ventana
+        self.tooltip_window.deiconify()  # Mostrar la ventana
 
     def hide_tooltip(self):
         """Cancela el temporizador y oculta la ventana."""
         self.cancel_timer()
         if self.tooltip_window and self.tooltip_window.winfo_exists():
-            self.tooltip_window.withdraw() # Ocultar la ventana
+            self.tooltip_window.withdraw()  # Ocultar la ventana
 
     def cancel_timer(self):
         """Cancela el trabajo 'after' pendiente, si existe."""
         if self.timer_id:
             self.widget.after_cancel(self.timer_id)
             self.timer_id = None
+
+    def hide_tooltip(self):
+        """Cancela el temporizador y oculta la ventana."""
+        self.cancel_timer()
+        if self.tooltip_window and self.tooltip_window.winfo_exists():
+            self.tooltip_window.withdraw()  # Ocultar la ventana
+
+    def cancel_timer(self):
+        """Cancela el trabajo 'after' pendiente, si existe."""
+        if self.timer_id:
+            self.widget.after_cancel(self.timer_id)
+            self.timer_id = None
+
+class CTkColorPicker(ctk.CTkToplevel):
+    """
+    Diálogo emergente para seleccionar un color.
+    (Basado en el widget de utilidad oficial de CustomTkinter)
+    """
+    def __init__(self,
+                 master=None,
+                 width: int = 430,
+                 height: int = 320,
+                 title: str = "Color Picker",
+                 initial_color: str = "#FFFFFF",
+                 command=None):
+        
+        super().__init__(master=master)
+        
+        self.title(title)
+        self.lift()
+        self.attributes("-topmost", True)
+        self.grab_set()
+        self.resizable(False, False)
+        self.geometry(f"{width}x{height}")
+        
+        self.command = command
+        self._hex_color = initial_color
+        self._rgb_color = self._hex_to_rgb(initial_color)
+
+        # --- Frames ---
+        self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        self.slider_frame = ctk.CTkFrame(self.main_frame)
+        self.slider_frame.pack(fill="x", pady=(0, 10))
+
+        self.preview_frame = ctk.CTkFrame(self.main_frame)
+        self.preview_frame.pack(fill="x")
+
+        # --- Sliders ---
+        self.r_slider = self._create_slider("R:", (0, 255), self.slider_frame)
+        self.g_slider = self._create_slider("G:", (0, 255), self.slider_frame)
+        self.b_slider = self._create_slider("B:", (0, 255), self.slider_frame)
+
+        # --- Vista Previa y Entradas ---
+        self.preview_box = ctk.CTkFrame(self.preview_frame, height=50, border_width=2)
+        self.preview_box.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        
+        self.hex_entry = ctk.CTkEntry(self.preview_frame, width=100)
+        self.hex_entry.pack(side="left")
+        
+        self.ok_button = ctk.CTkButton(self.main_frame, text="OK", command=self._ok_event)
+        self.ok_button.pack(side="bottom", fill="x", pady=(10, 0))
+
+        # Bindings
+        self.r_slider.bind("<ButtonRelease-1>", self._update_from_sliders)
+        self.g_slider.bind("<ButtonRelease-1>", self._update_from_sliders)
+        self.b_slider.bind("<ButtonRelease-1>", self._update_from_sliders)
+        self.hex_entry.bind("<Return>", self._update_from_hex)
+
+        # Estado inicial
+        self._update_ui_from_rgb(self._rgb_color)
+        self.after(10, self.hex_entry.focus) # Dar foco al entry
+
+    def _create_slider(self, text, range_, parent):
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frame.pack(fill="x", padx=5, pady=5)
+        
+        label = ctk.CTkLabel(frame, text=text, width=20)
+        label.pack(side="left")
+        
+        slider = ctk.CTkSlider(frame, from_=range_[0], to=range_[1], number_of_steps=range_[1])
+        slider.pack(side="left", fill="x", expand=True, padx=10)
+        
+        return slider
+
+    def _hex_to_rgb(self, hex_color):
+        hex_clean = hex_color.lstrip('#')
+        return tuple(int(hex_clean[i:i+2], 16) for i in (0, 2, 4))
+
+    def _rgb_to_hex(self, rgb_color):
+        r, g, b = rgb_color
+        return f"#{r:02x}{g:02x}{b:02x}".upper()
+
+    def _update_ui_from_rgb(self, rgb_color):
+        r, g, b = rgb_color
+        
+        self._hex_color = self._rgb_to_hex(rgb_color)
+        
+        self.r_slider.set(r)
+        self.g_slider.set(g)
+        self.b_slider.set(b)
+        
+        self.hex_entry.delete(0, "end")
+        self.hex_entry.insert(0, self._hex_color)
+        
+        self.preview_box.configure(fg_color=self._hex_color)
+
+    def _update_from_sliders(self, event=None):
+        r = int(self.r_slider.get())
+        g = int(self.g_slider.get())
+        b = int(self.b_slider.get())
+        
+        self._rgb_color = (r, g, b)
+        self._update_ui_from_rgb(self._rgb_color)
+
+    def _update_from_hex(self, event=None):
+        hex_str = self.hex_entry.get()
+        try:
+            self._rgb_color = self._hex_to_rgb(hex_str)
+            self._update_ui_from_rgb(self._rgb_color)
+        except Exception:
+            # Si el color es inválido, resetea al color anterior
+            self.hex_entry.delete(0, "end")
+            self.hex_entry.insert(0, self._hex_color)
+
+    def _ok_event(self, event=None):
+        self._update_from_hex() # Asegura que el color del entry se aplique
+        
+        if self.command:
+            self.command(self._hex_color)
+        
+        self.grab_release()
+        self.destroy()
+
+    def get(self):
+        self.master.wait_window(self)
+        return self._hex_color
+
+class MultiPageDialog(ctk.CTkToplevel):
+    """
+    Diálogo que pregunta al usuario qué páginas de un documento
+    de múltiples páginas desea importar.
+    """
+    def __init__(self, master, filename, page_count):
+        super().__init__(master)
+        self.title("Documento de Múltiples Páginas")
+        self.lift()
+        self.attributes("-topmost", True)
+        self.grab_set()
+        
+        self.result = None # Aquí guardaremos el string del rango
+
+        win_width = 450
+        win_height = 270
+        
+        # Centrar la ventana (código de tus otros diálogos)
+        self.resizable(False, False)
+        self.update_idletasks()
+        
+        master_geo = self.master.app.geometry() 
+        
+        master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
+        pos_x = master_x + (master_width // 2) - (win_width // 2)
+        pos_y = master_y + (master_height // 2) - (win_height // 2)
+        self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+
+        container = ctk.CTkFrame(self, fg_color="transparent")
+        container.pack(padx=20, pady=20, fill="both", expand=True)
+
+        label_info = ctk.CTkLabel(container, text=f"El archivo '{filename}' contiene {page_count} páginas.", 
+                                  font=ctk.CTkFont(size=14),
+                                  wraplength=410, # <-- Añadir esta línea (450 - 40 de padding)
+                                  justify="left") # <-- Añadir esta línea
+        label_info.pack(pady=(0, 10), anchor="w")
+
+        label_prompt = ctk.CTkLabel(container, text="¿Qué páginas deseas importar?", font=ctk.CTkFont(size=13, weight="bold"))
+        label_prompt.pack(pady=(5, 5), anchor="w")
+
+        self.range_entry = ctk.CTkEntry(container, placeholder_text="Ej: 1-5, 8, 11-15")
+        self.range_entry.pack(fill="x", pady=5)
+        self.range_entry.focus() # Dar foco al campo de texto
+        self.range_entry.bind("<Return>", lambda e: self.set_result(self.range_entry.get()))
+        
+        label_example = ctk.CTkLabel(container, text="Separa rangos o páginas con comas.", text_color="gray", font=ctk.CTkFont(size=11))
+        label_example.pack(anchor="w", padx=5)
+
+        button_frame = ctk.CTkFrame(container, fg_color="transparent")
+        button_frame.pack(pady=15, fill="x", side="bottom")
+        button_frame.grid_columnconfigure((0, 1, 2), weight=1)
+
+        btn_first = ctk.CTkButton(button_frame, text="Solo Pág. 1", command=lambda: self.set_result("1"))
+        btn_first.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+        
+        btn_all = ctk.CTkButton(button_frame, text=f"Todas ({page_count})", command=lambda: self.set_result(f"1-{page_count}"))
+        btn_all.grid(row=0, column=1, padx=5, sticky="ew")
+
+        # Usar los colores del botón de proceso de la app principal
+        btn_accept = ctk.CTkButton(button_frame, text="Aceptar Rango", 
+                                  command=lambda: self.set_result(self.range_entry.get()),
+                                  fg_color="#6F42C1", hover_color="#59369A")
+        btn_accept.grid(row=0, column=2, padx=(5, 0), sticky="ew")
+
+    def set_result(self, range_string):
+        if not range_string.strip():
+            messagebox.showwarning("Rango vacío", "Por favor, especifica un rango (ej: '1-5') o usa los botones.", parent=self)
+            return
+            
+        self.result = range_string.strip()
+        self.destroy()
+
+    def get_result(self):
+        """Espera a que el diálogo se cierre y devuelve el resultado."""
+        self.master.wait_window(self)
+        return self.result

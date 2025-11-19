@@ -21,6 +21,24 @@ import shutil
 import platform
 import yt_dlp
 import io
+from packaging import version
+
+try:
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+    TKDND_AVAILABLE = True
+    
+    # ✅ Crear una clase híbrida
+    class TkBase(TkinterDnD.Tk):
+        """Clase base que combina TkinterDnD con CustomTkinter"""
+        pass
+    
+except ImportError:
+    TKDND_AVAILABLE = False
+    print("ADVERTENCIA: tkinterdnd2 no instalado. Drag & Drop deshabilitado.")
+    
+    # Fallback a CTk normal
+    import customtkinter as ctk
+    TkBase = ctk.CTk
 
 from datetime import datetime, timedelta
 from src.core.downloader import get_video_info, download_media
@@ -30,6 +48,7 @@ from src.core.processor import clean_and_convert_vtt_to_srt
 from contextlib import redirect_stdout
 from .batch_download_tab import BatchDownloadTab
 from .single_download_tab import SingleDownloadTab
+from .image_tools_tab import ImageToolsTab
 
 from .dialogs import ConflictDialog, LoadingWindow, CompromiseDialog, SimpleMessageDialog, SavePresetDialog, PlaylistErrorDialog
 from src.core.constants import (
@@ -190,7 +209,7 @@ class LoadingWindow(ctk.CTkToplevel):
             self.progress_bar.configure(progress_color="red")
             self.progress_bar.set(1)
 
-class MainWindow(ctk.CTk):
+class MainWindow(TkBase):
         
     def _get_best_available_info(self, url, options):
         """
@@ -311,8 +330,29 @@ class MainWindow(ctk.CTk):
                 "• Intentar más tarde si hay límite de peticiones"
             )
 
-    def __init__(self, launch_target=None, project_root=None):
+    def __init__(self, launch_target=None, project_root=None, poppler_path=None, inkscape_path=None, splash_screen=None, app_version="0.0.0"):
         super().__init__()
+        
+        # Guardamos la versión que recibimos de main.py
+        self.APP_VERSION = app_version 
+        print(f"DEBUG: MainWindow recibió la versión: {self.APP_VERSION}")
+
+        # --- CORRECCIÓN CRÍTICA: Registrar este Root INMEDIATAMENTE ---
+        import tkinter
+        tkinter._default_root = self
+
+        self.splash_screen = splash_screen 
+        if self.splash_screen:
+            self.splash_screen.update_status("Inicializando componentes...")
+
+        # ✅ NUEVO: Ocultar ventana durante inicialización
+        self.withdraw()
+        
+        # Aplicar estilos de CustomTkinter manualmente
+        if TKDND_AVAILABLE:
+            ctk.set_appearance_mode("Dark")
+            ctk.set_default_color_theme("blue")
+            self.configure(bg="#2B2B2B")
 
         self.VIDEO_EXTENSIONS = VIDEO_EXTENSIONS
         self.AUDIO_EXTENSIONS = AUDIO_EXTENSIONS
@@ -367,7 +407,7 @@ class MainWindow(ctk.CTk):
         self.is_shutting_down = False
         self.cancellation_event = threading.Event()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self.title(f"DowP {SingleDownloadTab.APP_VERSION}")
+        self.title(f"DowP {self.APP_VERSION}")
         self.iconbitmap(resource_path("DowP-icon.ico"))
         win_width = 835
         win_height = 950
@@ -393,7 +433,8 @@ class MainWindow(ctk.CTk):
         # --- INICIALIZAR VALORES POR DEFECTO ---
         # Define todos los atributos ANTES del bloque try
         self.default_download_path = ""
-        self.batch_download_path = "" # <-- AÑADE ESTA LÍNEA
+        self.batch_download_path = ""
+        self.image_output_path = ""
         self.cookies_path = ""
         self.cookies_mode_saved = "No usar"
         self.selected_browser_saved = "firefox"
@@ -402,10 +443,12 @@ class MainWindow(ctk.CTk):
         self.custom_presets = []
         self.batch_playlist_analysis_saved = True
         self.batch_auto_import_saved = True
+        self.image_auto_import_saved = True
         self.quick_preset_saved = ""
         self.recode_settings = {}
         self.apply_quick_preset_checkbox_state = False
         self.keep_original_quick_saved = True
+        self.image_settings = {}
         
         # --- INTENTAR CARGAR CONFIGURACIÓN GUARDADA ---
         try:
@@ -416,6 +459,7 @@ class MainWindow(ctk.CTk):
                     # Sobrescribe los valores por defecto con los que están guardados
                     self.default_download_path = settings.get("default_download_path", self.default_download_path)
                     self.batch_download_path = settings.get("batch_download_path", self.batch_download_path)
+                    self.image_output_path = settings.get("image_output_path", self.image_output_path)
                     self.cookies_path = settings.get("cookies_path", self.cookies_path)
                     self.cookies_mode_saved = settings.get("cookies_mode", self.cookies_mode_saved)
                     self.selected_browser_saved = settings.get("selected_browser", self.selected_browser_saved)
@@ -423,13 +467,15 @@ class MainWindow(ctk.CTk):
                     snooze_str = settings.get("ffmpeg_update_snooze_until")
                     self.batch_playlist_analysis_saved = settings.get("batch_playlist_analysis", self.batch_playlist_analysis_saved)
                     self.batch_auto_import_saved = settings.get("batch_auto_import", self.batch_auto_import_saved)
+                    self.image_auto_import_saved = settings.get("image_auto_import", self.image_auto_import_saved) 
                     self.quick_preset_saved = settings.get("quick_preset_saved", self.quick_preset_saved)
                     if snooze_str:
                         self.ffmpeg_update_snooze_until = datetime.fromisoformat(snooze_str)
                     self.recode_settings = settings.get("recode_settings", self.recode_settings)
                 
                     self.apply_quick_preset_checkbox_state = settings.get("apply_quick_preset_enabled", self.apply_quick_preset_checkbox_state)
-                    self.keep_original_quick_saved = settings.get("keep_original_quick_enabled", self.keep_original_quick_saved) 
+                    self.keep_original_quick_saved = settings.get("keep_original_quick_enabled", self.keep_original_quick_saved)
+                    self.image_settings = settings.get("image_settings", {})
                 print(f"DEBUG: Configuración cargada exitosamente.")
             else:
                 print("DEBUG: Archivo de configuración no encontrado. Usando valores por defecto.")
@@ -449,41 +495,130 @@ class MainWindow(ctk.CTk):
         self.tab_view.add("Proceso por Lotes")
         self.batch_tab = BatchDownloadTab(master=self.tab_view.tab("Proceso por Lotes"), app=self)
 
-        
+        # Añadir la pestaña de Herramientas de Imagen
+        self.tab_view.add("Herramientas de Imagen")
+        self.image_tab = ImageToolsTab(master=self.tab_view.tab("Herramientas de Imagen"), 
+                                       app=self, 
+                                       poppler_path=poppler_path,
+                                       inkscape_path=inkscape_path)
 
         self.run_initial_setup()
         self._check_for_ui_requests()
         self._last_clipboard_check = "" 
         self.bind("<FocusIn>", self._on_app_focus)
+        self.after(100, self._show_window_when_ready)
     
     def run_initial_setup(self):
         """
-        Inicia la aplicación, configura la UI y lanza una comprobación de
-        FFmpeg en segundo plano (solo si es necesario).
+        Inicia la aplicación, configura la UI y lanza las comprobaciones.
+        AHORA INCLUYE LA DESCARGA DE MODELOS DE IA.
         """
-        print("INFO: Configurando UI y lanzando comprobación de FFmpeg en segundo plano...")
+        print("INFO: Configurando UI y lanzando comprobaciones de inicio...")
 
-        # 1. Comprobación de actualización de la app (esto se queda igual)
+        # 1. Comprobación de actualización de la app
         from src.core.setup import check_app_update
         threading.Thread(
-            target=lambda: self.on_update_check_complete(check_app_update(self.single_tab.APP_VERSION)), # CORREGIDO
+            target=lambda: self.on_update_check_complete(check_app_update(self.APP_VERSION)),
+            daemon=True
+        ).start()
+
+        # 2. Verificación de Inkscape (Segundo plano)
+        from src.core.setup import check_inkscape_status
+        threading.Thread(
+            target=lambda: self.on_inkscape_check_complete(check_inkscape_status(lambda t, v: None)),
             daemon=True
         ).start()
         
-        from src.core.setup import check_environment_status
+        # 3. Verificación de Ghostscript (Segundo plano)
+        from src.core.setup import check_ghostscript_status
+        threading.Thread(
+            target=lambda: self.on_ghostscript_check_complete(check_ghostscript_status(lambda t, v: None)),
+            daemon=True
+        ).start()
+        
+        # 4. COMPROBACIÓN PRINCIPAL (Solo entorno base en LoadingWindow)
+        from src.core.setup import check_environment_status 
+        # Nota: Ya NO importamos check_and_download_rembg_models aquí para el hilo bloqueante
+
+        def initial_check_task():
+            # 1. Comprobación Rápida de Existencia (Sin Internet)
+            # Definimos nombres de ejecutables
+            import platform
+            exe_ext = ".exe" if platform.system() == "Windows" else ""
+            
+            ffmpeg_ok = os.path.exists(os.path.join(BIN_DIR, "ffmpeg", f"ffmpeg{exe_ext}"))
+            deno_ok = os.path.exists(os.path.join(BIN_DIR, "deno", f"deno{exe_ext}"))
+            poppler_ok = os.path.exists(os.path.join(BIN_DIR, "poppler", f"pdfinfo{exe_ext}"))
+            
+            # Si falta algo, forzamos el chequeo de actualizaciones (que descargará lo que falte)
+            # Si todo está bien, saltamos el chequeo de red
+            should_check_online = not (ffmpeg_ok and deno_ok and poppler_ok)
+            
+            if should_check_online:
+                print("INFO: Faltan componentes. Iniciando verificación ONLINE.")
+            else:
+                print("INFO: Componentes detectados. Inicio RÁPIDO (Offline).")
+
+            # A. Verificar Entorno
+            env_status = check_environment_status(
+                lambda text, val: self.update_setup_progress(text, val),
+                check_updates=should_check_online  # <--- AQUÍ ESTÁ LA MAGIA
+            )
+            
+            # Si el entorno base está bien, procedemos a los modelos IA
+            if env_status.get("status") == "success":
+                # B. Verificar y Descargar Modelos IA (rembg)
+                # Esta función ya tiene su propia lógica de "si existe, no descargar", así que es rápida
+                check_and_download_rembg_models(
+                     lambda text, val: self.update_setup_progress(text, val)
+                )
+            
+            # C. Finalizar
+            self.after(0, lambda: self.on_status_check_complete(env_status))
+            self.after(0, lambda: self.update_setup_progress("Iniciando...", 100))
+
+        # ---------------------------------------------------------------
+        # 5. DESCARGA DE MODELOS DE IA (HILO DE FONDO EN SINGLE TAB)
+        # ---------------------------------------------------------------
+        from src.core.setup import check_and_download_rembg_models
+
+        def rembg_background_task():
+            # Actualizar label inicial
+            self.after(0, lambda: self.single_tab.rembg_status_label.configure(text="Modelos IA: Verificando..."))
+            
+            # Ejecutar descarga pasando el callback de la SingleTab
+            success = check_and_download_rembg_models(
+                lambda text, val: self.single_tab.update_setup_download_progress('rembg', text, val)
+            )
+            
+            # Actualizar label final
+            if success:
+                self.after(0, lambda: self.single_tab.rembg_status_label.configure(text="Modelos IA: Listos ✅\n(Instalados)"))
+                # Limpiar barra de progreso
+                self.after(0, lambda: self.single_tab.update_setup_download_progress('rembg', "Modelos IA listos.", 0))
+            else:
+                self.single_tab.rembg_status_label.configure(text="Modelos IA: Error ❌")
+
+        # Lanzar hilo independiente que NO bloquea la ventana de carga
+        threading.Thread(target=rembg_background_task, daemon=True).start()
         
         # 2. Definir rutas
         ffmpeg_exe_name = "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
         ffmpeg_path = os.path.join(BIN_DIR, ffmpeg_exe_name)
         
-        # --- AÑADIR ESTAS LÍNEAS ---
         deno_exe_name = "deno.exe" if platform.system() == "Windows" else "deno"
-        # (main.py ya define DENO_BIN_DIR, pero main_window.py necesita su propia referencia)
         DENO_BIN_DIR = os.path.join(BIN_DIR, "deno")
         deno_path = os.path.join(DENO_BIN_DIR, deno_exe_name)
 
-        # 3. Comprobar si AMBOS existen
-        if not os.path.exists(ffmpeg_path) or not os.path.exists(deno_path): # <-- MODIFICADO
+        poppler_exe_name = "pdfinfo.exe" if platform.system() == "Windows" else "pdfinfo"
+        POPPLER_BIN_DIR = os.path.join(BIN_DIR, "poppler")
+        poppler_path = os.path.join(POPPLER_BIN_DIR, poppler_exe_name)
+
+        inkscape_exe_name = "inkscape.exe" if platform.system() == "Windows" else "inkscape"
+        INKSCAPE_BIN_DIR = os.path.join(BIN_DIR, "inkscape")
+
+        # 3. Comprobar si TODOS existen
+        if not os.path.exists(ffmpeg_path) or not os.path.exists(deno_path) or not os.path.exists(poppler_path):
             # 4a. NO EXISTE (alguno de los dos): ...
             print("INFO: FFmpeg o Deno no detectados. Ejecutando comprobador de entorno completo...")
             threading.Thread(
@@ -519,54 +654,80 @@ class MainWindow(ctk.CTk):
             
             self.single_tab.deno_status_label.configure(text=f"Deno: {local_deno_version} \n(Instalado)")
             self.single_tab.update_deno_button.configure(state="normal", text="Buscar Actualizaciones de Deno")
+
+            # --- AÑADIR Lógica de Poppler ---
+            local_poppler_version = "Desconocida"
+            poppler_version_file = os.path.join(POPPLER_BIN_DIR, "poppler_version.txt")
+            if os.path.exists(poppler_version_file):
+                try:
+                    with open(poppler_version_file, 'r') as f:
+                        local_poppler_version = f.read().strip()
+                except Exception as e:
+                    print(f"ADVERTENCIA: No se pudo leer el archivo de versión de Poppler: {e}")
+            
+            self.single_tab.poppler_status_label.configure(text=f"Poppler: {local_poppler_version} \n(Instalado)")
+            self.single_tab.update_poppler_button.configure(state="normal", text="Buscar Actualizaciones de Poppler")
+
+            # --- AÑADIR Lógica de Inkscape ---
+            local_ink_version = "Desconocida"
+            ink_version_file = os.path.join(INKSCAPE_BIN_DIR, "inkscape_version.txt")
+            if os.path.exists(ink_version_file):
+                try:
+                     with open(ink_version_file, 'r') as f: local_ink_version = f.read().strip()
+                except: pass
+            
+            self.single_tab.inkscape_status_label.configure(text=f"Inkscape: {local_ink_version} \n(Instalado)")
+            self.single_tab.update_inkscape_button.configure(state="normal", text="Buscar Actualizaciones de Inkscape")
         
         # 6. Detección de códecs (esto se ejecuta siempre, pero es local, no usa API)
         self.ffmpeg_processor.run_detection_async(self.on_ffmpeg_detection_complete) # CORREGIDO
         
     def on_update_check_complete(self, update_info):
         """Callback que se ejecuta cuando la comprobación de versión termina. Ahora inicia la descarga."""
-        if update_info.get("update_available"):
-            latest_version = update_info.get("latest_version")
-            self.single_tab.release_page_url = update_info.get("release_url") # Guardamos por si acaso
+        def _ui_task():
+            if update_info.get("update_available"):
+                latest_version = update_info.get("latest_version")
+                self.single_tab.release_page_url = update_info.get("release_url") # Guardamos por si acaso
 
-            is_prerelease = update_info.get("is_prerelease", False)
-            version_type = "Pre-release" if is_prerelease else "versión"
-            status_text = f"¡Nueva {version_type} {latest_version} disponible!"
+                is_prerelease = update_info.get("is_prerelease", False)
+                version_type = "Pre-release" if is_prerelease else "versión"
+                status_text = f"¡Nueva {version_type} {latest_version} disponible!"
 
-            self.single_tab.app_status_label.configure(text=status_text, text_color="#52a2f2")
+                self.single_tab.app_status_label.configure(text=status_text, text_color="#52a2f2")
 
-            # --- CAMBIO: INICIA EL PROCESO DE ACTUALIZACIÓN ---
-            installer_url = update_info.get("installer_url")
-            if installer_url:
-                # Preguntar al usuario si quiere actualizar AHORA
-                user_response = messagebox.askyesno(
-                    "Actualización Disponible",
-                    f"Hay una nueva {version_type} ({latest_version}) de DowP disponible.\n\n"
-                    "¿Deseas descargarla e instalarla ahora?\n\n"
-                    "(DowP se cerrará para completar la instalación)"
-                )
-                self.lift() # Asegura que la ventana principal esté al frente
-                self.focus_force()
+                # --- CAMBIO: INICIA EL PROCESO DE ACTUALIZACIÓN ---
+                installer_url = update_info.get("installer_url")
+                if installer_url:
+                    # Preguntar al usuario si quiere actualizar AHORA
+                    user_response = messagebox.askyesno(
+                        "Actualización Disponible",
+                        f"Hay una nueva {version_type} ({latest_version}) de DowP disponible.\n\n"
+                        "¿Deseas descargarla e instalarla ahora?\n\n"
+                        "(DowP se cerrará para completar la instalación)"
+                    )
+                    self.lift() # Asegura que la ventana principal esté al frente
+                    self.focus_force()
 
-                if user_response:
-                    # Llamar a la nueva función para descargar y ejecutar
-                    # Pasamos la URL y la versión para mostrar en el progreso
-                    self._iniciar_auto_actualizacion(installer_url, latest_version)
+                    if user_response:
+                        # Llamar a la nueva función para descargar y ejecutar
+                        # Pasamos la URL y la versión para mostrar en el progreso
+                        self._iniciar_auto_actualizacion(installer_url, latest_version)
+                    else:
+                        # El usuario dijo NO, solo configuramos el botón para que pueda hacerlo manualmente
+                        self.single_tab.update_app_button.configure(text=f"Descargar v{latest_version}", state="normal", fg_color=self.single_tab.DOWNLOAD_BTN_COLOR)
                 else:
-                    # El usuario dijo NO, solo configuramos el botón para que pueda hacerlo manualmente
-                    self.single_tab.update_app_button.configure(text=f"Descargar v{latest_version}", state="normal", fg_color=self.single_tab.DOWNLOAD_BTN_COLOR)
+                    # No se encontró el .exe, solo habilitar el botón para ir a la página
+                    print("ADVERTENCIA: Se detectó una nueva versión pero no se encontró el instalador .exe en los assets.")
+                    self.single_tab.update_app_button.configure(text=f"Ir a Descargas (v{latest_version})", state="normal", fg_color=self.single_tab.DOWNLOAD_BTN_COLOR)
+
+
+            elif "error" in update_info:
+                self.single_tab.app_status_label.configure(text=f"DowP v{self.APP_VERSION} - Error al verificar", text_color="orange")
+                self.single_tab.update_app_button.configure(text="Reintentar", state="normal", fg_color="gray")
             else:
-                # No se encontró el .exe, solo habilitar el botón para ir a la página
-                print("ADVERTENCIA: Se detectó una nueva versión pero no se encontró el instalador .exe en los assets.")
-                self.single_tab.update_app_button.configure(text=f"Ir a Descargas (v{latest_version})", state="normal", fg_color=self.single_tab.DOWNLOAD_BTN_COLOR)
-
-
-        elif "error" in update_info:
-            self.single_tab.app_status_label.configure(text=f"DowP v{self.single_tab.APP_VERSION} - Error al verificar", text_color="orange")
-            self.single_tab.update_app_button.configure(text="Reintentar", state="normal", fg_color="gray")
-        else:
-            self.single_tab.app_status_label.configure(text=f"DowP v{self.single_tab.APP_VERSION} - Estás al día ✅")
-            self.single_tab.update_app_button.configure(text="Sin actualizaciones", state="disabled")
+                self.single_tab.app_status_label.configure(text=f"DowP v{self.APP_VERSION} - Estás al día ✅")
+                self.single_tab.update_app_button.configure(text="Sin actualizaciones", state="disabled")
+        self.after(0, _ui_task)
 
 
     def on_status_check_complete(self, status_info, force_check=False):
@@ -588,28 +749,69 @@ class MainWindow(ctk.CTk):
         download_url = status_info.get("download_url")
         ffmpeg_exists = status_info.get("ffmpeg_path_exists")
         
-        # --- AÑADIR: Variables de Deno ---
+        # --- Variables de Deno ---
         local_deno_version = status_info.get("local_deno_version") or "No encontrado"
         latest_deno_version = status_info.get("latest_deno_version")
         deno_download_url = status_info.get("deno_download_url")
         deno_exists = status_info.get("deno_path_exists")
         
         should_download = False
-        should_download_deno = False # <-- AÑADIR
+        should_download_deno = False
+
+        # --- Variables de Poppler ---
+        local_poppler_version = status_info.get("local_poppler_version") or "No encontrado"
+        latest_poppler_version = status_info.get("latest_poppler_version")
+        poppler_download_url = status_info.get("poppler_download_url")
+        poppler_exists = status_info.get("poppler_path_exists")
         
-        # --- Lógica de descarga de FFmpeg (existente) ---
+        should_download_poppler = False # <--- IMPORTANTE
+        
+        # --- Lógica de descarga de FFmpeg (CORREGIDA) ---
         if not ffmpeg_exists:
-            print("INFO: FFmpeg no encontrado. Iniciando descarga automática.")
-            self.single_tab.update_progress(0, "FFmpeg no encontrado. Iniciando descarga automática...")
-            should_download = True
+            # CORRECCIÓN: Solo auto-descargar si NO es un chequeo manual
+            if not force_check:
+                print("INFO: FFmpeg no encontrado. Iniciando descarga automática.")
+                self.single_tab.update_progress(0, "FFmpeg no encontrado. Iniciando descarga automática...")
+                should_download = True
+            else:
+                # El usuario presionó "buscar" pero no está instalado. Preguntar.
+                print("INFO: Comprobación manual de FFmpeg. No está instalado.")
+                user_response = messagebox.askyesno(
+                    "FFmpeg no está instalado",
+                    f"No se encontró FFmpeg. Es necesario para todas las descargas y recodificaciones.\n\n"
+                    f"Versión más reciente disponible: {latest_version}\n\n"
+                    "¿Deseas descargarlo e instalarlo ahora?"
+                )
+                self.lift()
+                if user_response:
+                    should_download = True
+                else:
+                    self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Instalación cancelada)")
         else:
-            update_available = local_version != latest_version
+            # FFmpeg *está* instalado. Comprobar actualizaciones.
+            update_available = False
+            try:
+                # CORRECCIÓN: Usar version.parse para una comparación robusta
+                if latest_version: # Solo comparar si obtuvimos respuesta de GitHub
+                    # Extraer números de versión (ej: "v6.1" de "ffmpeg-v6.1-...")
+                    local_v_str = re.search(r'v?(\d+\.\d+(\.\d+)?)', local_version).group(1) if local_version and re.search(r'v?(\d+\.\d+(\.\d+)?)', local_version) else "0"
+                    latest_v_str = re.search(r'v?(\d+\.\d+(\.\d+)?)', latest_version).group(1) if latest_version and re.search(r'v?(\d+\.\d+(\.\d+)?)', latest_version) else "0"
+                    
+                    local_v = version.parse(local_v_str)
+                    latest_v = version.parse(latest_v_str)
+                    
+                    if latest_v > local_v:
+                        update_available = True
+            except (version.InvalidVersion, AttributeError):
+                print(f"ADVERTENCIA: No se pudo comparar la versión de FFmpeg (Local: '{local_version}', Remota: '{latest_version}'). Usando '!=' fallback.")
+                update_available = local_version != latest_version # Fallback a la lógica antigua
+            except Exception as e:
+                print(f"ERROR comparando versiones de FFmpeg: {e}")
+                update_available = False
+            
             snoozed = self.ffmpeg_update_snooze_until and datetime.now() < self.ffmpeg_update_snooze_until
                         
-            # La condición "(not snoozed or force_check)" se ha cambiado a "force_check"
-            # Ahora el pop-up solo saldrá si el usuario presionó el botón (force_check=True)
-            if update_available and force_check:
-            
+            if update_available and force_check and not snoozed:
                 user_response = messagebox.askyesno(
                     "Actualización Disponible",
                     f"Hay una nueva versión de FFmpeg disponible.\n\n"
@@ -624,25 +826,62 @@ class MainWindow(ctk.CTk):
                 else:
                     self.ffmpeg_update_snooze_until = datetime.now() + timedelta(days=15)
                     self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualización pospuesta)") 
-                self.single_tab.save_settings()
-                self.batch_tab.save_settings()
                 
-            elif update_available and snoozed:
-                print(f"DEBUG: Actualización de FFmpeg omitida. Snooze activo hasta {self.ffmpeg_update_snooze_until}.")
-                self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualización pospuesta)") 
+                # Guardar la decisión de "snooze"
+                self.save_settings()
+                
+            elif update_available and (not force_check or snoozed):
+                if snoozed:
+                    print(f"DEBUG: Actualización de FFmpeg omitida. Snooze activo hasta {self.ffmpeg_update_snooze_until}.")
+                    self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualización pospuesta)") 
+                else:
+                    self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualización disponible)") 
             else:
                 self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualizado)") 
 
-        # --- AÑADIR: Lógica de descarga de Deno ---
+        # --- Lógica de descarga de Deno (CORREGIDA) ---
         if not deno_exists:
-            print("INFO: Deno no encontrado. Iniciando descarga automática.")
-            self.single_tab.update_progress(0, "Deno (requerido por YouTube) no encontrado. Iniciando descarga...")
-            should_download_deno = True
+            # CORRECCIÓN: Solo auto-descargar si NO es un chequeo manual
+            if not force_check:
+                print("INFO: Deno no encontrado. Iniciando descarga automática.")
+                self.single_tab.update_progress(0, "Deno (requerido por YouTube) no encontrado. Iniciando descarga...")
+                should_download_deno = True
+            else:
+                # El usuario presionó "buscar" pero no está instalado. Preguntar.
+                print("INFO: Comprobación manual de Deno. No está instalado.")
+                user_response = messagebox.askyesno(
+                    "Deno no está instalado",
+                    f"No se encontró Deno. Es necesario para algunas descargas.\n\n"
+                    f"Versión más reciente disponible: {latest_deno_version}\n\n"
+                    "¿Deseas descargarlo e instalarlo ahora?"
+                )
+                self.lift()
+                if user_response:
+                    should_download_deno = True
+                else:
+                    self.single_tab.deno_status_label.configure(text=f"Deno: {local_deno_version} \n(Instalación cancelada)")
+        
         else:
-            deno_update_available = local_deno_version != latest_deno_version
-            # (No hay 'snooze' para Deno por ahora, podemos añadirlo luego si quieres)
+            # Deno *está* instalado. Comprobar actualizaciones.
+            deno_update_available = False
+            try:
+                # CORRECCIÓN: Usar version.parse para una comparación robusta
+                if latest_deno_version: # Solo comparar si obtuvimos respuesta de GitHub
+                    # Quitar la 'v' del inicio (ej: "v1.40.0" -> "1.40.0")
+                    local_v = version.parse(local_deno_version.lstrip('v'))
+                    latest_v = version.parse(latest_deno_version.lstrip('v'))
+                    
+                    if latest_v > local_v:
+                        deno_update_available = True
+            except version.InvalidVersion:
+                print(f"ADVERTENCIA: No se pudo comparar la versión de Deno (Local: '{local_deno_version}', Remota: '{latest_deno_version}'). Usando '!=' fallback.")
+                deno_update_available = local_deno_version != latest_deno_version # Fallback
+            except Exception as e:
+                print(f"ERROR comparando versiones de Deno: {e}")
+                deno_update_available = False
             
             if deno_update_available and force_check:
+                # Esta es la lógica que querías: pregunta al usuario
                 user_response = messagebox.askyesno(
                     "Actualización de Deno Disponible",
                     f"Hay una nueva versión de Deno disponible.\n\n"
@@ -654,92 +893,180 @@ class MainWindow(ctk.CTk):
                 if user_response:
                     should_download_deno = True
             elif deno_update_available:
+                 # No es un chequeo forzado, solo notificar
                  self.single_tab.deno_status_label.configure(text=f"Deno: {local_deno_version} \n(Actualización disponible)")
             else:
+                 # Está actualizado
                 self.single_tab.deno_status_label.configure(text=f"Deno: {local_deno_version} \n(Actualizado)")
 
+        # --- Lógica de descarga de Poppler ---
+        if not poppler_exists:
+            # Si NO es un chequeo manual (arranque de la app), descargar automáticamente
+            if not force_check:
+                print("INFO: Poppler no encontrado. Iniciando descarga automática.")
+                self.single_tab.update_progress(0, "Poppler no encontrado. Iniciando descarga...")
+                should_download_poppler = True
+            else:
+                # Si es manual (botón), preguntar
+                print("INFO: Comprobación manual de Poppler. No está instalado.")
+                user_response = messagebox.askyesno(
+                    "Poppler no está instalado",
+                    f"No se encontró Poppler. Es necesario para procesar imágenes.\n\n"
+                    f"Versión disponible: {latest_poppler_version}\n\n"
+                    "¿Deseas descargarlo e instalarlo ahora?"
+                )
+                self.lift()
+                if user_response:
+                    should_download_poppler = True
+                else:
+                    self.single_tab.poppler_status_label.configure(text=f"Poppler: {local_poppler_version} \n(Cancelado)")
+        
+        else:
+            # Poppler existe, comprobar actualizaciones
+            poppler_update_available = False
+            try:
+                if latest_poppler_version and local_poppler_version != latest_poppler_version:
+                    poppler_update_available = True
+            except Exception:
+                pass
+
+            if poppler_update_available and force_check:
+                user_response = messagebox.askyesno(
+                    "Actualización de Poppler Disponible",
+                    f"Hay una nueva versión de Poppler disponible.\n\n"
+                    f"Actual: {local_poppler_version}\nNueva: {latest_poppler_version}\n\n"
+                    "¿Actualizar ahora?"
+                )
+                self.lift()
+                if user_response:
+                    should_download_poppler = True
+            elif poppler_update_available:
+                 self.single_tab.poppler_status_label.configure(text=f"Poppler: {local_poppler_version} \n(Update disp.)")
+            else:
+                self.single_tab.poppler_status_label.configure(text=f"Poppler: {local_poppler_version} \n(Instalado)")
+                if force_check:
+                    messagebox.showinfo("Poppler", "Poppler está actualizado.")
+
+        # --- Hilo de Descarga de FFmpeg (Sin cambios) ---
         if should_download:
             if not download_url:
                 messagebox.showerror("Error", "No se pudo obtener la URL de descarga para FFmpeg.")
                 return
 
-            self.single_tab.update_progress(0, f"Iniciando descarga de FFmpeg {latest_version}...") 
+            self.single_tab.update_setup_download_progress('ffmpeg', f"Iniciando descarga de FFmpeg {latest_version}...", 0.01)
             from src.core.setup import download_and_install_ffmpeg
-            
+
             def download_task():
-                success = download_and_install_ffmpeg(latest_version, download_url, self.single_tab._handle_download_progress) 
+                # --- ESTA LÍNEA CAMBIA ---
+                success = download_and_install_ffmpeg(latest_version, download_url, 
+                    lambda text, val: self.single_tab.update_setup_download_progress('ffmpeg', text, val)) 
+
                 if success:
-                    # --- AÑADIR ESTE BLOQUE ---
-                    # (main.py define FFMPEG_BIN_DIR, pero necesitamos la ruta aquí)
                     ffmpeg_bin_path = os.path.join(BIN_DIR, "ffmpeg")
                     if ffmpeg_bin_path not in os.environ['PATH']:
                         print(f"INFO: Actualizando PATH en tiempo de ejecución con: {ffmpeg_bin_path}")
                         os.environ['PATH'] = ffmpeg_bin_path + os.pathsep + os.environ['PATH']
-                    # --- FIN DEL BLOQUE ---
 
                     self.after(0, self.ffmpeg_processor.run_detection_async,  
                             lambda s, m: self.on_ffmpeg_detection_complete(s, m, show_ready_message=True))
-                    self.after(0, lambda: self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {latest_version} \n(Instalado)")) 
+                    self.after(0, lambda: self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {latest_version} \n(Instalado)"))
+                    # --- ESTA LÍNEA CAMBIA ---
+                    self.after(0, self.single_tab.update_setup_download_progress, 'ffmpeg', f"✅ FFmpeg {latest_version} instalado.", 100)
                 else:
-                    self.after(0, self.single_tab.update_progress, 0, "Falló la descarga de FFmpeg.") 
+                    # --- ESTA LÍNEA CAMBIA ---
+                    self.after(0, self.single_tab.update_setup_download_progress, 'ffmpeg', "Falló la descarga de FFmpeg.", 0)
 
             threading.Thread(target=download_task, daemon=True).start()
 
-        # --- AÑADIR: Lógica de Hilo de Descarga (Deno) ---
+        # --- Hilo de Descarga de Deno (MODIFICADO) ---
         if should_download_deno:
             if not deno_download_url:
                 messagebox.showerror("Error", "No se pudo obtener la URL de descarga para Deno.")
                 return
 
-            self.single_tab.update_progress(0, f"Iniciando descarga de Deno {latest_deno_version}...") 
-            from src.core.setup import download_and_install_deno # <-- Importar la nueva función
-            
+            self.single_tab.update_setup_download_progress('deno', f"Iniciando descarga de Deno {latest_deno_version}...", 0.01)
+            from src.core.setup import download_and_install_deno
+
             def download_deno_task():
-                success = download_and_install_deno(latest_deno_version, deno_download_url, self.single_tab._handle_download_progress) 
+                # --- ESTA LÍNEA CAMBIA ---
+                success = download_and_install_deno(latest_deno_version, deno_download_url, 
+                    lambda text, val: self.single_tab.update_setup_download_progress('deno', text, val)) 
+
                 if success:
-                    # (main.py define DENO_BIN_DIR, pero necesitamos la ruta aquí)
                     deno_bin_path = os.path.join(BIN_DIR, "deno")
                     if deno_bin_path not in os.environ['PATH']:
                         print(f"INFO: Actualizando PATH en tiempo de ejecución con: {deno_bin_path}")
                         os.environ['PATH'] = deno_bin_path + os.pathsep + os.environ['PATH']
-                    
-                    # Deno no necesita "detección" como los códecs de FFmpeg, solo actualizamos la UI
+
                     self.after(0, lambda: self.single_tab.deno_status_label.configure(text=f"Deno: {latest_deno_version} \n(Instalado)")) 
-                    self.after(0, self.single_tab.update_progress, 100, "✅ Deno instalado correctamente. Listo para usar.")
+                    # --- ESTA LÍNEA CAMBIA ---
+                    self.after(0, self.single_tab.update_setup_download_progress, 'deno', f"✅ Deno {latest_deno_version} instalado.", 100)
                 else:
-                    self.after(0, self.single_tab.update_progress, 0, "Falló la descarga de Deno.")
+                    # --- ESTA LÍNEA CAMBIA ---
+                    self.after(0, self.single_tab.update_setup_download_progress, 'deno', "Falló la descarga de Deno.", 0)
 
             threading.Thread(target=download_deno_task, daemon=True).start()
 
+        # --- Hilo de Descarga de Poppler ---
+        if should_download_poppler:
+            if not poppler_download_url:
+                if force_check: messagebox.showerror("Error", "No se pudo obtener la URL de Poppler.")
+                return
+
+            self.single_tab.update_setup_download_progress('poppler', f"Descargando Poppler {latest_poppler_version}...", 0.01)
+            from src.core.setup import download_and_install_poppler
+
+            def download_poppler_task():
+                success = download_and_install_poppler(latest_poppler_version, poppler_download_url, 
+                    lambda text, val: self.single_tab.update_setup_download_progress('poppler', text, val)) 
+                
+                if success:
+                    # Asegurar PATH en tiempo de ejecución
+                    poppler_bin_path = os.path.join(BIN_DIR, "poppler")
+                    if poppler_bin_path not in os.environ['PATH']:
+                        os.environ['PATH'] = poppler_bin_path + os.pathsep + os.environ['PATH']
+                    
+                    self.after(0, lambda: self.single_tab.poppler_status_label.configure(text=f"Poppler: {latest_poppler_version} \n(Instalado)")) 
+                    self.after(0, self.single_tab.update_setup_download_progress, 'poppler', f"✅ Poppler instalado.", 100)
+                else:
+                    self.after(0, self.single_tab.update_setup_download_progress, 'poppler', "Falló la descarga de Poppler.", 0)
+
+            threading.Thread(target=download_poppler_task, daemon=True).start()
+
     def on_ffmpeg_detection_complete(self, success, message, show_ready_message=False):
-        if success:
-            self.single_tab.recode_video_checkbox.configure(text="Recodificar Video", state="normal") 
-            self.single_tab.recode_audio_checkbox.configure(text="Recodificar Audio", state="normal")
-            
-            self.single_tab.apply_quick_preset_checkbox.configure(text="Activar recodificación Rápida", state="normal")
-            
-            if self.ffmpeg_processor.gpu_vendor:
-                self.single_tab.gpu_radio.configure(text="GPU", state="normal")
-                self.single_tab.cpu_radio.pack_forget() 
-                self.single_tab.gpu_radio.pack_forget() 
-                self.single_tab.gpu_radio.pack(side="left", padx=10) 
-                self.single_tab.cpu_radio.pack(side="left", padx=20) 
+        # 1. Creamos una función interna que contiene TODA la lógica de UI original
+        def update_ui():
+            if success:
+                self.single_tab.recode_video_checkbox.configure(text="Recodificar Video", state="normal") 
+                self.single_tab.recode_audio_checkbox.configure(text="Recodificar Audio", state="normal")
+                
+                self.single_tab.apply_quick_preset_checkbox.configure(text="Activar recodificación Rápida", state="normal")
+                
+                if self.ffmpeg_processor.gpu_vendor:
+                    self.single_tab.gpu_radio.configure(text="GPU", state="normal")
+                    self.single_tab.cpu_radio.pack_forget() 
+                    self.single_tab.gpu_radio.pack_forget() 
+                    self.single_tab.gpu_radio.pack(side="left", padx=10) 
+                    self.single_tab.cpu_radio.pack(side="left", padx=20) 
+                else:
+                    self.single_tab.gpu_radio.configure(text="GPU (No detectada)")
+                    self.single_tab.proc_type_var.set("CPU") 
+                    self.single_tab.gpu_radio.configure(state="disabled") 
+                
+                self.single_tab.update_codec_menu()
+                
+                if show_ready_message:
+                    self.single_tab.update_progress(100, "✅ FFmpeg instalado correctamente. Listo para usar.") 
             else:
-                self.single_tab.gpu_radio.configure(text="GPU (No detectada)")
-                self.single_tab.proc_type_var.set("CPU") 
-                self.single_tab.gpu_radio.configure(state="disabled") 
-            
-            self.single_tab.update_codec_menu()
-            
-            if show_ready_message:
-                self.single_tab.update_progress(100, "✅ FFmpeg instalado correctamente. Listo para usar.") 
-        else:
-            print(f"FFmpeg detection error: {message}")
-            self.single_tab.recode_video_checkbox.configure(text="Recodificación no disponible", state="disabled") 
-            self.single_tab.recode_audio_checkbox.configure(text="(Error FFmpeg)", state="disabled") 
-            
-            self.single_tab.apply_quick_preset_checkbox.configure(text="Recodificación no disponible (Error FFmpeg)", state="disabled") 
-            self.single_tab.apply_quick_preset_checkbox.deselect() 
+                print(f"FFmpeg detection error: {message}")
+                self.single_tab.recode_video_checkbox.configure(text="Recodificación no disponible", state="disabled") 
+                self.single_tab.recode_audio_checkbox.configure(text="(Error FFmpeg)", state="disabled") 
+                
+                self.single_tab.apply_quick_preset_checkbox.configure(text="Recodificación no disponible (Error FFmpeg)", state="disabled") 
+                self.single_tab.apply_quick_preset_checkbox.deselect() 
+
+        # 2. IMPORTANTE: Enviamos esa función al hilo principal
+        self.after(0, update_ui)
 
     def _iniciar_auto_actualizacion(self, installer_url, version_str):
         """
@@ -877,22 +1204,26 @@ class MainWindow(ctk.CTk):
         Recopila todos los ajustes de la app y los guarda en app_settings.json.
         Esta es la ÚNICA función que debe escribir en el archivo.
         """
-        # --- CORRECCIÓN APLICADA: Sincronizar desde las pestañas antes de guardar ---
-        # Guardar primero la pestaña NO activa, luego la ACTIVA, para que la activa tenga prioridad
         # en los ajustes globales (como default_download_path).
         current_tab = self.tab_view.get()
         if current_tab == "Proceso Único":
              if hasattr(self, 'batch_tab'): self.batch_tab.save_settings()
+             if hasattr(self, 'image_tab'): self.image_tab.save_settings() # <--- AÑADIR
              if hasattr(self, 'single_tab'): self.single_tab.save_settings()
-        else:
+        elif current_tab == "Proceso por Lotes": # <--- MODIFICAR ESTE ELIF
+             if hasattr(self, 'single_tab'): self.single_tab.save_settings()
+             if hasattr(self, 'image_tab'): self.image_tab.save_settings() # <--- AÑADIR
+             if hasattr(self, 'batch_tab'): self.batch_tab.save_settings()
+        else: # <--- AÑADIR ESTE BLOQUE ELSE
              if hasattr(self, 'single_tab'): self.single_tab.save_settings()
              if hasattr(self, 'batch_tab'): self.batch_tab.save_settings()
-        # --- FIN DE LA CORRECCIÓN ---
+             if hasattr(self, 'image_tab'): self.image_tab.save_settings()
 
         # 3. Crear el diccionario de configuración final
         settings_to_save = {
             "default_download_path": self.default_download_path,
             "batch_download_path": self.batch_download_path,
+            "image_output_path": self.image_output_path,
             "ffmpeg_update_snooze_until": self.ffmpeg_update_snooze_until.isoformat() if self.ffmpeg_update_snooze_until else None,
             "custom_presets": self.custom_presets,
 
@@ -912,7 +1243,11 @@ class MainWindow(ctk.CTk):
 
             # Pestaña de Lotes
             "batch_playlist_analysis": self.batch_playlist_analysis_saved,
-            "batch_auto_import": self.batch_auto_import_saved
+            "batch_auto_import": self.batch_auto_import_saved,
+
+            # Pestaña de Herramientas de Imagen (AÑADIR ESTO)
+            "image_auto_import": self.image_auto_import_saved,
+            "image_settings": self.image_settings
         }
 
         # 4. Escribir en el archivo
@@ -988,6 +1323,9 @@ class MainWindow(ctk.CTk):
             target_entry = self.single_tab.url_entry
         elif active_tab_name == "Proceso por Lotes":
             target_entry = self.batch_tab.url_entry
+        elif active_tab_name == "Herramientas de Imagen":
+            # (Asegúrate de que tu pestaña de imagen se llame self.image_tab)
+            target_entry = self.image_tab.url_entry
 
         # 5. Pegar la URL, REEMPLAZANDO el contenido
         if target_entry:
@@ -1002,3 +1340,387 @@ class MainWindow(ctk.CTk):
             # Actualizar el estado del botón en la pestaña individual
             if active_tab_name == "Proceso Único":
                 self.single_tab.update_download_button_state()
+
+    def on_ffmpeg_check_complete(self, status_info):
+        """
+        Callback que maneja la comprobación MANUAL de FFmpeg.
+        """
+        self.single_tab.update_ffmpeg_button.configure(state="normal", text="Buscar Actualizaciones de FFmpeg")
+
+        status = status_info.get("status")
+        if status == "error":
+            messagebox.showerror("Error Crítico de FFmpeg", status_info.get("message"))
+            return
+
+        local_version = status_info.get("local_version") or "No encontrado"
+        latest_version = status_info.get("latest_version")
+        download_url = status_info.get("download_url")
+        ffmpeg_exists = status_info.get("ffmpeg_path_exists")
+        should_download = False
+
+        if not ffmpeg_exists:
+            print("INFO: Comprobación manual de FFmpeg. No está instalado.")
+            user_response = messagebox.askyesno(
+                "FFmpeg no está instalado",
+                f"No se encontró FFmpeg. Es necesario para todas las descargas y recodificaciones.\n\n"
+                f"Versión más reciente disponible: {latest_version}\n\n"
+                "¿Deseas descargarlo e instalarlo ahora?"
+            )
+            self.lift()
+            if user_response:
+                should_download = True
+            else:
+                self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Instalación cancelada)")
+        else:
+            update_available = False
+            try:
+                if latest_version:
+                    local_v_str = re.search(r'v?(\d+\.\d+(\.\d+)?)', local_version).group(1) if local_version and re.search(r'v?(\d+\.\d+(\.\d+)?)', local_version) else "0"
+                    latest_v_str = re.search(r'v?(\d+\.\d+(\.\d+)?)', latest_version).group(1) if latest_version and re.search(r'v?(\d+\.\d+(\.\d+)?)', latest_version) else "0"
+                    local_v = version.parse(local_v_str)
+                    latest_v = version.parse(latest_v_str)
+                    if latest_v > local_v:
+                        update_available = True
+            except (version.InvalidVersion, AttributeError):
+                update_available = local_version != latest_version
+
+            snoozed = self.ffmpeg_update_snooze_until and datetime.now() < self.ffmpeg_update_snooze_until
+
+            if update_available and not snoozed:
+                user_response = messagebox.askyesno(
+                    "Actualización Disponible",
+                    f"Hay una nueva versión de FFmpeg disponible.\n\n"
+                    f"Versión Actual: {local_version}\n"
+                    f"Versión Nueva: {latest_version}\n\n"
+                    "¿Deseas actualizar ahora?"
+                )
+                self.lift() 
+                if user_response:
+                    should_download = True
+                    self.ffmpeg_update_snooze_until = None 
+                else:
+                    self.ffmpeg_update_snooze_until = datetime.now() + timedelta(days=15)
+                    self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualización pospuesta)") 
+                self.save_settings()
+            elif update_available and snoozed:
+                self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualización pospuesta)") 
+                messagebox.showinfo("Actualización Pos puesta", "Hay una nueva versión de FFmpeg, pero la pospusiste. Puedes volver a comprobarla más tarde.")
+            else:
+                self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {local_version} \n(Actualizado)")
+                messagebox.showinfo("FFmpeg", "Ya tienes la última versión de FFmpeg instalada.")
+
+        if should_download:
+            if not download_url:
+                messagebox.showerror("Error", "No se pudo obtener la URL de descarga para FFmpeg.")
+                return
+
+            self.single_tab.update_setup_download_progress('ffmpeg', f"Iniciando descarga de FFmpeg {latest_version}...", 0.01)
+            from src.core.setup import download_and_install_ffmpeg
+
+            def download_task():
+                success = download_and_install_ffmpeg(latest_version, download_url, 
+                    lambda text, val: self.single_tab.update_setup_download_progress('ffmpeg', text, val)) 
+                if success:
+                    ffmpeg_bin_path = os.path.join(BIN_DIR, "ffmpeg")
+                    if ffmpeg_bin_path not in os.environ['PATH']:
+                        os.environ['PATH'] = ffmpeg_bin_path + os.pathsep + os.environ['PATH']
+                    self.after(0, self.ffmpeg_processor.run_detection_async,  
+                            lambda s, m: self.on_ffmpeg_detection_complete(s, m, show_ready_message=True))
+                    self.after(0, lambda: self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {latest_version} \n(Instalado)")) 
+                    self.after(0, self.single_tab.update_setup_download_progress, 'ffmpeg', f"✅ FFmpeg {latest_version} instalado.", 100)
+                else:
+                    self.after(0, self.single_tab.update_setup_download_progress, 'ffmpeg', "Falló la descarga de FFmpeg.", 0)
+
+            threading.Thread(target=download_task, daemon=True).start()
+
+    def on_deno_check_complete(self, status_info):
+        """
+        Callback que maneja la comprobación MANUAL de Deno.
+        """
+        self.single_tab.update_deno_button.configure(state="normal", text="Buscar Actualizaciones de Deno")
+
+        status = status_info.get("status")
+        if status == "error":
+            messagebox.showerror("Error Crítico de Deno", status_info.get("message"))
+            return
+
+        local_deno_version = status_info.get("local_deno_version") or "No encontrado"
+        latest_deno_version = status_info.get("latest_deno_version")
+        deno_download_url = status_info.get("deno_download_url")
+        deno_exists = status_info.get("deno_path_exists")
+        should_download_deno = False
+
+        if not deno_exists:
+            print("INFO: Comprobación manual de Deno. No está instalado.")
+            user_response = messagebox.askyesno(
+                "Deno no está instalado",
+                f"No se encontró Deno. Es necesario para algunas descargas.\n\n"
+                f"Versión más reciente disponible: {latest_deno_version}\n\n"
+                "¿Deseas descargarlo e instalarlo ahora?"
+            )
+            self.lift()
+            if user_response:
+                should_download_deno = True
+            else:
+                self.single_tab.deno_status_label.configure(text=f"Deno: {local_deno_version} \n(Instalación cancelada)")
+        else:
+            deno_update_available = False
+            try:
+                if latest_deno_version:
+                    local_v = version.parse(local_deno_version.lstrip('v'))
+                    latest_v = version.parse(latest_deno_version.lstrip('v'))
+                    if latest_v > local_v:
+                        deno_update_available = True
+            except version.InvalidVersion:
+                deno_update_available = local_deno_version != latest_deno_version
+
+            if deno_update_available:
+                user_response = messagebox.askyesno(
+                    "Actualización de Deno Disponible",
+                    f"Hay una nueva versión de Deno disponible.\n\n"
+                    f"Versión Actual: {local_deno_version}\n"
+                    f"Versión Nueva: {latest_deno_version}\n\n"
+                    "¿Deseas actualizar ahora?"
+                )
+                self.lift() 
+                if user_response:
+                    should_download_deno = True
+            else:
+                self.single_tab.deno_status_label.configure(text=f"Deno: {local_deno_version} \n(Actualizado)")
+                messagebox.showinfo("Deno", "Ya tienes la última versión de Deno instalada.")
+
+        if should_download_deno:
+            if not deno_download_url:
+                messagebox.showerror("Error", "No se pudo obtener la URL de descarga para Deno.")
+                return
+
+            self.single_tab.update_setup_download_progress('deno', f"Iniciando descarga de Deno {latest_deno_version}...", 0.01)
+            from src.core.setup import download_and_install_deno 
+
+            def download_deno_task():
+                success = download_and_install_deno(latest_deno_version, deno_download_url, 
+                    lambda text, val: self.single_tab.update_setup_download_progress('deno', text, val)) 
+                if success:
+                    deno_bin_path = os.path.join(BIN_DIR, "deno")
+                    if deno_bin_path not in os.environ['PATH']:
+                        os.environ['PATH'] = deno_bin_path + os.pathsep + os.environ['PATH']
+                    self.after(0, lambda: self.single_tab.deno_status_label.configure(text=f"Deno: {latest_deno_version} \n(Instalado)")) 
+                    self.after(0, self.single_tab.update_setup_download_progress, 'deno', f"✅ Deno {latest_deno_version} instalado.", 100)
+                else:
+                    self.after(0, self.single_tab.update_setup_download_progress, 'deno', "Falló la descarga de Deno.", 0)
+
+            threading.Thread(target=download_deno_task, daemon=True).start()
+
+    def _show_window_when_ready(self):
+        """
+        Muestra la ventana principal cuando todo está listo.
+        Previene el parpadeo negro inicial.
+        """
+        try:
+            # Forzar actualización de la geometría
+            self.update_idletasks()
+            
+            # Mostrar la ventana principal
+            self.deiconify()
+            
+            # 1. Cerrar la Splash Screen AHORA
+            if self.splash_screen:
+                self.splash_screen.destroy()
+                self.splash_screen = None
+            
+            # (Ya no necesitamos reasignar el root aquí, lo hicimos en __init__)
+
+            # Llevar al frente
+            self.lift()
+            self.focus_force()
+            
+            print("DEBUG: ✅ Ventana principal mostrada y Splash cerrado")
+            
+        except Exception as e:
+            if self.splash_screen:
+                try: self.splash_screen.destroy()
+                except: pass
+            print(f"ERROR mostrando ventana: {e}")
+            self.deiconify()
+
+    def on_poppler_check_complete(self, status_info):
+        """Callback que maneja la comprobación MANUAL de Poppler."""
+        self.single_tab.update_poppler_button.configure(state="normal", text="Buscar Actualizaciones de Poppler")
+
+        status = status_info.get("status")
+        if status == "error":
+            messagebox.showerror("Error Crítico de Poppler", status_info.get("message"))
+            return
+
+        local_version = status_info.get("local_poppler_version") or "No encontrado"
+        latest_version = status_info.get("latest_poppler_version")
+        download_url = status_info.get("poppler_download_url")
+        poppler_exists = status_info.get("poppler_path_exists")
+        should_download = False
+
+        if not poppler_exists:
+            print("INFO: Comprobación manual de Poppler. No está instalado.")
+            user_response = messagebox.askyesno(
+                "Poppler no está instalado",
+                f"No se encontró Poppler. Es necesario para procesar imágenes y PDFs.\n\n"
+                f"Versión más reciente disponible: {latest_version}\n\n"
+                "¿Deseas descargarlo e instalarlo ahora?"
+            )
+            self.lift()
+            if user_response: should_download = True
+            else: self.single_tab.poppler_status_label.configure(text=f"Poppler: {local_version} \n(Instalación cancelada)")
+        else:
+            # Lógica simple de comparación de strings para Poppler (sus tags son vXX.XX.X-X)
+            update_available = local_version != latest_version
+            
+            if update_available:
+                user_response = messagebox.askyesno(
+                    "Actualización de Poppler Disponible",
+                    f"Hay una nueva versión de Poppler disponible.\n\n"
+                    f"Versión Actual: {local_version}\n"
+                    f"Versión Nueva: {latest_version}\n\n"
+                    "¿Deseas actualizar ahora?"
+                )
+                self.lift()
+                if user_response: should_download = True
+            else:
+                self.single_tab.poppler_status_label.configure(text=f"Poppler: {local_version} \n(Actualizado)")
+                messagebox.showinfo("Poppler", "Ya tienes la última versión de Poppler instalada.")
+
+        if should_download:
+            if not download_url:
+                messagebox.showerror("Error", "No se pudo obtener la URL de descarga para Poppler.")
+                return
+
+            self.single_tab.update_setup_download_progress('poppler', f"Iniciando descarga de Poppler {latest_version}...", 0.01)
+            from src.core.setup import download_and_install_poppler 
+
+            def download_task():
+                success = download_and_install_poppler(latest_version, download_url, 
+                    lambda text, val: self.single_tab.update_setup_download_progress('poppler', text, val)) 
+                if success:
+                    poppler_bin_path = os.path.join(BIN_DIR, "poppler")
+                    if poppler_bin_path not in os.environ['PATH']:
+                        os.environ['PATH'] = poppler_bin_path + os.pathsep + os.environ['PATH']
+                    self.after(0, lambda: self.single_tab.poppler_status_label.configure(text=f"Poppler: {latest_version} \n(Instalado)")) 
+                    self.after(0, self.single_tab.update_setup_download_progress, 'poppler', f"✅ Poppler {latest_version} instalado.", 100)
+                else:
+                    self.after(0, self.single_tab.update_setup_download_progress, 'poppler', "Falló la descarga de Poppler.", 0)
+
+            threading.Thread(target=download_task, daemon=True).start()
+
+    def on_inkscape_check_complete(self, status_info):
+        """Callback tras verificar Inkscape."""
+        self.single_tab.check_inkscape_button.configure(state="normal", text="Verificar Inkscape")
+        
+        if status_info.get("status") == "error":
+            self.single_tab.inkscape_status_label.configure(text="Inkscape: Error al verificar")
+            print(f"ERROR Inkscape: {status_info.get('message')}")
+            return
+
+        exists = status_info.get("exists")
+        if exists:
+            # Verde o texto normal indicando éxito
+            self.single_tab.inkscape_status_label.configure(
+                text="Inkscape: Detectado ✅\n(Manual)"
+            )
+            self.single_tab.check_inkscape_button.configure(state="disabled", text="Instalado")
+        else:
+            # Rojo o aviso
+            self.single_tab.inkscape_status_label.configure(
+                text="Inkscape: No encontrado ❌\n(Requerido para vectores)"
+            )
+
+    def on_ghostscript_check_complete(self, status_info):
+        """Callback tras verificar Ghostscript."""
+        self.single_tab.check_ghostscript_button.configure(state="normal", text="Verificar Ghostscript")
+        
+        if status_info.get("status") == "error":
+            self.single_tab.ghostscript_status_label.configure(text="Ghostscript: Error al verificar")
+            print(f"ERROR Ghostscript: {status_info.get('message')}")
+            return
+
+        exists = status_info.get("exists")
+        if exists:
+            # Texto verde/normal
+            self.single_tab.ghostscript_status_label.configure(
+                text="Ghostscript: Detectado ✅\n(Manual)"
+            )
+            self.single_tab.check_ghostscript_button.configure(state="disabled", text="Instalado")
+        else:
+            # Texto de aviso
+            self.single_tab.ghostscript_status_label.configure(
+                text="Ghostscript: No encontrado ❌\n(Requerido para EPS/AI)"
+            )
+
+    def update_setup_progress(self, text, value):
+        """
+        Actualiza la ventana emergente de carga (LoadingWindow).
+        Recibe texto y valor (0-100).
+        """
+        # Verificar que la ventana de carga exista antes de actualizarla
+        if hasattr(self, 'loading_window') and self.loading_window and self.loading_window.winfo_exists():
+            # Usamos lambda para asegurar que se ejecute en el hilo de la UI
+            self.after(0, lambda: self.loading_window.update_progress(text, value / 100.0))
+        
+        # Si llega al 100%, cerrar
+        if value >= 100:
+            self.after(500, self.on_setup_complete)
+
+    def on_setup_complete(self):
+        """
+        Se ejecuta cuando la configuración inicial (hilos) ha terminado.
+        Cierra la ventana de carga y habilita la UI principal.
+        """
+        # 1. Gestionar la ventana de carga
+        if hasattr(self, 'loading_window') and self.loading_window and self.loading_window.winfo_exists():
+            if not self.loading_window.error_state:
+                self.loading_window.update_progress("Configuración completada.", 1.0)
+                # Dar un momento para leer "Completado" antes de cerrar
+                self.after(800, self.loading_window.destroy)
+            else:
+                # Si hubo error crítico, quizás quieras dejarla abierta, 
+                # pero por defecto la cerramos para no bloquear.
+                self.loading_window.destroy()
+
+        # 2. Habilitar la ventana principal
+        self.attributes('-disabled', False)
+        self.lift()
+        self.focus_force()
+
+        # 3. Aplicar configuraciones guardadas a la UI de la pestaña Single
+        # (Como la lógica ahora está en MainWindow, debemos empujar los datos a single_tab)
+        try:
+            # Rutas
+            self.single_tab.output_path_entry.delete(0, 'end')
+            self.single_tab.output_path_entry.insert(0, self.default_download_path)
+            
+            # Cookies
+            self.single_tab.cookie_mode_menu.set(self.cookies_mode_saved)
+            if self.cookies_path:
+                self.single_tab.cookie_path_entry.delete(0, 'end')
+                self.single_tab.cookie_path_entry.insert(0, self.cookies_path)
+            
+            # Navegador
+            self.single_tab.browser_var.set(self.selected_browser_saved)
+            self.single_tab.browser_profile_entry.delete(0, 'end')
+            self.single_tab.browser_profile_entry.insert(0, self.browser_profile_saved)
+            
+            # Refrescar visibilidad de opciones de cookies
+            self.single_tab.on_cookie_mode_change(self.cookies_mode_saved)
+
+            # Recodificación
+            if self.recode_settings.get("keep_original", True):
+                self.single_tab.keep_original_checkbox.select()
+            else:
+                self.single_tab.keep_original_checkbox.deselect()
+
+            self.single_tab.recode_video_checkbox.deselect()
+            self.single_tab.recode_audio_checkbox.deselect()
+            self.single_tab._toggle_recode_panels()
+            
+        except Exception as e:
+            print(f"ADVERTENCIA: Error al restaurar configuración en UI: {e}")
+
+        # 4. Detección final de códecs (si no se ha hecho)
+        self.ffmpeg_processor.run_detection_async(self.on_ffmpeg_detection_complete)

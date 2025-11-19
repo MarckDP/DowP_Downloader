@@ -49,9 +49,6 @@ class SingleDownloadTab(ctk.CTkFrame):
     Esta clase contendrá TODA la UI y la lógica de la
     pestaña de descarga única.
     """
-    APP_VERSION = "1.2.6"
-
-
     DOWNLOAD_BTN_COLOR = "#28A745"       
     DOWNLOAD_BTN_HOVER = "#218838"       
     PROCESS_BTN_COLOR = "#6F42C1"        
@@ -114,7 +111,13 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.keep_original_quick_saved = True
         self.analysis_was_playlist = False
 
-        # (Omitimos 'ui_request_event' y las otras, se quedan en 'app')
+        self.active_downloads_state = {
+            "ffmpeg": {"text": "", "value": 0.0, "active": False},
+            "deno": {"text": "", "value": 0.0, "active": False},
+            "poppler": {"text": "", "value": 0.0, "active": False},
+            "inkscape": {"text": "", "value": 0.0, "active": False},
+            "rembg": {"text": "", "value": 0.0, "active": False}
+        }
 
         self.recode_compatibility_status = "valid"
         self.original_analyze_text = "Analizar"
@@ -132,6 +135,22 @@ class SingleDownloadTab(ctk.CTkFrame):
 
         self._create_widgets()
         self._initialize_ui_settings()
+
+    def _get_ctk_fg_color(self, ctk_widget):
+        """
+        Obtiene el color de fondo de un widget de CustomTkinter según el tema actual.
+        """
+        try:
+            fg_color = ctk_widget._fg_color
+            if isinstance(fg_color, (tuple, list)):
+                # CustomTkinter usa tuplas (color_claro, color_oscuro)
+                # Índice 1 = color oscuro (modo Dark)
+                appearance_mode = ctk.get_appearance_mode()
+                return fg_color[1] if appearance_mode == "Dark" else fg_color[0]
+            return fg_color
+        except Exception as e:
+            print(f"DEBUG: Error obteniendo color: {e}")
+            return "#2B2B2B"  # Fallback gris oscuro
 
     def _initialize_ui_settings(self):
 
@@ -193,9 +212,11 @@ class SingleDownloadTab(ctk.CTkFrame):
         print("DEBUG: Panel de recodificación forzado a mostrarse en inicialización")
         
         self.app.after(100, self._update_save_preset_visibility)
+        self.enable_drag_and_drop()
         self.is_initializing = False
         
     def _create_widgets(self):
+
         url_frame = ctk.CTkFrame(self)
         url_frame.pack(pady=10, padx=10, fill="x")
         ctk.CTkLabel(url_frame, text="URL:").pack(side="left", padx=(10, 5))
@@ -215,16 +236,60 @@ class SingleDownloadTab(ctk.CTkFrame):
         info_frame.pack(pady=10, padx=10, fill="both", expand=True)
         left_column_container = ctk.CTkFrame(info_frame, fg_color="transparent")
         left_column_container.pack(side="left", padx=10, pady=10, fill="y", anchor="n")
+        
         self.thumbnail_container = ctk.CTkFrame(left_column_container, width=320, height=180)
         self.thumbnail_container.pack(pady=(0, 5))
         self.thumbnail_container.pack_propagate(False)
+
+        # ✅ NUEVO: Frame Tkinter nativo para Drag & Drop
+        # Este frame se coloca ENCIMA del CTkFrame y captura los eventos de DnD
+        import tkinter  # Asegúrate de tenerlo importado al inicio del archivo
+
+        self.dnd_overlay = tkinter.Frame(
+            self.thumbnail_container,
+            bg=self.thumbnail_container._apply_appearance_mode(self.thumbnail_container._fg_color),  # Mismo color de fondo
+            width=320,
+            height=180
+        )
+        self.dnd_overlay.place(x=0, y=0, relwidth=1, relheight=1)  # Cubre todo el contenedor
+        self.dnd_overlay.pack_propagate(False)
+
         self.create_placeholder_label()
+
         thumbnail_actions_frame = ctk.CTkFrame(left_column_container)
         thumbnail_actions_frame.pack(fill="x")
-        self.save_thumbnail_button = ctk.CTkButton(thumbnail_actions_frame, text="Descargar Miniatura...", state="disabled", command=self.save_thumbnail)
-        self.save_thumbnail_button.pack(fill="x", padx=10, pady=5)
-        self.auto_save_thumbnail_check = ctk.CTkCheckBox(thumbnail_actions_frame, text="Descargar miniatura con el video", command=self.toggle_manual_thumbnail_button)
-        self.auto_save_thumbnail_check.pack(padx=10, pady=5, anchor="w")
+
+        # Frame para los botones (en fila)
+        thumbnail_buttons_frame = ctk.CTkFrame(thumbnail_actions_frame, fg_color="transparent")
+        thumbnail_buttons_frame.pack(fill="x", padx=10, pady=5)
+        thumbnail_buttons_frame.grid_columnconfigure((0, 1), weight=1)
+
+        # Botón descargar miniatura (izquierda)
+        self.save_thumbnail_button = ctk.CTkButton(
+            thumbnail_buttons_frame, 
+            text="Descargar Miniatura", 
+            state="disabled", 
+            command=self.save_thumbnail
+        )
+        self.save_thumbnail_button.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+
+        # Botón enviar a H.I. (derecha)
+        self.send_thumbnail_to_imagetools_button = ctk.CTkButton(
+            thumbnail_buttons_frame,
+            text="Enviar a H.I.",
+            state="disabled",
+            command=self._send_thumbnail_to_image_tools,
+        )
+        self.send_thumbnail_to_imagetools_button.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+
+        # ✅ MODIFICADO: Checkbox debajo de los botones (sin usar 'after')
+        self.auto_save_thumbnail_check = ctk.CTkCheckBox(
+            thumbnail_actions_frame, 
+            text="Descargar miniatura con el video", 
+            command=self.toggle_manual_thumbnail_button
+        )
+        self.auto_save_thumbnail_check.pack(padx=10, pady=(0, 5), anchor="w")
+
         options_scroll_frame = ctk.CTkScrollableFrame(left_column_container)
         options_scroll_frame.pack(pady=10, fill="both", expand=True)
         ctk.CTkLabel(options_scroll_frame, text="Descargar Fragmento", font=ctk.CTkFont(weight="bold")).pack(fill="x", padx=10, pady=(5, 2))
@@ -302,6 +367,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.manual_cookie_frame = ctk.CTkFrame(cookie_options_frame, fg_color="transparent")
         self.cookie_path_entry = ctk.CTkEntry(self.manual_cookie_frame, placeholder_text="Ruta al archivo cookies.txt...")
         self.cookie_path_entry.pack(fill="x")
+        self.cookie_path_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.cookie_path_entry))
         self.cookie_path_entry.bind("<KeyRelease>", self._on_cookie_detail_change)
         self.select_cookie_file_button = ctk.CTkButton(self.manual_cookie_frame, text="Elegir Archivo...", command=lambda: self.select_cookie_file())
         self.select_cookie_file_button.pack(fill="x", pady=(5,0))
@@ -326,7 +392,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         maintenance_frame.pack(fill="x", padx=5, pady=(0, 10))
         maintenance_frame.grid_columnconfigure(0, weight=1)
 
-        self.app_status_label = ctk.CTkLabel(maintenance_frame, text=f"DowP v{self.APP_VERSION} - Verificando...", justify="left")
+        self.app_status_label = ctk.CTkLabel(maintenance_frame, text=f"DowP v{self.app.APP_VERSION} - Verificando...", justify="left")
         self.app_status_label.grid(row=0, column=0, padx=10, pady=(5, 5), sticky="ew")
 
         self.update_app_button = ctk.CTkButton(maintenance_frame, text="Buscar Actualización", state="disabled", command=self._open_release_page)
@@ -341,6 +407,54 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.deno_status_label.grid(row=4, column=0, padx=10, pady=(5,5), sticky="ew") 
         self.update_deno_button = ctk.CTkButton(maintenance_frame, text="Buscar Actualizaciones de Deno", command=self.manual_deno_update_check)
         self.update_deno_button.grid(row=5, column=0, padx=10, pady=(0, 10), sticky="ew")
+
+        # --- SECCIÓN POPPLER ---
+        self.poppler_status_label = ctk.CTkLabel(maintenance_frame, text="Poppler: Verificando...", wraplength=280, justify="left")
+        self.poppler_status_label.grid(row=6, column=0, padx=10, pady=(5,5), sticky="ew") 
+        self.update_poppler_button = ctk.CTkButton(maintenance_frame, text="Buscar Actualizaciones de Poppler", command=self.manual_poppler_update_check)
+        self.update_poppler_button.grid(row=7, column=0, padx=10, pady=(0, 10), sticky="ew")
+
+        # --- SECCIÓN INKSCAPE ---
+        self.inkscape_status_label = ctk.CTkLabel(
+            maintenance_frame, 
+            text="Inkscape: Verificando...", 
+            wraplength=280, 
+            justify="left"
+        )
+        self.inkscape_status_label.grid(row=8, column=0, padx=10, pady=(5,5), sticky="ew") 
+        
+        # Botón "Recargar" por si metes los archivos con la app abierta
+        self.check_inkscape_button = ctk.CTkButton(
+            maintenance_frame, 
+            text="Verificar Inkscape", 
+            command=self.manual_inkscape_check
+        )
+        self.check_inkscape_button.grid(row=9, column=0, padx=10, pady=(0, 10), sticky="ew")
+
+        # --- SECCIÓN GHOSTSCRIPT (NUEVO) ---
+        self.ghostscript_status_label = ctk.CTkLabel(
+            maintenance_frame, 
+            text="Ghostscript: Verificando...", 
+            wraplength=280, 
+            justify="left"
+        )
+        self.ghostscript_status_label.grid(row=10, column=0, padx=10, pady=(5,5), sticky="ew") 
+        
+        self.check_ghostscript_button = ctk.CTkButton(
+            maintenance_frame, 
+            text="Verificar Ghostscript", 
+            command=self.manual_ghostscript_check
+        )
+        self.check_ghostscript_button.grid(row=11, column=0, padx=10, pady=(0, 10), sticky="ew")
+
+        # --- SECCIÓN MODELOS IA (rembg) ---
+        self.rembg_status_label = ctk.CTkLabel(
+            maintenance_frame, 
+            text="Modelos IA: Pendiente...", 
+            wraplength=280, 
+            justify="left"
+        )
+        self.rembg_status_label.grid(row=12, column=0, padx=10, pady=(5, 10), sticky="ew")
 
         details_frame = ctk.CTkFrame(info_frame)
         details_frame.pack(side="left", fill="both", expand=True, padx=(0,10), pady=10)
@@ -401,7 +515,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         recode_mode_frame = ctk.CTkFrame(self.recode_main_frame, fg_color="transparent")
         recode_mode_frame.pack(fill="x", padx=10, pady=(0, 10))
         ctk.CTkLabel(recode_mode_frame, text="Modo:").pack(side="left", padx=(0, 10))
-        self.recode_mode_selector = ctk.CTkSegmentedButton(recode_mode_frame, values=["Modo Rápido", "Modo Manual"], command=self._on_recode_mode_change)
+        self.recode_mode_selector = ctk.CTkSegmentedButton(recode_mode_frame, values=["Modo Rápido", "Modo Manual", "Modo Extraer"], command=self._on_recode_mode_change)
         self.recode_mode_selector.pack(side="left", expand=True, fill="x")
 
         self.recode_quick_frame = ctk.CTkFrame(self.recode_main_frame)
@@ -627,8 +741,88 @@ class SingleDownloadTab(ctk.CTkFrame):
             command=self.open_save_preset_dialog
         )
         self.save_preset_button.pack(fill="x", padx=10, pady=(10, 5))
+        
+        self.recode_extract_frame = ctk.CTkFrame(self.recode_main_frame, fg_color="transparent")
 
+        # --- NUEVA UI DE EXTRACCIÓN ---
+        self.extract_options_frame = ctk.CTkFrame(self.recode_extract_frame)
+        self.extract_options_frame.pack(fill="x", padx=10, pady=5)
+        self.extract_options_frame.grid_columnconfigure(1, weight=1)
 
+        # 🆕 0. Checkbox "Mantener original" (PRIMERO, como en otros modos)
+        self.keep_original_extract_checkbox = ctk.CTkCheckBox(
+            self.extract_options_frame, 
+            text="Mantener el video original",
+            command=self.save_settings
+        )
+        self.keep_original_extract_checkbox.grid(row=0, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="w")
+        self.keep_original_extract_checkbox.select()  # Seleccionado por defecto
+
+        # 1. Tipo de Extracción
+        ctk.CTkLabel(self.extract_options_frame, text="Tipo:").grid(row=1, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.extract_type_menu = ctk.CTkOptionMenu(
+            self.extract_options_frame,
+            values=["Video a Secuencia de Imágenes"],
+            state="disabled" # Por ahora solo hay 1 opción
+        )
+        self.extract_type_menu.grid(row=1, column=1, padx=(0, 10), pady=5, sticky="ew")
+
+        # 2. Formato de Imagen
+        ctk.CTkLabel(self.extract_options_frame, text="Formato:").grid(row=2, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.extract_format_menu = ctk.CTkOptionMenu(
+            self.extract_options_frame,
+            values=["PNG (calidad alta)", "JPG (tamaño reducido)"],
+            command=self._toggle_extract_options
+        )
+        self.extract_format_menu.grid(row=2, column=1, padx=(0, 10), pady=5, sticky="ew")
+
+        # 3. Opciones de Calidad JPG (ocultas por defecto)
+        self.extract_jpg_quality_frame = ctk.CTkFrame(self.extract_options_frame, fg_color="transparent")
+        self.extract_jpg_quality_frame.grid(row=3, column=0, columnspan=2, sticky="ew")
+        self.extract_jpg_quality_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(self.extract_jpg_quality_frame, text="Calidad JPG (1-5):").grid(row=0, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.extract_jpg_quality_entry = ctk.CTkEntry(self.extract_jpg_quality_frame, placeholder_text="2 (Muy Alta)")
+        self.extract_jpg_quality_entry.grid(row=0, column=1, padx=(0, 10), pady=5, sticky="ew")
+        Tooltip(self.extract_jpg_quality_entry, "Calidad de FFmpeg (-q:v). Rango: 1 (mejor) a 31 (peor). Se recomienda 2-5.", delay_ms=1000)
+        self.extract_jpg_quality_frame.grid_forget()
+
+        # 4. FPS
+        ctk.CTkLabel(self.extract_options_frame, text="FPS:").grid(row=4, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.extract_fps_entry = ctk.CTkEntry(self.extract_options_frame, placeholder_text="Vacío = Todos los fotogramas")
+        self.extract_fps_entry.grid(row=4, column=1, padx=(0, 10), pady=5, sticky="ew")
+        Tooltip(self.extract_fps_entry, "Ej: '10' para 10 FPS.\nDéjalo vacío para extraer CADA fotograma (¡puede generar miles de archivos!)", delay_ms=1000)
+
+        # 5. Nombre de la carpeta de salida
+        ctk.CTkLabel(self.extract_options_frame, text="Nombre de carpeta:").grid(row=5, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.extract_folder_name_entry = ctk.CTkEntry(self.extract_options_frame, placeholder_text="Nombre del video + '_frames'")
+        self.extract_folder_name_entry.grid(row=5, column=1, padx=(0, 10), pady=5, sticky="ew")
+        Tooltip(self.extract_folder_name_entry, "Personaliza el nombre de la carpeta donde se guardarán las imágenes.\nSi lo dejas vacío, se usará el nombre del video.", delay_ms=1000)
+
+        # 6. Frame de resultados (SIEMPRE VISIBLE)
+        self.extract_results_frame = ctk.CTkFrame(self.extract_options_frame, fg_color="transparent")
+        self.extract_results_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(15, 5))
+        self.extract_results_frame.grid_columnconfigure(0, weight=1)
+
+        # Etiqueta de éxito (inicialmente con texto vacío)
+        self.extract_success_label = ctk.CTkLabel(
+            self.extract_results_frame, 
+            text="",  # ✅ Vacío por defecto
+            font=ctk.CTkFont(weight="bold"),
+            text_color="#28A745"
+        )
+        self.extract_success_label.grid(row=0, column=0, pady=(5, 10), sticky="ew")
+
+        # Botón para enviar a Herramientas de Imagen - SIEMPRE VISIBLE
+        self.send_to_imagetools_button = ctk.CTkButton(
+            self.extract_results_frame,
+            text="Enviar a Herramientas de Imagen",
+            command=self._send_folder_to_image_tools,
+            height=32,
+            state="disabled"  # ✅ Deshabilitado por defecto
+        )
+        self.send_to_imagetools_button.grid(row=1, column=0, padx=10, pady=(0, 5), sticky="ew")
+        # --- FIN DE LA NUEVA UI DE EXTRACCIÓN ---
 
         local_import_frame = ctk.CTkFrame(self.recode_main_frame)
         local_import_frame.pack(side="bottom", fill="x", padx=10, pady=(15, 5))
@@ -761,59 +955,71 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.app_status_label.configure(text=f"DowP v{self.APP_VERSION} - Verificando de nuevo...")
             self.update_app_button.configure(state="disabled")
             threading.Thread(
-                target=lambda: self.app.on_update_check_complete(check_app_update(self.APP_VERSION)),
+                target=lambda: self.app.on_update_check_complete(check_app_update(self.app.APP_VERSION)),
                 daemon=True
             ).start()
 
-    def _handle_download_progress(self, text, value):
+    def update_setup_download_progress(self, source, text, value):
         """
-        Una función de callback segura para actualizar el progreso en la UI principal,
-        sin depender de la ventana de carga.
+        Callback para actualizar el estado de descarga de UNA dependencia (FFmpeg o Deno).
+        'source' debe ser 'ffmpeg' o 'deno'.
+        'value' está en el rango 0-100.
         """
+        if source not in self.active_downloads_state:
+            return
 
-        percentage = value / 100.0
+        # Normalizar valor a 0.0 - 1.0
+        progress_value = float(value) / 100.0
+
+        self.active_downloads_state[source]["text"] = text
+        self.active_downloads_state[source]["value"] = progress_value
+        # Un valor entre 0 y 1 (excluyentes) significa que está activamente descargando
+        self.active_downloads_state[source]["active"] = (progress_value > 0 and progress_value < 1)
+
+        # Llamar al renderizador
+        self._render_setup_progress()
+
+    def _render_setup_progress(self):
+        ffmpeg_state = self.active_downloads_state["ffmpeg"]
+        deno_state = self.active_downloads_state["deno"]
+        poppler_state = self.active_downloads_state.get("poppler", {"text": "", "value": 0.0, "active": False})
+        inkscape_state = self.active_downloads_state.get("inkscape", {"text": "", "value": 0.0, "active": False})
+        rembg_state = self.active_downloads_state.get("rembg", {"text": "", "value": 0.0, "active": False}) # <--- NUEVO
+
+        # Sumar rembg al conteo
+        active_count = sum([
+            ffmpeg_state["active"], deno_state["active"], 
+            poppler_state["active"], inkscape_state["active"], 
+            rembg_state["active"]
+        ])
         
-        self.update_progress(percentage, text)
+        final_text = "Esperando..."
+        final_progress = 0.0
 
-
-    
-
-    def update_setup_progress(self, text, value):
-        """Callback para actualizar la ventana de carga desde el hilo de configuración."""
-        if value >= 95:
-            self.app.after(500, self.on_setup_complete)
-        self.app.after(0, self.loading_window.update_progress, text, value / 100.0)
-
-    def on_setup_complete(self):
-        """Se ejecuta cuando la configuración inicial ha terminado."""
-        if not self.loading_window.error_state:
-            self.loading_window.update_progress("Configuración completada.", 100)
-            self.app.after(800, self.loading_window.destroy) 
-            self.attributes('-disabled', False)
-            self.app.lift()
-            self.app.focus_force()
-            self.ffmpeg_processor.run_detection_async(self.app.on_ffmpeg_detection_complete)
-            self.output_path_entry.insert(0, self.app.default_download_path)
-            self.cookie_mode_menu.set(self.cookies_mode_saved)
-            if self.cookies_path:
-                self.cookie_path_entry.insert(0, self.cookies_path)
-            self.browser_var.set(self.selected_browser_saved)
-            self.browser_profile_entry.insert(0, self.browser_profile_saved)
-            self.on_cookie_mode_change(self.cookies_mode_saved)
-            if self.auto_download_subtitle_saved:
-                self.auto_download_subtitle_check.select()
-            else:
-                self.auto_download_subtitle_check.deselect()
-            self.toggle_manual_subtitle_button()
-            if self.recode_settings.get("keep_original", True):
-                self.keep_original_checkbox.select()
-            else:
-                self.keep_original_checkbox.deselect()
-            self.recode_video_checkbox.deselect()
-            self.recode_audio_checkbox.deselect()
-            self._toggle_recode_panels()
+        if active_count > 0:
+            final_text = f"Descargando dependencias ({active_count} activas)..."
+            # Sumar rembg al promedio
+            total_val = (ffmpeg_state["value"] + deno_state["value"] + 
+                         poppler_state["value"] + inkscape_state["value"] + 
+                         rembg_state["value"])
+            
+            final_progress = total_val / max(1, active_count)
+            
+            if active_count == 1:
+                if ffmpeg_state["active"]: final_text = ffmpeg_state["text"]; final_progress = ffmpeg_state["value"]
+                elif deno_state["active"]: final_text = deno_state["text"]; final_progress = deno_state["value"]
+                elif poppler_state["active"]: final_text = poppler_state["text"]; final_progress = poppler_state["value"]
+                elif inkscape_state["active"]: final_text = inkscape_state["text"]; final_progress = inkscape_state["value"]
+                elif rembg_state["active"]: final_text = rembg_state["text"]; final_progress = rembg_state["value"] # <--- NUEVO
         else:
-            self.loading_window.title("Error Crítico")
+            # Mostrar último mensaje relevante
+            if rembg_state["text"]: final_text = rembg_state["text"]; final_progress = rembg_state["value"] # <--- NUEVO
+            elif poppler_state["text"]: final_text = poppler_state["text"]; final_progress = poppler_state["value"]
+            elif deno_state["text"]: final_text = deno_state["text"]; final_progress = deno_state["value"]
+            elif ffmpeg_state["text"]: final_text = ffmpeg_state["text"]; final_progress = ffmpeg_state["value"]
+            elif inkscape_state["text"]: final_text = inkscape_state["text"]; final_progress = inkscape_state["value"]
+            
+        self.update_progress(final_progress, final_text)
 
     def _execute_fragment_clipping(self, input_filepath, start_time, end_time):
         """
@@ -955,13 +1161,23 @@ class SingleDownloadTab(ctk.CTkFrame):
 
     def _on_recode_mode_change(self, mode):
         """Muestra el panel de recodificación apropiado."""
+        
+        # Ocultar todos los paneles primero
+        self.recode_quick_frame.pack_forget()
+        self.recode_manual_frame.pack_forget()
+        self.save_preset_frame.pack_forget()
+        if hasattr(self, 'recode_extract_frame'):
+            self.recode_extract_frame.pack_forget()
+
+        # Mostrar el panel correcto
         if mode == "Modo Rápido":
             self.recode_quick_frame.pack(side="top", fill="x", padx=10, pady=0)
-            self.recode_manual_frame.pack_forget()
-            self.save_preset_frame.pack_forget()
-        else:
+        
+        elif mode == "Modo Manual":
             self.recode_manual_frame.pack(side="top", fill="x", padx=0, pady=0)
-            self.recode_quick_frame.pack_forget()
+        
+        elif mode == "Modo Extraer":
+            self.recode_extract_frame.pack(side="top", fill="x", padx=10, pady=0)
         
         self._validate_recode_compatibility()
         self._update_save_preset_visibility()
@@ -974,7 +1190,17 @@ class SingleDownloadTab(ctk.CTkFrame):
         if self.apply_quick_preset_checkbox.get() == 1:
             
             self.quick_recode_options_frame.pack(fill="x", padx=0, pady=0)
-            self.keep_original_quick_checkbox.configure(state="normal") 
+            
+            # --- INICIO DE CORRECCIÓN ---
+            # Comprobar si estamos en modo local ANTES de habilitar la casilla
+            if not self.local_file_path:
+                self.keep_original_quick_checkbox.configure(state="normal")
+            else:
+                # Si es modo local, forzar la selección y deshabilitarla
+                self.keep_original_quick_checkbox.select()
+                self.keep_original_quick_checkbox.configure(state="disabled")
+            # --- FIN DE CORRECCIÓN ---
+            
         else:
             
             self.quick_recode_options_frame.pack_forget()
@@ -982,7 +1208,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         
         self.update_download_button_state()
         self.save_settings()
-
+        
     def _populate_preset_menu(self):
         """
         Lee los presets disponibles y los añade al menú desplegable del Modo Rápido,
@@ -1163,6 +1389,11 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.keep_original_quick_checkbox.select()
             self.keep_original_quick_checkbox.configure(state="disabled")
 
+            # 🆕 También deshabilitar en modo extraer
+            if hasattr(self, 'keep_original_extract_checkbox'):
+                self.keep_original_extract_checkbox.select()
+                self.keep_original_extract_checkbox.configure(state="disabled")
+
             self.recode_main_frame._parent_canvas.yview_moveto(0)
             self.save_in_same_folder_check.pack(padx=10, pady=(5,0), anchor="w")
             self.save_in_same_folder_check.select()
@@ -1310,10 +1541,13 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.save_in_same_folder_check.pack_forget()
         self.download_button.configure(text=self.original_download_text, fg_color=self.DOWNLOAD_BTN_COLOR)
         self.clear_local_file_button.pack_forget()
-        self.auto_save_thumbnail_check.pack(padx=20, pady=(0, 10), anchor="w", after=self.save_thumbnail_button)
+
         self.auto_save_thumbnail_check.configure(state="normal")
         self.keep_original_checkbox.configure(state="normal")
         self.keep_original_quick_checkbox.configure(state="normal")
+        # 🆕 Rehabilitar en modo extraer
+        if hasattr(self, 'keep_original_extract_checkbox'):
+            self.keep_original_extract_checkbox.configure(state="normal")
         self.update_download_button_state()
         self.save_in_same_folder_check.deselect()
         self._on_save_in_same_folder_change()
@@ -1638,30 +1872,44 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.recode_container_label.configure(text=container)
 
     def manual_ffmpeg_update_check(self):
-        """Inicia una comprobación manual de la actualización de FFmpeg, usando el callback de progreso seguro."""
+        """Inicia una comprobación manual de la actualización de FFmpeg."""
         self.update_ffmpeg_button.configure(state="disabled", text="Buscando...")
         self.ffmpeg_status_label.configure(text="FFmpeg: Verificando...")
-        from src.core.setup import check_environment_status
-        
-        def check_task():
-            status_info = check_environment_status(self._handle_download_progress)
-            self.app.after(0, self.app.on_status_check_complete, status_info, True)
+        # Limpiar estado del otro para que no se crucen mensajes
+        self.active_downloads_state["deno"] = {"text": "", "value": 0.0, "active": False}
 
-        self.setup_thread = threading.Thread(target=check_task, daemon=True)
-        self.setup_thread.start()
+        from src.core.setup import check_ffmpeg_status # <-- Llama a la nueva función
+
+        def check_task():
+            # Usar la nueva función de callback unificada
+            status_info = check_ffmpeg_status(
+                lambda text, val: self.update_setup_download_progress('ffmpeg', text, val)
+            )
+            # Llamar a un nuevo callback en main_window
+            self.app.after(0, self.app.on_ffmpeg_check_complete, status_info)
+
+        # Usar self.active_operation_thread para evitar conflictos
+        self.active_operation_thread = threading.Thread(target=check_task, daemon=True)
+        self.active_operation_thread.start()
 
     def manual_deno_update_check(self):
         """Inicia una comprobación manual de la actualización de Deno."""
         self.update_deno_button.configure(state="disabled", text="Buscando...")
         self.deno_status_label.configure(text="Deno: Verificando...")
-        from src.core.setup import check_environment_status
-        
-        def check_task():
-            status_info = check_environment_status(self._handle_download_progress)
-            self.app.after(0, self.app.on_status_check_complete, status_info, True)
+        # Limpiar estado del otro para que no se crucen mensajes
+        self.active_downloads_state["ffmpeg"] = {"text": "", "value": 0.0, "active": False}
 
-        self.setup_thread = threading.Thread(target=check_task, daemon=True)
-        self.setup_thread.start()
+        from src.core.setup import check_deno_status # <-- Llama a la nueva función
+
+        def check_task():
+            status_info = check_deno_status(
+                lambda text, val: self.update_setup_download_progress('deno', text, val)
+            )
+            # Llamar a un nuevo callback en main_window
+            self.app.after(0, self.app.on_deno_check_complete, status_info)
+
+        self.active_operation_thread = threading.Thread(target=check_task, daemon=True)
+        self.active_operation_thread.start()
 
     def _clear_subtitle_menus(self):
         """Restablece TODOS los controles de subtítulos a su estado inicial e inactivo."""
@@ -1789,11 +2037,20 @@ class SingleDownloadTab(ctk.CTkFrame):
             if local_mode_ready:
                 if current_recode_mode == "Modo Rápido":
                     is_recode_on = self.apply_quick_preset_checkbox.get() == 1
-                else:  
+                elif current_recode_mode == "Modo Manual":
                     is_recode_on = self.recode_video_checkbox.get() == 1 or self.recode_audio_checkbox.get() == 1
+                elif current_recode_mode == "Modo Extraer":
+                    # 🆕 En modo extraer, siempre hay acción seleccionada
+                    is_recode_on = True
+                else:
+                    is_recode_on = False
                 
                 is_clip_on = self.fragment_checkbox.get() == 1
-                if not is_recode_on and not is_clip_on:
+                
+                # 🆕 Si está en Modo Extraer, no requiere otras acciones
+                if current_recode_mode == "Modo Extraer":
+                    action_is_selected_for_local_mode = True
+                elif not is_recode_on and not is_clip_on:
                     action_is_selected_for_local_mode = False
 
             recode_is_compatible = self.recode_compatibility_status in ["valid", "warning"]
@@ -3030,15 +3287,38 @@ class SingleDownloadTab(ctk.CTkFrame):
         return filename
 
     def create_placeholder_label(self, text="Miniatura", font_size=14):
-        if self.thumbnail_label: self.thumbnail_label.destroy()
+        """Crea el placeholder de miniatura"""
+        if self.thumbnail_label: 
+            self.thumbnail_label.destroy()
+        
+        # ✅ Limpiar variables de hover (pero NO eliminar el atributo)
+        if hasattr(self, '_original_image_backup'):
+            self._original_image_backup = None  # Mantener como None, no del
+        
+        if hasattr(self, '_hover_text_label') and self._hover_text_label is not None:
+            try:
+                if self._hover_text_label.winfo_exists():
+                    self._hover_text_label.destroy()
+            except:
+                pass
+            self._hover_text_label = None
+        
         font = ctk.CTkFont(size=font_size)
-        self.thumbnail_label = ctk.CTkLabel(self.thumbnail_container, text=text, font=font)
+        
+        self.thumbnail_label = ctk.CTkLabel(self.dnd_overlay, text=text, font=font)
         self.thumbnail_label.pack(expand=True, fill="both")
+        
         self.pil_image = None
-        if hasattr(self, 'save_thumbnail_button'): self.save_thumbnail_button.configure(state="disabled")
+        
+        if hasattr(self, 'save_thumbnail_button'): 
+            self.save_thumbnail_button.configure(state="disabled")
+        if hasattr(self, 'send_thumbnail_to_imagetools_button'):
+            self.send_thumbnail_to_imagetools_button.configure(state="disabled")
         if hasattr(self, 'auto_save_thumbnail_check'):
             self.auto_save_thumbnail_check.deselect()
             self.auto_save_thumbnail_check.configure(state="normal")
+        
+        self.dnd_overlay.lift()
 
     def _on_cookie_detail_change(self, event=None):
         """Callback for when specific cookie details (path, browser, profile) change."""
@@ -3084,8 +3364,16 @@ class SingleDownloadTab(ctk.CTkFrame):
     def toggle_manual_thumbnail_button(self):
         is_checked = self.auto_save_thumbnail_check.get() == 1
         has_image = self.pil_image is not None
-        if is_checked or not has_image: self.save_thumbnail_button.configure(state="disabled")
-        else: self.save_thumbnail_button.configure(state="normal")
+        
+        # Ambos botones se habilitan/deshabilitan juntos
+        if is_checked or not has_image:
+            self.save_thumbnail_button.configure(state="disabled")
+            if hasattr(self, 'send_thumbnail_to_imagetools_button'):
+                self.send_thumbnail_to_imagetools_button.configure(state="disabled")
+        else:
+            self.save_thumbnail_button.configure(state="normal")
+            if hasattr(self, 'send_thumbnail_to_imagetools_button'):
+                self.send_thumbnail_to_imagetools_button.configure(state="normal")
 
     def toggle_manual_subtitle_button(self):
         """Activa/desactiva el botón 'Descargar Subtítulos'."""
@@ -3191,24 +3479,41 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.update_download_button_state()
 
     def open_last_download_folder(self):
-        """Abre la carpeta de la última descarga y selecciona el archivo si es posible."""
+        """Abre la carpeta contenedora del último resultado (archivo o carpeta)."""
         if not self.last_download_path or not os.path.exists(self.last_download_path):
-            print("ERROR: No hay un archivo válido para mostrar o la ruta no existe.")
+            print("ERROR: No hay una ruta válida para mostrar.")
             return
-        file_path = os.path.normpath(self.last_download_path)
+        
+        path = os.path.normpath(self.last_download_path)
+        
+        # ✅ Si es una carpeta (extracción), abrir la carpeta CONTENEDORA
+        if os.path.isdir(path):
+            folder_to_open = os.path.dirname(path)
+            print(f"DEBUG: Abriendo carpeta contenedora de: {path}")
+        # ✅ Si es un archivo, abrir la carpeta contenedora y seleccionar el archivo
+        else:
+            folder_to_open = path
+            print(f"DEBUG: Abriendo carpeta y seleccionando archivo: {path}")
         
         try:
-            print(f"DEBUG: Intentando mostrar el archivo en la carpeta: {file_path}")
             system = platform.system()
             if system == "Windows":
-                subprocess.Popen(['explorer', '/select,', file_path])
+                if os.path.isdir(path):
+                    # Abrir carpeta contenedora sin seleccionar nada
+                    subprocess.Popen(['explorer', folder_to_open])
+                else:
+                    # Abrir y seleccionar archivo
+                    subprocess.Popen(['explorer', '/select,', path])
             elif system == "Darwin":
-                subprocess.Popen(['open', '-R', file_path])
-            else: 
-                subprocess.Popen(['xdg-open', os.path.dirname(file_path)])
+                if os.path.isdir(path):
+                    subprocess.Popen(['open', folder_to_open])
+                else:
+                    subprocess.Popen(['open', '-R', path])
+            else:
+                # Linux siempre abre la carpeta contenedora
+                subprocess.Popen(['xdg-open', folder_to_open if os.path.isdir(path) else os.path.dirname(path)])
         except Exception as e:
-            print(f"Error al intentar seleccionar el archivo en la carpeta: {e}")
-            messagebox.showerror("Error", f"No se pudo mostrar el archivo en la carpeta:\n{file_path}\n\nError: {e}")
+            print(f"Error al abrir carpeta: {e}")
 
     def select_cookie_file(self):
         filepath = filedialog.askopenfilename(title="Selecciona tu archivo cookies.txt", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
@@ -3437,13 +3742,18 @@ class SingleDownloadTab(ctk.CTkFrame):
             if "no tiene audio" in audio_label.lower() or audio_label == "-":
                 self.progress_label.configure(text="Error: Este video no tiene audio disponible.")
                 return
+        # --- Preparación de UI (Ahora esconde AMBOS botones de resultado) ---
         self.download_button.configure(text="Cancelar", fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER, command=self.cancel_operation)
         self.analyze_button.configure(state="disabled") 
-        self.save_subtitle_button.configure(state="disabled") 
+        self.save_subtitle_button.configure(state="disabled")
+        self.open_folder_button.configure(state="disabled")
+        self.send_to_imagetools_button.pack_forget() # <-- ESCONDER EL NUEVO BOTÓN
+        
         self.cancellation_event.clear()
-
         self.progress_bar.set(0)
         self.update_progress(0, "Preparando proceso...")
+        
+        # --- Recolección de Opciones Base (Comunes) ---
         options = {
             "url": url, "output_path": output_path,
             "title": self.title_entry.get() or "video_descargado",
@@ -3485,49 +3795,90 @@ class SingleDownloadTab(ctk.CTkFrame):
             "keep_original_on_clip": self.keep_original_on_clip_check.get() == 1 
         }
 
+        # --- EL NUEVO "ROUTER" LÓGICO ---
         recode_mode = self.recode_mode_selector.get()
 
-        if recode_mode == "Modo Rápido":
-            if self.apply_quick_preset_checkbox.get() == 1:
-                selected_preset_name = self.recode_preset_menu.get()
-                preset_params = self._find_preset_params(selected_preset_name)
-                options.update(preset_params)
+        if recode_mode == "Modo Rápido" or recode_mode == "Modo Manual":
             
-            options["keep_original_file"] = self.keep_original_quick_checkbox.get() == 1
-        elif recode_mode == "Modo Manual":
-            manual_options = {
-                "recode_video_enabled": self.recode_video_checkbox.get() == 1,
-                "recode_audio_enabled": self.recode_audio_checkbox.get() == 1,
-                "keep_original_file": self.keep_original_checkbox.get() == 1,
-                "recode_proc": self.proc_type_var.get(),
-                "recode_codec_name": self.recode_codec_menu.get(),
-                "recode_profile_name": self.recode_profile_menu.get(),
-                "custom_bitrate_value": self.custom_bitrate_entry.get(),
-                "custom_gif_fps": self.custom_gif_fps_entry.get() or "15",
-                "custom_gif_width": self.custom_gif_width_entry.get() or "480",
-                "recode_container": self.recode_container_label.cget("text"),
-                "recode_audio_codec_name": self.recode_audio_codec_menu.get(),
-                "recode_audio_profile_name": self.recode_audio_profile_menu.get(),
-                "fps_force_enabled": self.fps_checkbox.get() == 1,
-                "fps_value": self.fps_entry.get(),
-                "resolution_change_enabled": self.resolution_checkbox.get() == 1,
-                "res_width": self.width_entry.get(),
-                "res_height": self.height_entry.get(),
-                "no_upscaling_enabled": self.no_upscaling_checkbox.get() == 1,
-                "resolution_preset": self.resolution_preset_menu.get(),
-                "original_width": self.original_video_width,
-                "original_height": self.original_video_height,
+            # --- Lógica de Recodificación (tu código existente) ---
+            print("DEBUG: Iniciando Hilo de Recodificación/Descarga.")
+            
+            # Recolectar opciones de recodificación
+            if recode_mode == "Modo Rápido":
+                if self.apply_quick_preset_checkbox.get() == 1:
+                    selected_preset_name = self.recode_preset_menu.get()
+                    preset_params = self._find_preset_params(selected_preset_name)
+                    options.update(preset_params)
+                options["keep_original_file"] = self.keep_original_quick_checkbox.get() == 1
+                
+                # Llamar al hilo de trabajo
+                self.active_operation_thread = threading.Thread(target=self._execute_download_and_recode, args=(options,), daemon=True)
+                self.active_operation_thread.start()
+
+            elif recode_mode == "Modo Manual":
+                manual_options = {
+                    "recode_video_enabled": self.recode_video_checkbox.get() == 1,
+                    "recode_audio_enabled": self.recode_audio_checkbox.get() == 1,
+                    "keep_original_file": self.keep_original_checkbox.get() == 1,
+                    "recode_proc": self.proc_type_var.get(),
+                    "recode_codec_name": self.recode_codec_menu.get(),
+                    "recode_profile_name": self.recode_profile_menu.get(),
+                    "custom_bitrate_value": self.custom_bitrate_entry.get(),
+                    "custom_gif_fps": self.custom_gif_fps_entry.get() or "15",
+                    "custom_gif_width": self.custom_gif_width_entry.get() or "480",
+                    "recode_container": self.recode_container_label.cget("text"),
+                    "recode_audio_codec_name": self.recode_audio_codec_menu.get(),
+                    "recode_audio_profile_name": self.recode_audio_profile_menu.get(),
+                    "fps_force_enabled": self.fps_checkbox.get() == 1,
+                    "fps_value": self.fps_entry.get(),
+                    "resolution_change_enabled": self.resolution_checkbox.get() == 1,
+                    "res_width": self.width_entry.get(),
+                    "res_height": self.height_entry.get(),
+                    "no_upscaling_enabled": self.no_upscaling_checkbox.get() == 1,
+                    "resolution_preset": self.resolution_preset_menu.get(),
+                    "original_width": self.original_video_width,
+                    "original_height": self.original_video_height,
+                }
+                options.update(manual_options)
+                
+                # Llamar al hilo de trabajo
+                self.active_operation_thread = threading.Thread(target=self._execute_download_and_recode, args=(options,), daemon=True)
+                self.active_operation_thread.start()
+
+            elif recode_mode == "Modo Extraer":
+                # --- NUEVA Lógica de Extracción ---
+                print("DEBUG: Iniciando Hilo de Extracción.")
+                
+                # Recolectar opciones de EXTRACCIÓN
+                extract_options = {
+                    "extract_type": self.extract_type_menu.get(),
+                    "extract_format": "jpg" if self.extract_format_menu.get() == "JPG (tamaño reducido)" else "png",
+                    "extract_jpg_quality": self.extract_jpg_quality_entry.get() or "2",
+                    "extract_fps": self.extract_fps_entry.get() or None
+                }
+                options.update(extract_options)
+                
+                # Llamar al Hilo de trabajo NUEVO
+                self.active_operation_thread = threading.Thread(target=self._execute_extraction_thread, args=(options,), daemon=True)
+                self.active_operation_thread.start()
+
+        elif recode_mode == "Modo Extraer":
+            
+            # --- NUEVA Lógica de Extracción ---
+            print("DEBUG: Iniciando Hilo de Extracción.")
+            
+            # 1. Recolectar opciones de EXTRACCIÓN
+            extract_options = {
+                "extract_type": self.extract_type_menu.get(),
+                "extract_format": "jpg" if self.extract_format_menu.get() == "JPG (tamaño reducido)" else "png",
+                "extract_jpg_quality": self.extract_jpg_quality_entry.get() or "2",
+                "extract_fps": self.extract_fps_entry.get() or None
             }
-            options.update(manual_options)
-
-        elif recode_mode == "Modo Rápido":
-            selected_preset_name = self.recode_preset_menu.get()
-            preset_params = self._find_preset_params(selected_preset_name)
+            options.update(extract_options) # Añadirlas a las opciones base
             
-            options.update(preset_params)
-
-        self.active_operation_thread = threading.Thread(target=self._execute_download_and_recode, args=(options,), daemon=True)
-        self.active_operation_thread.start()
+            # 2. Llamar al Hilo de trabajo NUEVO
+            self.active_operation_thread = threading.Thread(target=self._execute_extraction_thread, args=(options,), daemon=True)
+            self.active_operation_thread.start()
 
     def _execute_download_and_recode(self, options):
         process_successful = False
@@ -3569,6 +3920,7 @@ class SingleDownloadTab(ctk.CTkFrame):
                 
             final_output_path_str = options["output_path"]
             user_facing_title = self.sanitize_filename(options['title'])
+            base_filename = user_facing_title  
             title_to_check = user_facing_title
             output_path = Path(final_output_path_str)
             conflicting_file = None
@@ -3591,6 +3943,7 @@ class SingleDownloadTab(ctk.CTkFrame):
             # Actualiza el 'user_facing_title' por si se renombró el archivo.
             # (El '.stem' de Pathlib obtiene el nombre sin extensión)
             user_facing_title = Path(final_download_path).stem
+            base_filename = user_facing_title
             # --- FIN REFACTORIZADO ---
             
             downloaded_filepath, temp_video_for_extraction = self._perform_download(
@@ -4543,10 +4896,26 @@ class SingleDownloadTab(ctk.CTkFrame):
         if self.auto_save_thumbnail_check.get() == 1 and self.pil_image and base_filepath:
             try:
                 self.app.after(0, self.update_progress, 98, "Guardando miniatura...")
+                
+                # 🆕 Validar que base_filepath sea un archivo válido
+                if not os.path.exists(base_filepath):
+                    print(f"ADVERTENCIA: No se puede guardar miniatura, archivo no encontrado: {base_filepath}")
+                    return None
+                
+                # 🆕 Si es una carpeta (modo extraer), no guardar miniatura
+                if os.path.isdir(base_filepath):
+                    print("DEBUG: Saltando guardado de miniatura (resultado es una carpeta)")
+                    return None
+                
                 output_directory = os.path.dirname(base_filepath)
                 clean_title = os.path.splitext(os.path.basename(base_filepath))[0]
+                
+                # Limpiar sufijos comunes
                 if clean_title.endswith("_recoded"):
                     clean_title = clean_title.rsplit('_recoded', 1)[0]
+                if clean_title.endswith("_fragmento"):
+                    clean_title = clean_title.rsplit('_fragmento', 1)[0]
+                
                 thumb_path = os.path.join(output_directory, f"{clean_title}.jpg")
                 self.pil_image.convert("RGB").save(thumb_path, quality=95)
                 print(f"DEBUG: Miniatura guardada automáticamente en {thumb_path}")
@@ -4594,7 +4963,41 @@ class SingleDownloadTab(ctk.CTkFrame):
         if success:
             self.progress_label.configure(text=final_message)
             if final_filepath:
-                self.open_folder_button.configure(state="normal")
+                # --- NUEVA LÓGICA DE VISIBILIDAD DE BOTÓN ---
+                if os.path.isdir(final_filepath):
+                    # ¡Es una carpeta! (Resultado de Extracción)
+                    print(f"DEBUG: Proceso finalizado. Resultado: carpeta de frames. Ruta: {final_filepath}")
+                    
+                    # ✅ Mostrar mensaje de éxito y habilitar botón
+                    if hasattr(self, 'extract_success_label'):
+                        self.extract_success_label.configure(text="✅ Extracción completada")
+                    if hasattr(self, 'send_to_imagetools_button'):
+                        self.send_to_imagetools_button.configure(state="normal")
+                    
+                    # ✅ El botón 📂 abre la carpeta CONTENEDORA de la carpeta de frames
+                    self.open_folder_button.configure(state="normal")
+
+                elif os.path.isfile(final_filepath):
+                    # Es un archivo (Descarga/Recodificación normal)
+                    print(f"DEBUG: Proceso finalizado. Resultado: archivo. Ruta: {final_filepath}")
+                    
+                    # ✅ Ocultar mensaje y deshabilitar botón
+                    if hasattr(self, 'extract_success_label'):
+                        self.extract_success_label.configure(text="")
+                    if hasattr(self, 'send_to_imagetools_button'):
+                        self.send_to_imagetools_button.configure(state="disabled")
+                    
+                    # ✅ El botón 📂 abre la carpeta contenedora del archivo
+                    self.open_folder_button.configure(state="normal")
+
+                else:
+                    # ✅ Caso por defecto: deshabilitar todo
+                    self.open_folder_button.configure(state="disabled")
+                    if hasattr(self, 'extract_success_label'):
+                        self.extract_success_label.configure(text="")
+                    if hasattr(self, 'send_to_imagetools_button'):
+                        self.send_to_imagetools_button.configure(state="disabled")
+                # --- FIN DE LA NUEVA LÓGICA ---
         else:
             if show_dialog:
                 self.progress_label.configure(text="❌ Error en la operación. Ver detalles.")
@@ -4636,6 +5039,10 @@ class SingleDownloadTab(ctk.CTkFrame):
                 self.app.wait_window(dialog)
             else:
                  self.progress_label.configure(text=final_message)
+
+            self.open_folder_button.configure(state="disabled")
+            self.send_to_imagetools_button.pack_forget()
+
         self._reset_buttons_to_original_state()
     
     def _predict_final_extension(self, video_info, audio_info, mode):
@@ -5079,21 +5486,35 @@ class SingleDownloadTab(ctk.CTkFrame):
 
     def load_thumbnail(self, path_or_url, is_local=False):
         try:
+            # ✅ Limpiar backup
+            if hasattr(self, '_original_image_backup'):
+                self._original_image_backup = None
+                print("DEBUG: Backup de imagen limpiado")
+            
+            if hasattr(self, '_hover_text_label') and self._hover_text_label is not None:
+                try:
+                    if self._hover_text_label.winfo_exists():
+                        self._hover_text_label.destroy()
+                except:
+                    pass
+                self._hover_text_label = None
+            
             self.app.after(0, self.create_placeholder_label, "Cargando miniatura...")
             
+            # ✅ MODIFICADO: Cargar imagen según el tipo
             if is_local:
+                # Es un archivo local (path)
                 with open(path_or_url, 'rb') as f:
                     img_data = f.read()
             else:
-                # 🆕 Headers mejorados para evitar rate limits
+                # Es una URL
                 headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
                     'Accept-Language': 'en-US,en;q=0.9',
                     'Referer': 'https://imgur.com/',
                 }
                 
-                # 🆕 Reintentos con timeout más largo
                 max_retries = 2
                 timeout = 15
                 
@@ -5107,21 +5528,19 @@ class SingleDownloadTab(ctk.CTkFrame):
                         )
                         response.raise_for_status()
                         img_data = response.content
-                        break  # Éxito, salir del loop
+                        break
                         
                     except requests.exceptions.HTTPError as e:
                         if e.response.status_code == 429:
-                            # Rate limit detectado
                             if attempt < max_retries - 1:
-                                wait_time = 2 ** attempt  # Backoff exponencial: 1s, 2s
+                                wait_time = 2 ** attempt
                                 print(f"⚠️ Rate limit en miniatura. Reintentando en {wait_time}s...")
                                 time.sleep(wait_time)
                                 continue
                             else:
-                                # Último intento falló
                                 raise Exception(f"Rate limit de Imgur (429). La miniatura no está disponible temporalmente.")
                         else:
-                            raise  # Otro error HTTP
+                            raise
                             
                     except requests.exceptions.Timeout:
                         if attempt < max_retries - 1:
@@ -5130,10 +5549,11 @@ class SingleDownloadTab(ctk.CTkFrame):
                         else:
                             raise Exception("Timeout al descargar la miniatura")
             
-            # 🔧 Validar que img_data no esté vacío
+            # ✅ Validar que img_data no esté vacío
             if not img_data or len(img_data) < 100:
                 raise Exception("La miniatura descargada está vacía o corrupta")
             
+            # ✅ CRÍTICO: Asignar self.pil_image SIEMPRE
             self.pil_image = Image.open(BytesIO(img_data))
             display_image = self.pil_image.copy()
             display_image.thumbnail((320, 180), Image.Resampling.LANCZOS)
@@ -5142,13 +5562,52 @@ class SingleDownloadTab(ctk.CTkFrame):
             def set_new_image():
                 if self.thumbnail_label: 
                     self.thumbnail_label.destroy()
-                self.thumbnail_label = ctk.CTkLabel(self.thumbnail_container, text="", image=ctk_image)
+                
+                parent_widget = self.dnd_overlay if hasattr(self, 'dnd_overlay') else self.thumbnail_container
+                
+                self.thumbnail_label = ctk.CTkLabel(parent_widget, text="", image=ctk_image)
                 self.thumbnail_label.pack(expand=True)
                 self.thumbnail_label.image = ctk_image
+                
+                # ✅ VERIFICAR que ahora SÍ existe
+                print(f"DEBUG: ✅ Miniatura cargada. self.pil_image existe: {self.pil_image is not None}, is_local: {is_local}")
+                
                 self.save_thumbnail_button.configure(state="normal")
+                
+                # ✅ NUEVO: También habilitar el botón de enviar a H.I.
+                if hasattr(self, 'send_thumbnail_to_imagetools_button'):
+                    self.send_thumbnail_to_imagetools_button.configure(state="normal")
+                
                 self.toggle_manual_thumbnail_button()
                 
             self.app.after(0, set_new_image)
+            
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if hasattr(e, 'response') else 'unknown'
+            error_msg = f"Error HTTP {status_code}"
+            
+            if status_code == 429:
+                error_msg = "Rate limit (429)"
+                placeholder_text = "⏳"
+            elif status_code == 404:
+                error_msg = "Miniatura no encontrada (404)"
+                placeholder_text = "❌"
+            elif status_code in [403, 401]:
+                error_msg = f"Acceso denegado ({status_code})"
+                placeholder_text = "🔒"
+            else:
+                placeholder_text = "❌"
+            
+            print(f"⚠️ Error al cargar miniatura: {error_msg} - URL: {path_or_url}")
+            self.app.after(0, self.create_placeholder_label, placeholder_text, font_size=60)
+            
+        except requests.exceptions.Timeout:
+            print(f"⚠️ Timeout al cargar miniatura: {path_or_url}")
+            self.app.after(0, self.create_placeholder_label, "⏱️", font_size=60)
+            
+        except Exception as e:
+            print(f"⚠️ Error al cargar miniatura: {e}")
+            self.app.after(0, self.create_placeholder_label, "❌", font_size=60)
             
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if hasattr(e, 'response') else 'unknown'
@@ -5673,3 +6132,677 @@ class SingleDownloadTab(ctk.CTkFrame):
             
         except Exception as e:
             print(f"ERROR: No se pudo enviar la URL a Lotes: {e}")
+
+    def manual_poppler_update_check(self):
+        """Inicia una comprobación manual de la actualización de Poppler."""
+        self.update_poppler_button.configure(state="disabled", text="Buscando...")
+        self.poppler_status_label.configure(text="Poppler: Verificando...")
+        # Limpiar estado de otros
+        self.active_downloads_state["ffmpeg"]["active"] = False
+        self.active_downloads_state["deno"]["active"] = False
+        self.active_downloads_state["poppler"] = {"text": "", "value": 0.0, "active": False} # Inicializar
+
+        from src.core.setup import check_poppler_status
+
+        def check_task():
+            status_info = check_poppler_status(
+                lambda text, val: self.update_setup_download_progress('poppler', text, val)
+            )
+            self.app.after(0, self.app.on_poppler_check_complete, status_info)
+
+        self.active_operation_thread = threading.Thread(target=check_task, daemon=True)
+        self.active_operation_thread.start()
+
+    def manual_inkscape_check(self):
+        """Verificación manual de Inkscape."""
+        self.check_inkscape_button.configure(state="disabled", text="Verificando...")
+        self.inkscape_status_label.configure(text="Inkscape: Buscando...")
+        
+        from src.core.setup import check_inkscape_status
+
+        def check_task():
+            # Usamos un callback dummy para el progreso
+            status_info = check_inkscape_status(lambda t, v: None)
+            self.app.after(0, self.app.on_inkscape_check_complete, status_info)
+
+        threading.Thread(target=check_task, daemon=True).start()
+
+    #-- FUNCIONES PARA DESCOMPONER UN VIDEO EN FRAMES --#
+
+    def _toggle_extract_options(self, *args):
+        """Muestra u oculta las opciones de calidad de JPG en el modo Extraer."""
+        selected_format = self.extract_format_menu.get()
+        if selected_format == "JPG (tamaño reducido)":
+            self.extract_jpg_quality_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
+        else:
+            self.extract_jpg_quality_frame.grid_forget()
+
+    def _send_folder_to_image_tools(self):
+        """
+        Toma la ruta de la carpeta (guardada en self.last_download_path)
+        y la envía a la pestaña de Herramientas de Imagen.
+        """
+        folder_path = self.last_download_path
+        if not folder_path or not os.path.isdir(folder_path):
+            print(f"ERROR: No se encontró la ruta de la carpeta de fotogramas: {folder_path}")
+            return
+            
+        if not hasattr(self.app, 'image_tab'):
+            print("ERROR: No se puede encontrar la pestaña 'image_tab' en la app principal.")
+            return
+
+        print(f"INFO: Enviando carpeta '{folder_path}' a Herramientas de Imagen.")
+        
+        # Llamar a la nueva función pública que creamos en ImageToolsTab
+        self.app.image_tab.import_folder_from_path(folder_path)
+
+    def _send_thumbnail_to_image_tools(self):
+        """
+        Guarda temporalmente la miniatura y la envía a la pestaña de Herramientas de Imagen.
+        """
+        if not self.pil_image:
+            print("ERROR: No hay miniatura disponible para enviar.")
+            return
+        
+        try:
+            # 1. Crear carpeta temporal para la miniatura
+            import tempfile
+            temp_dir = tempfile.mkdtemp(prefix="dowp_thumbnail_")
+            
+            # 2. Guardar la miniatura en esa carpeta
+            temp_filename = "miniatura.jpg"
+            temp_path = os.path.join(temp_dir, temp_filename)
+            
+            self.pil_image.convert("RGB").save(temp_path, quality=95)
+            print(f"DEBUG: Miniatura guardada temporalmente en: {temp_path}")
+            
+            # 3. Verificar que existe la pestaña de herramientas de imagen
+            if not hasattr(self.app, 'image_tab'):
+                print("ERROR: No se puede encontrar la pestaña 'image_tab' en la app principal.")
+                messagebox.showerror(
+                    "Error",
+                    "La pestaña de Herramientas de Imagen no está disponible."
+                )
+                return
+            
+            # 4. Enviar la carpeta a la pestaña
+            print(f"INFO: Enviando miniatura (carpeta: {temp_dir}) a Herramientas de Imagen.")
+            self.app.image_tab.import_folder_from_path(temp_dir)
+            
+            # 5. Cambiar a la pestaña de herramientas de imagen
+            self.app.tab_view.set("Herramientas de Imagen")
+            
+            print("✅ Miniatura enviada exitosamente a Herramientas de Imagen")
+            
+        except Exception as e:
+            print(f"ERROR: No se pudo enviar la miniatura a Herramientas de Imagen: {e}")
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror(
+                "Error",
+                f"No se pudo enviar la miniatura:\n{e}"
+            )
+    def _execute_extraction_thread(self, options):
+        """
+        (HILO DE TRABAJO)
+        Función dedicada para manejar el "Modo Extraer".
+        """
+        process_successful = False
+        downloaded_filepath = None
+        final_output_directory = None
+        
+        try:
+            # --- VALIDACIÓN DE OPCIONES ---
+            extract_format = options.get('extract_format', 'png')
+            if extract_format not in ['png', 'jpg']:
+                raise Exception(f"Formato inválido: {extract_format}")
+            
+            # Validar calidad JPG si aplica
+            if extract_format == 'jpg':
+                jpg_quality = options.get('extract_jpg_quality', '2')
+                try:
+                    quality_int = int(jpg_quality)
+                    if not (1 <= quality_int <= 31):
+                        self.app.after(0, self.update_progress, -1, 
+                                    f"⚠️ Calidad JPG inválida ({jpg_quality}). Usando calidad alta (2).")
+                        options['extract_jpg_quality'] = '2'
+                except (ValueError, TypeError):
+                    options['extract_jpg_quality'] = '2'
+            
+            # Validar FPS si se especificó
+            fps = options.get('extract_fps')
+            if fps:
+                try:
+                    fps_value = float(fps)
+                    if fps_value <= 0:
+                        raise ValueError("FPS debe ser positivo")
+                except (ValueError, TypeError):
+                    self.app.after(0, self.update_progress, -1, 
+                                f"⚠️ FPS inválido ({fps}). Extrayendo todos los fotogramas.")
+                    options['extract_fps'] = None
+
+            # --- 1. MODO LOCAL ---
+            if self.local_file_path:
+                print("DEBUG: [Modo Extraer] Iniciando desde archivo local.")
+                filepath_to_process = self.local_file_path
+                
+                # Definir la carpeta de salida
+                output_dir = self.output_path_entry.get()
+                if self.save_in_same_folder_check.get() == 1:
+                    output_dir = os.path.dirname(filepath_to_process)
+                
+                # 🆕 Usar nombre personalizado si se especificó
+                custom_folder_name = self.extract_folder_name_entry.get().strip()
+                if custom_folder_name:
+                    folder_name = self.sanitize_filename(custom_folder_name)
+                else:
+                    base_filename = self.sanitize_filename(options['title'])
+                    folder_name = f"{base_filename}_frames"
+                
+                final_output_directory = os.path.join(output_dir, folder_name)
+
+            # --- 2. MODO URL ---
+            else:
+                print("DEBUG: [Modo Extraer] Iniciando desde URL.")
+                output_dir = options["output_path"]
+                
+                # 🆕 Determinar el nombre base PRIMERO
+                base_filename = self.sanitize_filename(options['title'])
+                
+                # 🆕 Usar nombre personalizado si se especificó
+                custom_folder_name = self.extract_folder_name_entry.get().strip()
+                if custom_folder_name:
+                    folder_name = self.sanitize_filename(custom_folder_name)
+                else:
+                    folder_name = f"{base_filename}_frames"
+                
+                # Creamos un nombre de archivo falso para el chequeo de conflicto
+                temp_check_path = os.path.join(output_dir, f"{folder_name}.check")
+                
+                final_download_path, backup_file_path = self._resolve_output_path(temp_check_path)
+                
+                # El nombre de nuestra carpeta se basa en el nombre resuelto
+                final_folder_name = os.path.splitext(os.path.basename(final_download_path))[0]
+                final_output_directory = os.path.join(output_dir, final_folder_name)
+                
+                # Descargar el video (lógica de _perform_download)
+                downloaded_filepath, temp_video_for_extraction = self._perform_download(
+                    options, 
+                    f"{base_filename}_temp_video",  # ✅ Ahora base_filename está definido
+                    audio_extraction_fallback=False
+                )
+                
+                filepath_to_process = downloaded_filepath
+
+            # --- 3. EJECUTAR EXTRACCIÓN ---
+            if self.cancellation_event.is_set():
+                raise UserCancelledError("Proceso cancelado por el usuario.")
+            
+            self.app.after(0, self.update_progress, -1, "Iniciando extracción de fotogramas...")
+            
+            # Preparar opciones para el procesador
+            extraction_options = {
+                'input_file': filepath_to_process,
+                'output_folder': final_output_directory,
+                'image_format': options.get('extract_format'),
+                'fps': options.get('extract_fps'),
+                'jpg_quality': options.get('extract_jpg_quality'),
+                'duration': self.video_duration, # Usar la duración completa
+                'pre_params': [] # No se usa recorte aquí (aún)
+            }
+            
+            # Llamar a la nueva función del procesador
+            output_folder = self.ffmpeg_processor.execute_video_to_images(
+                extraction_options,
+                lambda p, m: self.update_progress(p, f"Extrayendo... {p:.1f}%"),
+                self.cancellation_event
+            )
+            
+            process_successful = True
+            
+            # El "archivo final" es ahora una CARPETA
+            self.app.after(0, self.on_process_finished, True, "Extracción completada.", output_folder)
+
+        except UserCancelledError as e:
+            self.app.after(0, self.on_process_finished, False, str(e), None)
+        except Exception as e:
+            cleaned_message = self._clean_ansi_codes(str(e))
+            self.app.after(0, self.on_process_finished, False, cleaned_message, None)
+            
+        finally:
+            # 🆕 Limpiar el video temporal si se descargó (respetando el checkbox)
+            if downloaded_filepath and os.path.exists(downloaded_filepath):
+                # Solo eliminar si NO es modo local Y el usuario NO quiere conservar el original
+                should_delete = not self.local_file_path and not self.keep_original_extract_checkbox.get()
+                
+                if should_delete:
+                    try:
+                        os.remove(downloaded_filepath)
+                        print(f"DEBUG: Archivo de video temporal eliminado: {downloaded_filepath}")
+                    except OSError as e:
+                        print(f"ADVERTENCIA: No se pudo eliminar el video temporal: {e}")
+                else:
+                    # ✅ Si se conserva, renombrar para quitar el "_temp_video"
+                    try:
+                        # Calcular el nuevo nombre sin el sufijo temporal
+                        dir_path = os.path.dirname(downloaded_filepath)
+                        old_basename = os.path.basename(downloaded_filepath)
+                        
+                        # Remover "_temp_video" del nombre
+                        if "_temp_video" in old_basename:
+                            new_basename = old_basename.replace("_temp_video", "")
+                            new_filepath = os.path.join(dir_path, new_basename)
+                            
+                            # Verificar si ya existe un archivo con ese nombre
+                            if os.path.exists(new_filepath):
+                                print(f"DEBUG: Ya existe un archivo con el nombre final, conservando con '_temp_video': {downloaded_filepath}")
+                            else:
+                                os.rename(downloaded_filepath, new_filepath)
+                                print(f"DEBUG: Video renombrado de '{old_basename}' a '{new_basename}'")
+                                downloaded_filepath = new_filepath  # Actualizar la referencia
+                        
+                        print(f"DEBUG: Video original conservado en: {downloaded_filepath}")
+                        
+                    except Exception as e:
+                        print(f"ADVERTENCIA: No se pudo renombrar el video conservado: {e}")
+                        print(f"DEBUG: Video conservado con nombre temporal: {downloaded_filepath}")
+
+    # ============================================
+    # DRAG & DROP FUNCTIONALITY
+    # ============================================
+
+    def _on_drag_enter(self, event):
+        """Efecto visual cuando el archivo entra al área de drop"""
+        print("DEBUG: 🎯 _on_drag_enter ejecutado")
+        
+        self.thumbnail_container.configure(border_width=4, border_color="#007BFF")
+        self.dnd_overlay.configure(bg="#1a3d5c")
+        
+        if hasattr(self, 'thumbnail_label') and self.thumbnail_label and self.thumbnail_label.winfo_exists():
+            self.thumbnail_label.place_forget()
+        
+        if hasattr(self, '_drag_label') and self._drag_label and self._drag_label.winfo_exists():
+            self._drag_label.destroy()
+        
+        self._drag_label = ctk.CTkLabel(
+            self.dnd_overlay,
+            text="📂 Suelta tu archivo aquí\n\n(Video o Audio)",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color="#00BFFF"
+        )
+        self._drag_label.place(relx=0.5, rely=0.5, anchor="center")
+        self.dnd_overlay.lift()
+
+    def _on_drag_leave(self, event):
+        """Restaurar estilo normal cuando el archivo sale del área"""
+        print("DEBUG: 🔙 _on_drag_leave ejecutado")
+        
+        self.thumbnail_container.configure(border_width=0)
+        
+        try:
+            original_bg = self._get_ctk_fg_color(self.thumbnail_container)
+            self.dnd_overlay.configure(bg=original_bg)
+        except:
+            self.dnd_overlay.configure(bg="#2B2B2B")
+        
+        if hasattr(self, '_drag_label') and self._drag_label and self._drag_label.winfo_exists():
+            self._drag_label.destroy()
+            self._drag_label = None
+        
+        if hasattr(self, 'thumbnail_label') and self.thumbnail_label and self.thumbnail_label.winfo_exists():
+            if self.pil_image:
+                self.thumbnail_label.pack(expand=True)
+            else:
+                self.thumbnail_label.pack(expand=True, fill="both")
+
+    def _on_file_drop(self, event):
+        """Maneja archivos arrastrados"""
+        try:
+            self._show_drop_feedback()
+            
+            files = self.tk.splitlist(event.data)
+            
+            if not files:
+                print("DEBUG: No se detectaron archivos en el drop")
+                self._hide_drop_feedback()
+                return
+            
+            file_path = files[0].strip('{}')
+            print(f"DEBUG: 📁 Archivo arrastrado: {file_path}")
+            
+            if not os.path.isfile(file_path):
+                print("ADVERTENCIA: Solo se aceptan archivos, no carpetas")
+                self.progress_label.configure(text="Solo se aceptan archivos")  # ✅ Más simple
+                self._hide_drop_feedback()
+                return
+            
+            valid_extensions = VIDEO_EXTENSIONS.union(AUDIO_EXTENSIONS)
+            file_ext = os.path.splitext(file_path)[1].lower().lstrip('.')
+            
+            if file_ext not in valid_extensions:
+                print(f"ADVERTENCIA: Formato no soportado: {file_ext}")
+                self.progress_label.configure(text=f"Formato '.{file_ext}' no soportado")  # ✅ Sin emoji
+                self._hide_drop_feedback()
+                return
+            
+            self._hide_drop_feedback()
+            self._import_file_from_path(file_path)
+            
+        except Exception as e:
+            print(f"ERROR en drag & drop: {e}")
+            import traceback
+            traceback.print_exc()
+            self._hide_drop_feedback()
+
+    def _import_file_from_path(self, file_path):
+        """
+        Importa un archivo local desde una ruta conocida (usado por drag & drop).
+        Similar a import_local_file pero sin diálogo.
+        """
+        self.reset_to_url_mode()
+        self.auto_save_thumbnail_check.pack_forget()
+        self.cancellation_event.clear()
+        self.progress_label.configure(text=f"Analizando archivo: {os.path.basename(file_path)}...")
+        self.progress_bar.start()
+        self.open_folder_button.configure(state="disabled")
+        
+        threading.Thread(target=self._process_local_file_info, args=(file_path,), daemon=True).start()
+
+    def enable_drag_and_drop(self):
+        """
+        Habilita drag & drop en el overlay nativo de Tkinter.
+        """
+        try:
+            from tkinterdnd2 import DND_FILES
+            
+            if not hasattr(self, 'dnd_overlay'):
+                print("ERROR: dnd_overlay no fue creado. Verifica _create_widgets()")
+                return
+            
+            try:
+                version = self.app.tk.call('package', 'present', 'tkdnd')
+                print(f"DEBUG: TkinterDnD versión {version} detectada")
+            except Exception as e:
+                print(f"ERROR CRÍTICO: TkinterDnD no está cargado: {e}")
+                return
+            
+            # ✅ Registrar solo el evento de Drop (el que SÍ funciona en Windows)
+            self.dnd_overlay.drop_target_register(DND_FILES)
+            self.dnd_overlay.dnd_bind('<<Drop>>', self._on_file_drop)
+            
+            # ✅ NUEVO: Usar eventos de mouse nativos para el feedback visual
+            self.dnd_overlay.bind('<Enter>', self._on_mouse_enter)
+            self.dnd_overlay.bind('<Leave>', self._on_mouse_leave)
+            
+            self.dnd_overlay.lift()
+            
+            print("DEBUG: ✅ Drag & Drop habilitado en el área de miniatura")
+            
+        except ImportError:
+            print("ADVERTENCIA: tkinterdnd2 no está instalado. Drag & Drop no disponible.")
+        except Exception as e:
+            print(f"ERROR habilitando Drag & Drop: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _on_mouse_enter(self, event):
+        """Se ejecuta cuando el mouse entra en el área de drop"""
+        
+        # ✅ Verificar que el thumbnail_label existe y es válido
+        if not hasattr(self, 'thumbnail_label') or not self.thumbnail_label:
+            return
+        
+        try:
+            if not self.thumbnail_label.winfo_exists():
+                return
+        except:
+            return
+        
+        # ✅ No hacer nada si está analizando
+        try:
+            current_text = self.thumbnail_label.cget("text")
+            if "Analizando" in current_text or "Cargando" in current_text:
+                return
+        except:
+            return
+        
+        # CASO 1: Sin archivo cargado (placeholder vacío)
+        if not self.pil_image and not self.local_file_path:
+            try:
+                self.thumbnail_label.configure(
+                    text="Arrastra un archivo aquí (Video o Audio) \n Para activar el modo de Recodificación Local",
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    fg_color="#1a1a1a"
+                )
+            except:
+                pass
+        
+        # CASO 2: Ya hay algo cargado (miniatura o archivo local)
+        # ✅ MODIFICADO: Verificar PRIMERO si hay imagen, sin importar si es local o URL
+        elif self.pil_image:
+            try:
+                # ✅ Guardar la imagen original solo si no está guardada
+                if not hasattr(self, '_original_image_backup') or self._original_image_backup is None:
+                    self._original_image_backup = self.pil_image.copy()
+                    print(f"DEBUG: Imagen guardada para oscurecer (local={bool(self.local_file_path)})")
+                
+                # ✅ Oscurecer la imagen
+                if hasattr(self, '_original_image_backup') and self._original_image_backup:
+                    from PIL import ImageEnhance
+                    enhancer = ImageEnhance.Brightness(self._original_image_backup)
+                    darkened_image = enhancer.enhance(0.4)
+                    
+                    display_image = darkened_image.copy()
+                    display_image.thumbnail((320, 180), Image.Resampling.LANCZOS)
+                    ctk_image = ctk.CTkImage(light_image=display_image, dark_image=display_image, size=display_image.size)
+                    
+                    self.thumbnail_label.configure(image=ctk_image, text="")
+                    self.thumbnail_label.image = ctk_image
+                    print("DEBUG: Imagen oscurecida correctamente")
+                
+                # ✅ Mostrar texto encima
+                if not hasattr(self, '_hover_text_label') or self._hover_text_label is None:
+                    self._hover_text_label = ctk.CTkLabel(
+                        self.dnd_overlay,
+                        text="Arrastra un archivo aquí (Video o Audio) \n Para activar el modo de Recodificación Local",
+                        font=ctk.CTkFont(size=12, weight="bold"),
+                        text_color="#FFFFFF",
+                        fg_color="transparent",
+                        bg_color="transparent"
+                    )
+                    self._hover_text_label.place(relx=0.5, rely=0.5, anchor="center")
+                elif self._hover_text_label:
+                    try:
+                        if not self._hover_text_label.winfo_ismapped():
+                            self._hover_text_label.place(relx=0.5, rely=0.5, anchor="center")
+                    except:
+                        self._hover_text_label = ctk.CTkLabel(
+                            self.dnd_overlay,
+                            text="Arrastra un archivo aquí (Video o Audio) \n Para activar el modo de Recodificación Local",
+                            font=ctk.CTkFont(size=12, weight="bold"),
+                            text_color="#FFFFFF",
+                            fg_color="transparent",
+                            bg_color="transparent"
+                        )
+                        self._hover_text_label.place(relx=0.5, rely=0.5, anchor="center")
+            except Exception as e:
+                print(f"DEBUG: Error oscureciendo imagen: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # CASO 3: Archivo local SIN miniatura (solo emoji 🎵)
+        elif self.local_file_path and not self.pil_image:
+            try:
+                self.thumbnail_label.configure(fg_color="#1a1a1a")
+                
+                # Mostrar texto encima
+                if not hasattr(self, '_hover_text_label') or self._hover_text_label is None:
+                    self._hover_text_label = ctk.CTkLabel(
+                        self.dnd_overlay,
+                        text="Arrastra un archivo aquí (Video o Audio) \n Para activar el modo de Recodificación Local",
+                        font=ctk.CTkFont(size=12, weight="bold"),
+                        text_color="#FFFFFF",
+                        fg_color="transparent",
+                        bg_color="transparent"
+                    )
+                    self._hover_text_label.place(relx=0.5, rely=0.5, anchor="center")
+            except Exception as e:
+                print(f"DEBUG: Error en caso local sin imagen: {e}")
+
+    def _on_mouse_leave(self, event):
+        """Se ejecuta cuando el mouse sale del área de drop"""
+        
+        # ✅ Verificar que el thumbnail_label existe
+        if not hasattr(self, 'thumbnail_label') or not self.thumbnail_label:
+            return
+        
+        try:
+            if not self.thumbnail_label.winfo_exists():
+                return
+        except:
+            return
+        
+        # ✅ No hacer nada si está analizando
+        try:
+            current_text = self.thumbnail_label.cget("text")
+            if "Analizando" in current_text or "Cargando" in current_text:
+                return
+        except:
+            return
+        
+        # CASO 1: Sin archivo cargado (restaurar fondo y texto normal)
+        if not self.pil_image and not self.local_file_path:
+            try:
+                original_bg = self._get_ctk_fg_color(self.thumbnail_container)
+                self.thumbnail_label.configure(
+                    text="Miniatura",
+                    font=ctk.CTkFont(size=14),
+                    fg_color=original_bg
+                )
+            except:
+                try:
+                    self.thumbnail_label.configure(
+                        text="Miniatura",
+                        font=ctk.CTkFont(size=14),
+                        fg_color="#2B2B2B"
+                    )
+                except:
+                    pass
+        
+        # CASO 2: Hay imagen (URL o local)
+        elif self.pil_image:
+            try:
+                # ✅ Restaurar la imagen original
+                if hasattr(self, '_original_image_backup') and self._original_image_backup:
+                    display_image = self._original_image_backup.copy()
+                    display_image.thumbnail((320, 180), Image.Resampling.LANCZOS)
+                    ctk_image = ctk.CTkImage(light_image=display_image, dark_image=display_image, size=display_image.size)
+                    
+                    self.thumbnail_label.configure(image=ctk_image, text="")
+                    self.thumbnail_label.image = ctk_image
+                    print("DEBUG: Imagen restaurada correctamente")
+                
+                # ✅ Destruir el texto de hover
+                if hasattr(self, '_hover_text_label') and self._hover_text_label is not None:
+                    try:
+                        if self._hover_text_label.winfo_exists():
+                            self._hover_text_label.destroy()
+                    except:
+                        pass
+                    self._hover_text_label = None
+            except Exception as e:
+                print(f"DEBUG: Error restaurando imagen: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # CASO 3: Archivo local sin imagen
+        elif self.local_file_path and not self.pil_image:
+            try:
+                original_bg = self._get_ctk_fg_color(self.thumbnail_container)
+                self.thumbnail_label.configure(fg_color=original_bg)
+                
+                # Destruir texto
+                if hasattr(self, '_hover_text_label') and self._hover_text_label is not None:
+                    try:
+                        if self._hover_text_label.winfo_exists():
+                            self._hover_text_label.destroy()
+                    except:
+                        pass
+                    self._hover_text_label = None
+            except Exception as e:
+                print(f"DEBUG: Error en caso local sin imagen (leave): {e}")
+
+    def _show_drop_feedback(self):
+        """Muestra feedback visual cuando se detecta un drop"""
+        try:
+            # Cambiar borde
+            self.thumbnail_container.configure(border_width=2, border_color="#007BFF")
+            
+            # ✅ NO tocar el overlay, solo el thumbnail_label
+            if hasattr(self, 'thumbnail_label') and self.thumbnail_label:
+                try:
+                    if self.thumbnail_label.winfo_exists():
+                        self.thumbnail_label.place_forget()
+                except:
+                    pass
+            
+            # Crear label de feedback
+            if hasattr(self, '_drop_feedback_label') and self._drop_feedback_label:
+                try:
+                    if self._drop_feedback_label.winfo_exists():
+                        self._drop_feedback_label.destroy()
+                except:
+                    pass
+            
+            self._drop_feedback_label = ctk.CTkLabel(
+                self.dnd_overlay,
+                text="Procesando archivo...",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                fg_color="transparent",
+                bg_color="transparent"
+            )
+            self._drop_feedback_label.place(relx=0.5, rely=0.5, anchor="center")
+        except Exception as e:
+            print(f"DEBUG: Error en _show_drop_feedback: {e}")
+
+    def _hide_drop_feedback(self):
+        """Oculta el feedback visual del drop"""
+        try:
+            # Restaurar borde
+            self.thumbnail_container.configure(border_width=0)
+            
+            # Destruir label de feedback
+            if hasattr(self, '_drop_feedback_label') and self._drop_feedback_label:
+                try:
+                    if self._drop_feedback_label.winfo_exists():
+                        self._drop_feedback_label.destroy()
+                except:
+                    pass
+                self._drop_feedback_label = None
+            
+            # Restaurar thumbnail
+            if hasattr(self, 'thumbnail_label') and self.thumbnail_label:
+                try:
+                    if self.thumbnail_label.winfo_exists():
+                        if self.pil_image:
+                            self.thumbnail_label.pack(expand=True)
+                        else:
+                            self.thumbnail_label.pack(expand=True, fill="both")
+                except:
+                    pass
+        except Exception as e:
+            print(f"DEBUG: Error en _hide_drop_feedback: {e}")
+
+    def manual_ghostscript_check(self):
+        """Verificación manual de Ghostscript."""
+        self.check_ghostscript_button.configure(state="disabled", text="Verificando...")
+        self.ghostscript_status_label.configure(text="Ghostscript: Buscando...")
+        
+        from src.core.setup import check_ghostscript_status
+
+        def check_task():
+            # Callback dummy para el progreso
+            status_info = check_ghostscript_status(lambda t, v: None)
+            self.app.after(0, self.app.on_ghostscript_check_complete, status_info)
+
+        threading.Thread(target=check_task, daemon=True).start()

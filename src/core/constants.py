@@ -396,3 +396,136 @@ COMPATIBILITY_RULES = {
     ".opus": { "video": [], "audio": ["libopus"] },
     ".wav": { "video": [], "audio": ["pcm_s16le", "pcm_s24le"] }
 }
+
+# --- CONSTANTES DE HERRAMIENTAS DE IMAGEN (MarkECI) ---
+IMAGE_INPUT_FORMATS = {".svg", ".eps", ".ai", ".pdf", ".ps"} # Formatos vectoriales/documentos
+IMAGE_EXPORT_FORMATS = ["PNG", "JPG", "JPEG", "WEBP", "BMP", "PDF", "TIFF"]
+
+# Agrupar formatos por tipo para mejor manejo en la lógica y la UI
+IMAGE_RASTER_FORMATS = {"PNG", "JPG", "JPEG", "WEBP", "BMP", "TIFF"}
+IMAGE_VECTOR_FORMATS = {"PDF"} 
+IMAGE_FORMATS_WITH_QUALITY = {"JPG", "JPEG", "WEBP"}
+
+# DPI por defecto para rasterización (de PDF, SVG, etc.)
+DEFAULT_RASTER_DPI = 300
+
+# Límites de seguridad para escalado
+MAX_RECOMMENDED_DPI = 600
+MAX_SAFE_DIMENSION = 8192  # Píxeles (8K)
+CRITICAL_DPI_THRESHOLD = 1200
+CRITICAL_DIMENSION_THRESHOLD = 16384  # 16K
+
+# Métodos de interpolación para escalado de raster
+INTERPOLATION_METHODS = {
+    "Lanczos (Mejor Calidad)": "LANCZOS",
+    "Bicúbico (Rápido)": "BICUBIC", 
+    "Bilineal (Muy Rápido)": "BILINEAR",
+    "Nearest (Pixelado)": "NEAREST"
+}
+
+# Opciones de Canvas
+CANVAS_OPTIONS = [
+    "Sin ajuste",
+    "Añadir Margen Externo",
+    "Añadir Margen Interno",
+    "Instagram Post (1080×1080)",
+    "Instagram Story (1080×1920)",
+    "YouTube Thumbnail (1280×720)",
+    "Twitter Header (1500×500)",
+    "Facebook Cover (820×312)",
+    "Personalizado..."
+]
+
+# Mapeo de presets fijos
+CANVAS_PRESET_SIZES = {
+    "Instagram Post (1080×1080)": (1080, 1080),
+    "Instagram Story (1080×1920)": (1080, 1920),
+    "YouTube Thumbnail (1280×720)": (1280, 720),
+    "Twitter Header (1500×500)": (1500, 500),
+    "Facebook Cover (820×312)": (820, 312)
+}
+
+# Posiciones para el contenido en el canvas
+CANVAS_POSITIONS = [
+    "Centro",
+    "Arriba Izquierda",
+    "Arriba Centro",
+    "Arriba Derecha",
+    "Centro Izquierda",
+    "Centro Derecha",
+    "Abajo Izquierda",
+    "Abajo Centro",
+    "Abajo Derecha"
+]
+
+# Modos de manejo cuando la imagen excede el canvas
+CANVAS_OVERFLOW_MODES = [
+    "Centrar (puede recortar)",
+    "Recortar al canvas",
+    "Advertir y no procesar"
+]
+
+# Opciones de cambio de fondo
+BACKGROUND_TYPES = [
+    "Color Sólido",
+    "Degradado",
+    "Imagen de Fondo"
+]
+
+GRADIENT_DIRECTIONS = [
+    "Horizontal (Izq → Der)",
+    "Vertical (Arr → Aba)",
+    "Diagonal (↘)",
+    "Diagonal (↙)",
+    "Radial (Centro)"
+]
+
+# Formatos que soportan transparencia
+FORMATS_WITH_TRANSPARENCY = {"PNG", "WEBP", "TIFF", "ICO", "PDF"}
+
+REMBG_MODEL_FAMILIES = {
+    "Rembg Standard (U2Net)": {
+        "isnet-general-use (Recomendado)": {
+            "file": "isnet-general-use.onnx",
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx",
+            "folder": "rembg" 
+        },
+        "u2netp (Rápido)": {
+            "file": "u2netp.onnx",
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx",
+            "folder": "rembg"
+        },
+        "u2net (Alta Precisión)": {
+            "file": "u2net.onnx",
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx",
+            "folder": "rembg"
+        },
+        "u2net_human_seg (Humanos)": {
+            "file": "u2net_human_seg.onnx",
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx",
+            "folder": "rembg"
+        },
+        "isnet-anime (Anime)": {
+            "file": "isnet-anime.onnx",
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-anime.onnx",
+            "folder": "rembg"
+        }
+    },
+    "BiRefNet (Next-Gen 2024)": {
+        "General (Ultra Calidad)": {
+            "file": "birefnet-general.onnx", 
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-epoch_244.onnx",
+            "folder": "rembg"
+        },
+        "General Lite (Rápido)": {
+            "file": "birefnet-general-lite.onnx",
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
+            "folder": "rembg"
+        },
+        "Portrait (Retratos HD)": {
+            "file": "birefnet-portrait.onnx",
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
+            "folder": "rembg"
+        }
+    }
+}
