@@ -27,17 +27,18 @@ try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
     TKDND_AVAILABLE = True
     
-    # ✅ Crear una clase híbrida
-    class TkBase(TkinterDnD.Tk):
-        """Clase base que combina TkinterDnD con CustomTkinter"""
-        pass
+    # ✅ CORRECCIÓN: Heredar de CTk y usar el Wrapper de DnD
+    # Esto asegura que la ventana tenga los atributos de escalado de CTk
+    class TkBase(ctk.CTk, TkinterDnD.DnDWrapper):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.TkdndVersion = TkinterDnD._require(self)
     
 except ImportError:
     TKDND_AVAILABLE = False
     print("ADVERTENCIA: tkinterdnd2 no instalado. Drag & Drop deshabilitado.")
     
     # Fallback a CTk normal
-    import customtkinter as ctk
     TkBase = ctk.CTk
 
 from datetime import datetime, timedelta
@@ -56,7 +57,6 @@ from src.core.constants import (
     FORMAT_MUXER_MAP, LANG_CODE_MAP, LANGUAGE_ORDER, DEFAULT_PRIORITY,
     EDITOR_FRIENDLY_CRITERIA, COMPATIBILITY_RULES
 )
-
 
 def resource_path(relative_path):
     """ Obtiene la ruta absoluta al recurso, funciona para desarrollo y para PyInstaller """

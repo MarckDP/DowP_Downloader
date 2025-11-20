@@ -529,7 +529,7 @@ class BatchDownloadTab(ctk.CTkFrame):
             width=100,
             values=["Sobrescribir", "Renombrar", "Omitir"]
         )
-        self.conflict_policy_menu.set("Sobrescribir")
+        self.conflict_policy_menu.set("Renombrar") 
         self.conflict_policy_menu.grid(row=0, column=1, padx=(0, 10), pady=5, sticky="w")
 
         # --- AÑADIR ESTAS LÍNEAS (TOOLTIP 3) ---

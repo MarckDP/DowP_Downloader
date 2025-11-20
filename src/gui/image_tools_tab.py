@@ -17,6 +17,8 @@ from PIL import ImageGrab, Image
 from tkinter import Menu, messagebox
 from tkinter import Menu
 from customtkinter import filedialog
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from src.core.exceptions import UserCancelledError
 from .dialogs import Tooltip, MultiPageDialog
@@ -41,7 +43,7 @@ class ImageToolsTab(ctk.CTkFrame):
     # Combinamos raster, vector y otros formatos comunes
     COMPATIBLE_EXTENSIONS = (
         # Raster (Pillow)
-        ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif", 
+        ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif", ".avif",
         # Vectoriales (Ghostscript/Cairo)
         ".pdf", ".svg", ".eps", ".ai", ".ps",
         # Otros formatos (Pillow)
@@ -325,7 +327,7 @@ class ImageToolsTab(ctk.CTkFrame):
         
         self.export_formats = [
             "No Convertir", 
-            "PNG", "JPG", "WEBP", "PDF", "TIFF", "ICO", "BMP",
+            "PNG", "JPG", "WEBP", "AVIF", "PDF", "TIFF", "ICO", "BMP"
             "--- Video ---",
             ".mp4 (H.264)",
             ".mov (ProRes)",
@@ -570,8 +572,6 @@ class ImageToolsTab(ctk.CTkFrame):
         # Inicializar menús con el default
         default_family = "Rembg Standard (U2Net)"
         self.rembg_family_menu.set(default_family)
-        # Llamada inicial diferida para asegurar que todo esté cargado
-        self.after(100, lambda: self._on_rembg_family_change(default_family))
 
         # 3.5: Módulo "Cuadrito" Maestro de Cambio de Fondo
         self.background_master_frame = ctk.CTkFrame(self.options_frame)
@@ -683,6 +683,7 @@ class ImageToolsTab(ctk.CTkFrame):
         self._create_png_options()
         self._create_jpg_options()
         self._create_webp_options()
+        self._create_avif_options()
         self._create_pdf_options()
         self._create_tiff_options()
         self._create_ico_options()
@@ -750,7 +751,7 @@ class ImageToolsTab(ctk.CTkFrame):
             line2_frame, width=120,
             values=["Sobrescribir", "Renombrar", "Omitir"]
         )
-        self.conflict_policy_menu.set("Sobrescribir")
+        self.conflict_policy_menu.set("Renombrar")
         self.conflict_policy_menu.grid(row=0, column=1, padx=(0, 10), pady=5, sticky="w")
         
         Tooltip(conflict_label, "Determina qué hacer si un archivo con el mismo nombre ya existe.", delay_ms=1000)
@@ -848,6 +849,9 @@ class ImageToolsTab(ctk.CTkFrame):
         if selected_format == "WEBP" and hasattr(self, 'webp_transparency') and self.webp_transparency.get() == 0:
             show_background_module = False
         if selected_format == "TIFF" and hasattr(self, 'tiff_transparency') and self.tiff_transparency.get() == 0:
+            show_background_module = False
+            
+        if selected_format == "AVIF" and hasattr(self, 'avif_transparency') and self.avif_transparency.get() == 0:
             show_background_module = False
 
         if show_background_module:
@@ -968,6 +972,52 @@ class ImageToolsTab(ctk.CTkFrame):
         self.webp_metadata.pack(fill="x", padx=10, pady=5)
         
         self.option_frames["WEBP"] = webp_frame
+
+    def _create_avif_options(self):
+        """Crea el frame de opciones para AVIF."""
+        avif_frame = ctk.CTkFrame(self.options_container, fg_color="#2B2B2B")
+        
+        self.avif_lossless = ctk.CTkCheckBox(
+            avif_frame, 
+            text="Sin Pérdida (Lossless)",
+            command=self._toggle_avif_quality
+        )
+        self.avif_lossless.pack(fill="x", padx=10, pady=5)
+
+        # Frame de Calidad (se oculta si es Lossless)
+        self.avif_quality_frame = ctk.CTkFrame(avif_frame, fg_color="transparent")
+        self.avif_quality_frame.pack(fill="x", expand=True)
+        
+        self.avif_quality_slider, _ = self._create_slider_with_label(
+            parent=self.avif_quality_frame,
+            text="Calidad (1-100):",
+            min_val=1, max_val=100, default_val=80, step=1
+        )
+
+        # Slider de Velocidad (0-10)
+        self.avif_speed_slider, _ = self._create_slider_with_label(
+            parent=avif_frame,
+            text="Velocidad (0-10):",
+            min_val=0, max_val=10, default_val=6, step=1
+        )
+        Tooltip(self.avif_speed_slider, "Compresión: 0=Lento/Mejor, 10=Rápido/Peor. Default: 6", delay_ms=1000)
+
+        self.avif_transparency = ctk.CTkCheckBox(
+            avif_frame, 
+            text="Mantener Transparencia",
+            command=lambda: self._on_format_changed(self.format_menu.get())
+        )
+        self.avif_transparency.pack(fill="x", padx=10, pady=5)
+        self.avif_transparency.select()
+        
+        self.option_frames["AVIF"] = avif_frame
+
+    def _toggle_avif_quality(self):
+        """Muestra u oculta slider calidad según lossless."""
+        if self.avif_lossless.get() == 1:
+            self.avif_quality_frame.pack_forget()
+        else:
+            self.avif_quality_frame.pack(fill="x", expand=True, after=self.avif_lossless)
 
     def _toggle_webp_quality(self):
         """Muestra u oculta el slider de calidad de WEBP."""
@@ -1533,14 +1583,17 @@ class ImageToolsTab(ctk.CTkFrame):
 
         # 2. Cargar Herramientas de Imagen
         settings = getattr(self.app, 'image_settings', {})
-        if not settings: return # Si no hay config guardada, usar defaults
+        
+        # --- CORRECCIÓN CRÍTICA: NO RETORNAR SI ESTÁ VACÍO ---
+        # Antes había un "if not settings: return" aquí. Lo quitamos.
+        # Si settings está vacío, usaremos diccionarios vacíos {} para cargar los defaults.
+        # -----------------------------------------------------
         
         try:
             # -- Formato --
-            saved_format = settings.get("format")
-            if saved_format:
-                self.format_menu.set(saved_format)
-                self._on_format_changed(saved_format)
+            saved_format = settings.get("format", "PNG") # Default PNG
+            self.format_menu.set(saved_format)
+            self._on_format_changed(saved_format)
 
             # -- Resize --
             res = settings.get("resize", {})
@@ -1558,9 +1611,10 @@ class ImageToolsTab(ctk.CTkFrame):
             else: self.resize_aspect_lock.deselect()
             if res.get("interpolation"): self.interpolation_menu.set(res["interpolation"])
             
-            # Disparar evento UI
             self._on_toggle_resize_frame()
-            self._on_resize_preset_changed(self.resize_preset_menu.get())
+            # Solo aplicar preset si hay uno guardado, si no, dejar default
+            if res.get("preset"):
+                self._on_resize_preset_changed(res.get("preset"))
 
             # -- Canvas --
             can = settings.get("canvas", {})
@@ -1580,7 +1634,6 @@ class ImageToolsTab(ctk.CTkFrame):
             if can.get("position"): self.canvas_position_menu.set(can["position"])
             if can.get("overflow"): self.canvas_overflow_menu.set(can["overflow"])
             
-            # Disparar evento UI
             self._on_toggle_canvas_frame()
 
             # -- Background --
@@ -1600,26 +1653,33 @@ class ImageToolsTab(ctk.CTkFrame):
                 self.bg_gradient_color2_entry.insert(0, bg["grad_c2"])
             if bg.get("direction"): self.bg_gradient_direction_menu.set(bg["direction"])
             
-            # Disparar evento UI
             self._on_toggle_background_frame()
 
             # -- Rembg (IA) --
+            # CORRECCIÓN: Asegurar inicialización incluso sin settings
             rem = settings.get("rembg", {})
             if rem.get("enabled"): self.rembg_checkbox.select()
             else: self.rembg_checkbox.deselect()
             
-            # Restaurar Familia y Modelo
-            if rem.get("family"):
-                self.rembg_family_menu.set(rem["family"])
-                self._on_rembg_family_change(rem["family"]) # Esto pobla el segundo menú
+            # 1. Obtener familia (guardada o default)
+            saved_family = rem.get("family", "Rembg Standard (U2Net)")
+            self.rembg_family_menu.set(saved_family)
             
-            if rem.get("model"):
-                # Verificar que el modelo existe en la lista poblada antes de setearlo
+            # 2. CRÍTICO: Forzar la población del menú de modelos AHORA
+            # Esto llenará el segundo menú con los valores correctos
+            self._on_rembg_family_change(saved_family) 
+            
+            # 3. Establecer el modelo específico (si existe)
+            saved_model = rem.get("model")
+            if saved_model:
+                # Verificar que el modelo existe en la lista recién poblada
                 current_values = self.rembg_model_menu.cget("values")
-                if rem["model"] in current_values:
-                    self.rembg_model_menu.set(rem["model"])
+                if current_values and saved_model in current_values:
+                    self.rembg_model_menu.set(saved_model)
+                    
+                    # CORRECCIÓN: Usar modo silencioso para no molestar al iniciar
+                    self._on_rembg_model_change(saved_model, silent=True)
             
-            # Disparar evento UI
             self._on_toggle_rembg_frame()
             
         except Exception as e:
@@ -2430,25 +2490,35 @@ class ImageToolsTab(ctk.CTkFrame):
         try:
             for i, input_path in enumerate(self.file_list_data):
                 
-                # Verificar si se solicitó cancelación
                 if cancel_event.is_set():
                     print("INFO: Proceso cancelado por el usuario")
                     self.app.after(0, lambda p=processed: self.progress_label.configure(
-                        text=f"⚠️ Cancelado: {p} archivos procesados antes de cancelar"))
+                        text=f"Cancelado: {p} archivos procesados antes de cancelar"))
                     break
                 
-                # 1. Obtener la tupla (path, page) de la lista de datos
                 (input_path, page_num) = self.file_list_data[i]
-            
-                # Actualizar progreso con porcentaje
-                progress_pct = ((i + 1) / total_files) * 100
                 filename = os.path.basename(input_path)
                 
-                # Mostrar porcentaje y nombre de archivo
-                self.app.after(0, lambda t=f"[{int(progress_pct)}%] {filename}": 
+                # --- CALLBACK DE PROGRESO FINO ---
+                def internal_callback(file_pct, message=None):
+                    # file_pct: 0 a 100 (puede ser None si solo es mensaje)
+                    
+                    # Solo actualizar la barra si hay un porcentaje numérico
+                    if file_pct is not None:
+                        weight_per_file = 100 / total_files
+                        base_progress = i * weight_per_file
+                        current_contribution = (file_pct / 100.0) * weight_per_file
+                        total_global = base_progress + current_contribution
+                        
+                        self.app.after(0, lambda p=total_global: self.progress_bar.set(p / 100.0))
+                    
+                    # Actualizar el texto si se proporciona
+                    if message:
+                        self.app.after(0, lambda t=message: self.progress_label.configure(text=t))
+                
+                # Actualizar texto inicial del archivo
+                self.app.after(0, lambda t=f"Procesando ({i+1}/{total_files}): {filename}": 
                             self.progress_label.configure(text=t))
-                self.app.after(0, lambda p=progress_pct: 
-                            self.progress_bar.set(p / 100.0))
                 
                 # 2. Generar el nombre de salida
                 output_filename = self._get_output_filename(input_path, options, page_num)
@@ -2457,21 +2527,21 @@ class ImageToolsTab(ctk.CTkFrame):
                 # Manejar conflictos
                 if os.path.exists(output_path):
                     action = self._handle_conflict(output_path, conflict_policy)
-                    
                     if action == "skip":
                         print(f"INFO: Omitiendo {filename} (ya existe)")
                         skipped += 1
                         continue
                     elif action == "rename":
                         output_path = self._get_unique_filename(output_path)
-                
-                # Convertir archivo
+
+                # Convertir archivo CON CALLBACK
                 try:
                     success = self.image_converter.convert_file(
                         input_path, 
                         output_path, 
                         options,
-                        page_number=page_num
+                        page_number=page_num,
+                        progress_callback=internal_callback  # <--- AQUÍ ESTÁ LA MAGIA
                     )
                     
                     if success:
@@ -2590,8 +2660,7 @@ class ImageToolsTab(ctk.CTkFrame):
 
     def _show_process_summary(self, processed, skipped, errors, error_details):
         """
-        Muestra un diálogo de resumen detallado del proceso.
-        🔧 NUEVO: Incluye información de errores categorizados
+        Muestra un diálogo de resumen del proceso (Texto plano, sin sugerencias).
         """
         # Construir mensaje base
         detail_msg = f"Convertidos exitosamente: {processed}"
@@ -2600,11 +2669,11 @@ class ImageToolsTab(ctk.CTkFrame):
             detail_msg += f"\nOmitidos (ya existían): {skipped}"
         
         if errors > 0:
-            detail_msg += f"\n\n⚠️ Errores encontrados: {errors}"
+            detail_msg += f"\n\nErrores encontrados: {errors}"
             
             if error_details:
                 detail_msg += "\n\nDetalles de los errores:\n"
-                detail_msg += "─" * 50 + "\n"
+                detail_msg += "-" * 50 + "\n"
                 
                 # Agrupar errores por tipo
                 error_groups = {}
@@ -2613,38 +2682,13 @@ class ImageToolsTab(ctk.CTkFrame):
                         error_groups[error_type] = []
                     error_groups[error_type].append(filename)
                 
-                # Mostrar errores agrupados
+                # Mostrar errores agrupados (Solo descripción y archivos)
                 for error_type, files in error_groups.items():
-                    detail_msg += f"\n• {error_type}\n"
+                    detail_msg += f"\n{error_type}\n"
                     for file in files[:3]:  # Mostrar máximo 3 archivos por tipo
                         detail_msg += f"  - {file}\n"
                     if len(files) > 3:
                         detail_msg += f"  ... y {len(files) - 3} más\n"
-                
-                # 🔧 NUEVO: Añadir soluciones sugeridas
-                detail_msg += "\n" + "─" * 50
-                detail_msg += "\n\n💡 Soluciones sugeridas:"
-                
-                for error_type in error_groups.keys():
-                    if "decompression bomb" in error_type.lower():
-                        detail_msg += "\n\n• Para archivos demasiado grandes:"
-                        detail_msg += "\n  - Reduce la resolución de salida (usa presets más pequeños)"
-                        detail_msg += "\n  - Abre el archivo en Inkscape/Illustrator y re-exporta"
-                    
-                    elif "svg corrupto" in error_type.lower():
-                        detail_msg += "\n\n• Para SVG corruptos:"
-                        detail_msg += "\n  - Abre el archivo en un editor de texto y corrige atributos"
-                        detail_msg += "\n  - Re-exporta desde tu editor gráfico (Illustrator, Figma)"
-                    
-                    elif "metadatos" in error_type.lower():
-                        detail_msg += "\n\n• Para archivos con metadatos excesivos:"
-                        detail_msg += "\n  - Usa una herramienta de limpieza de metadatos"
-                        detail_msg += "\n  - Re-exporta el archivo desde tu editor"
-                    
-                    elif "timeout" in error_type.lower():
-                        detail_msg += "\n\n• Para archivos muy complejos:"
-                        detail_msg += "\n  - Simplifica el archivo (menos capas/objetos)"
-                        detail_msg += "\n  - Procesa en lotes más pequeños"
         
         # Mostrar el diálogo
         messagebox.showinfo("Resumen del Proceso", detail_msg)
@@ -2762,6 +2806,11 @@ class ImageToolsTab(ctk.CTkFrame):
             "webp_quality": int(self.webp_quality_slider.get()) if hasattr(self, 'webp_quality_slider') else 90,
             "webp_transparency": self.webp_transparency.get() if hasattr(self, 'webp_transparency') else True,
             "webp_metadata": self.webp_metadata.get() if hasattr(self, 'webp_metadata') else False,
+            # AVIF
+            "avif_lossless": self.avif_lossless.get() if hasattr(self, 'avif_lossless') else False,
+            "avif_quality": int(self.avif_quality_slider.get()) if hasattr(self, 'avif_quality_slider') else 80,
+            "avif_speed": int(self.avif_speed_slider.get()) if hasattr(self, 'avif_speed_slider') else 6,
+            "avif_transparency": self.avif_transparency.get() if hasattr(self, 'avif_transparency') else True,
             # PDF
             "pdf_combine": self.pdf_combine.get() if hasattr(self, 'pdf_combine') else False,
             "pdf_combined_title": self.pdf_combined_title_entry.get() if hasattr(self, 'pdf_combined_title_entry') else "combined_output",
@@ -3560,8 +3609,18 @@ class ImageToolsTab(ctk.CTkFrame):
             self.rembg_model_menu.configure(values=["-"])
             self.rembg_model_menu.set("-")
 
-    def _on_rembg_model_change(self, selected_model):
-        """Verifica si el modelo está descargado en la carpeta correcta."""
+    def _on_rembg_model_change(self, selected_model, silent=False):
+        """
+        Verifica si el modelo está descargado.
+        CORRECCIÓN: Si la herramienta (checkbox) está apagada, no hace nada.
+        """
+        # --- NUEVA GUARDIA DE SEGURIDAD ---
+        # Si el usuario no ha activado la casilla "Eliminar Fondo", 
+        # no tiene sentido verificar ni pedir descargas. Salimos inmediatamente.
+        if self.rembg_checkbox.get() != 1:
+            return
+        # ----------------------------------
+
         if selected_model == "-" or not selected_model: return
 
         family = self.rembg_family_menu.get()
@@ -3584,6 +3643,9 @@ class ImageToolsTab(ctk.CTkFrame):
         else:
             self.rembg_status_label.configure(text="⚠️ No instalado", text_color="orange")
             
+            if silent:
+                return
+
             # Preguntar al usuario si quiere descargar
             response = messagebox.askyesno(
                 "Descargar Modelo IA", 
@@ -3606,20 +3668,39 @@ class ImageToolsTab(ctk.CTkFrame):
                  self.rembg_status_label.configure(text="❌ Descarga cancelada", text_color="red")
 
     def _download_rembg_model_thread(self, model_info, file_path):
-        """Descarga el modelo seleccionado en la ruta específica."""
+        """
+        Descarga el modelo con estrategia ROBUSTA (Reintentos + Timeouts largos).
+        Diseñado para conexiones lentas o inestables.
+        """
         url = model_info["url"]
         
-        # Asegurar que la carpeta existe (ej: bin/models/birefnet)
+        # Asegurar que la carpeta existe
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         
+        # --- CONFIGURACIÓN DE ROBUSTEZ ---
+        # Configurar una sesión con reintentos automáticos
+        session = requests.Session()
+        
+        # Estrategia de reintentos:
+        # total=5: Intentará 5 veces si falla.
+        # backoff_factor=1: Esperará 1s, 2s, 4s entre intentos (para dar tiempo al internet de volver).
+        # status_forcelist: Reintentar si el servidor da errores temporales (500, 502, etc).
+        retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+        
+        adapter = HTTPAdapter(max_retries=retries)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        # ----------------------------------
+
         try:
-            self.app.after(0, lambda: self.rembg_status_label.configure(text="⏳ Iniciando descarga...", text_color="#52a2f2"))
+            self.app.after(0, lambda: self.rembg_status_label.configure(text="⏳ Conectando...", text_color="#52a2f2"))
             
-            response = requests.get(url, stream=True, timeout=120)
+            # Timeout elevado (30s para conectar, 60s para leer datos)
+            response = session.get(url, stream=True, timeout=(30, 60))
             response.raise_for_status()
             
             total_length = response.headers.get('content-length')
-
+            
             with open(file_path, 'wb') as f:
                 if total_length is None:
                     f.write(response.content)
@@ -3627,26 +3708,53 @@ class ImageToolsTab(ctk.CTkFrame):
                     dl = 0
                     total_length = int(total_length)
                     last_percent = -1
-                    for chunk in response.iter_content(chunk_size=8192):
+                    
+                    # Chunk size aumentado ligeramente para buffer
+                    for chunk in response.iter_content(chunk_size=16384): 
                         if chunk:
                             dl += len(chunk)
                             f.write(chunk)
+                            
+                            # Calcular porcentaje
                             percent = int(100 * dl / total_length)
+                            
+                            # Actualizar UI solo si cambió el porcentaje (para no saturar el hilo)
                             if percent > last_percent:
                                 last_percent = percent
-                                self.app.after(0, lambda p=percent: self.rembg_status_label.configure(text=f"⏳ Descargando {p}%", text_color="#52a2f2"))
-            
+                                # Mostrar progreso y tamaño descargado
+                                downloaded_mb = dl / (1024 * 1024)
+                                total_mb = total_length / (1024 * 1024)
+                                status_text = f"⏳ {percent}% ({downloaded_mb:.1f}/{total_mb:.1f} MB)"
+                                self.app.after(0, lambda t=status_text: self.rembg_status_label.configure(text=t, text_color="#52a2f2"))
+
+            # Verificación final de tamaño (si el servidor envió content-length)
+            if total_length is not None and os.path.getsize(file_path) != total_length:
+                raise Exception("El archivo descargado está incompleto.")
+
             self.app.after(0, lambda: self.rembg_status_label.configure(text="✅ Descarga completada", text_color="green"))
             
+            # Habilitar botón de proceso inmediatamente
+            self.app.after(0, lambda: self.start_process_button.configure(state="normal"))
+            
         except Exception as e:
-            print(f"ERROR descargando modelo: {e}")
-            self.app.after(0, lambda: self.rembg_status_label.configure(text="❌ Error en descarga", text_color="red"))
+            print(f"ERROR ROBUSO descargando modelo: {e}")
+            
+            # Mensaje de error amigable para el usuario
+            error_msg = "❌ Error de red"
+            if "timeout" in str(e).lower():
+                error_msg = "❌ Internet muy lento (Timeout)"
+            elif "connection" in str(e).lower():
+                error_msg = "❌ Fallo de conexión"
+                
+            self.app.after(0, lambda m=error_msg: self.rembg_status_label.configure(text=m, text_color="red"))
+            
+            # Limpiar archivo corrupto/incompleto para evitar errores futuros
             if os.path.exists(file_path):
                 try: os.remove(file_path)
                 except: pass
         
         finally:
+            session.close()
             # Reactivar controles
             self.app.after(0, lambda: self.rembg_model_menu.configure(state="normal"))
             self.app.after(0, lambda: self.rembg_family_menu.configure(state="normal"))
-            self.app.after(0, lambda: self.start_process_button.configure(state="normal"))

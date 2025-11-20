@@ -2,6 +2,7 @@ import os
 import io
 import tempfile
 import subprocess
+import pillow_avif
 
 try:
     from pdf2image import convert_from_path, pdfinfo_from_path
@@ -12,18 +13,6 @@ except ImportError:
 
 from PIL import Image, ImageDraw, ImageChops
 from src.core.exceptions import UserCancelledError
-
-# --- NUEVO: Importar rembg ---
-try:
-    from rembg import remove, new_session
-    CAN_REMBG = True
-except ImportError as e:
-    CAN_REMBG = False
-    # Imprimimos el error exacto. A veces es "DLL load failed" o falta "onnxruntime"
-    print(f"ADVERTENCIA CRÍTICA: 'rembg' falló al importar. Error: {e}")
-except Exception as e:
-    CAN_REMBG = False
-    print(f"ERROR INESPERADO al importar rembg: {e}")
 
 # Importar las librerías de conversión
 try:
@@ -58,8 +47,12 @@ class ImageConverter:
         self.poppler_path = poppler_path
         self.inkscape_path = inkscape_path
         self.ffmpeg_processor = ffmpeg_processor
+
+        # --- Variables para Lazy Loading de IA ---
+        self.rembg_module = None   # Aquí guardaremos la librería cargada
+        self.rembg_sessions = {}   # Aquí guardaremos las sesiones de modelos
         
-        # --- CORRECCIÓN: Asignar correctamente las variables ---
+        # --- Asignar correctamente las variables ---
         self.gs_dir, self.gs_exe = self._find_local_ghostscript()
         if self.gs_exe:
             print(f"INFO: Ghostscript local detectado: {self.gs_exe}")
@@ -67,7 +60,7 @@ class ImageConverter:
             print("ADVERTENCIA: Ghostscript no encontrado. Conversión EPS/PS limitada.")
         
         # Formatos de entrada soportados
-        self.RASTER_FORMATS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif")
+        self.RASTER_FORMATS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif", ".avif")
         self.VECTOR_FORMATS = (".pdf", ".svg", ".eps", ".ai", ".ps")
         self.OTHER_FORMATS = (".psd", ".tga", ".jp2", ".ico")
 
@@ -105,55 +98,72 @@ class ImageConverter:
             print(f"ERROR buscando Ghostscript: {e}")
             return None, None
         
-    def remove_background(self, pil_image, model_filename="u2netp.onnx"):
+    def _load_rembg_lazy(self, progress_callback=None):
         """
-        Elimina el fondo de una imagen usando rembg.
-        CORREGIDO: Mapea nombres de archivo a nombres de sesión internos.
+        Intenta cargar la librería rembg solo cuando se solicita.
+        Retorna True si se cargó (o ya estaba cargada), False si falló.
         """
-        if not CAN_REMBG:
-            print("ERROR: rembg no está instalado.")
+        if self.rembg_module is not None:
+            return True # Ya estaba cargado en memoria
+
+        print("INFO: Inicializando motor de IA (Rembg)...")
+        
+        if progress_callback:
+            try:
+                # Enviamos None en porcentaje para no mover la barra, solo cambiar el texto
+                progress_callback(None, "Inicializando Motor IA (esto puede tardar unos segundos)...")
+            except Exception:
+                pass 
+        try:
+            import rembg
+            self.rembg_module = rembg
+            return True
+        except ImportError as e:
+            print(f"ERROR CRÍTICO: No se pudo cargar el módulo 'rembg': {e}")
+            return False
+        except Exception as e:
+            print(f"ERROR INESPERADO cargando rembg: {e}")
+            return False
+        
+    def remove_background(self, pil_image, model_filename="u2netp.onnx", progress_callback=None):
+        """Elimina el fondo (Carga Diferida con feedback visual)."""
+        
+        # 1. Pasamos el callback a la función de carga
+        if not self._load_rembg_lazy(progress_callback):
+            print("ERROR: La librería de IA no pudo cargarse.")
             return pil_image
 
         try:
-            # 1. Determinar el nombre interno de la sesión que rembg espera
-            # Los archivos tienen nombres largos, pero rembg quiere claves cortas
-            
+            # --- Mapeo de nombres (Igual que antes) ---
             session_name = None
-            
-            # Mapeo para BiRefNet (Nombres de archivo -> Claves internas)
             if "BiRefNet-general-epoch_244" in model_filename:
                 session_name = "birefnet-general"
             elif "BiRefNet-general-bb_swin_v1_tiny" in model_filename:
                 session_name = "birefnet-general-lite"
             elif "BiRefNet-portrait" in model_filename:
                 session_name = "birefnet-portrait"
-            
-            # Mapeo para modelos estándar (u2net, isnet)
-            # En estos casos, el nombre del archivo (sin .onnx) suele coincidir con la clave
             else:
                 session_name = os.path.splitext(model_filename)[0]
 
-            print(f"DEBUG: Iniciando sesión rembg: '{session_name}' (Archivo: {model_filename})")
+            print(f"DEBUG: Usando sesión IA: '{session_name}'")
 
-            # 2. Crear la sesión
-            # Como definimos U2NET_HOME en main.py, buscará el archivo en bin/models/rembg
-            session = new_session(model_name=session_name)
+            # 2. Crear/Recuperar sesión usando el módulo cargado en self.rembg_module
+            if session_name not in self.rembg_sessions:
+                # Usamos self.rembg_module en lugar del import global
+                self.rembg_sessions[session_name] = self.rembg_module.new_session(model_name=session_name)
             
-            # 3. Ejecutar
-            output_image = remove(pil_image, session=session)
+            session = self.rembg_sessions[session_name]
+            
+            # 3. Ejecutar usando el módulo cargado
+            output_image = self.rembg_module.remove(pil_image, session=session)
             
             return output_image
             
         except Exception as e:
-            print(f"ERROR al eliminar fondo ({model_filename}): {e}")
-            # Devolver la imagen original si falla, para no romper el flujo
-            return pil_image
-            
-        except Exception as e:
-            print(f"ERROR al eliminar fondo ({model_filename}): {e}")
+            print(f"ERROR al procesar IA ({model_filename}): {e}")
             return pil_image
     
-    def convert_file(self, input_path, output_path, options, page_number=None):
+    def convert_file(self, input_path, output_path, options, page_number=None, progress_callback=None):
         """
         Convierte un archivo de imagen al formato especificado.
         
@@ -193,10 +203,12 @@ class ImageConverter:
             bool: True si la conversión fue exitosa
         """
         try:
+            # Reporte inicial: Inicio (0-10%)
+            if progress_callback: progress_callback(5)
+
             input_ext = os.path.splitext(input_path)[1].lower()
             output_format = options.get("format", "PNG").upper()
             
-            # Obtener opciones de escalado
             resize_enabled = options.get("resize_enabled", False)
             target_size = None
             maintain_aspect = True
@@ -209,89 +221,78 @@ class ImageConverter:
                 if target_width and target_height:
                     target_size = (int(target_width), int(target_height))
             
-            # 1. Cargar la imagen según el tipo de entrada
+            # 1. Cargar imagen
             pil_image = self._load_image(input_path, input_ext, target_size, maintain_aspect, options, page_number=page_number)
             
             if not pil_image:
                 raise Exception(f"No se pudo cargar la imagen desde {input_path}")
             
-            # 2. Si es raster y hay escalado, aplicarlo ahora
+            # Reporte: Cargado (30%)
+            if progress_callback: progress_callback(30)
+            
+            # 2. Resize raster
             if resize_enabled and target_size and input_ext not in self.VECTOR_FORMATS:
                 pil_image = self._resize_raster_image(pil_image, target_size, maintain_aspect, options)
-                
+            
+            # Reporte: Resize listo (40%)
+            if progress_callback: progress_callback(40)
 
-            # 2.5 (NUEVO): Eliminar fondo con IA (si está activado)
+            # 2.5 Eliminar fondo con IA
             if options.get("rembg_enabled", False):
                 model_name = options.get("rembg_model", "u2netp")
                 print(f"INFO: Eliminando fondo con IA (Modelo: {model_name})...")
                 
-                # Llamamos a self.remove_background (el método local que acabamos de crear)
-                pil_image = self.remove_background(pil_image, model_name)
+                # Reporte con texto para la UI
+                if progress_callback: 
+                    progress_callback(45, f"Preparando IA ({model_name})...")
+                
+                # Pasamos el callback para que _load_rembg_lazy pueda usarlo si es la primera vez
+                pil_image = self.remove_background(pil_image, model_name, progress_callback)
+                
+                # Reporte: IA Terminada (80%)
+                if progress_callback: progress_callback(80)
             
-            # 3. Si hay canvas, aplicarlo
+            # 3. Canvas
             canvas_enabled = options.get("canvas_enabled", False)
             if canvas_enabled:
                 canvas_option = options.get("canvas_option", "Sin ajuste")
-                
                 if canvas_option != "Sin ajuste":
                     pil_image = self._apply_canvas_by_option(pil_image, canvas_option, options)
 
-            # 4. Aplicar cambio de fondo si está activado (antes de convertir)
+            # 4. Fondo
             background_enabled = options.get("background_enabled", False)
             if background_enabled:
                 pil_image = self._apply_background(pil_image, options)
             
-            # 5. Convertir según el formato de salida
+            # Reporte: Preparando guardado (85%)
+            if progress_callback: progress_callback(85)
             
+            # 5. Guardar (Conversión final)
             if output_format == "NO CONVERTIR":
-                
                 input_ext = os.path.splitext(input_path)[1].lower()
-                
-                # Si el original era un raster, intenta guardarlo en su formato original
                 if input_ext in self.RASTER_FORMATS:
-                    print(f"DEBUG: Guardando (sin convertir) como {input_ext}")
-                    if input_ext in (".jpg", ".jpeg"):
-                        self._save_as_jpg(pil_image, output_path, options)
-                    elif input_ext == ".png":
-                        self._save_as_png(pil_image, output_path, options)
-                    elif input_ext == ".webp":
-                        self._save_as_webp(pil_image, output_path, options)
-                    elif input_ext in (".tiff", ".tif"):
-                        self._save_as_tiff(pil_image, output_path, options)
-                    elif input_ext == ".bmp":
-                        self._save_as_bmp(pil_image, output_path, options)
-                    else:
-                        # Fallback para otros rasters (GIF, etc.)
-                        pil_image.save(output_path)
+                    if input_ext in (".jpg", ".jpeg"): self._save_as_jpg(pil_image, output_path, options)
+                    elif input_ext == ".png": self._save_as_png(pil_image, output_path, options)
+                    elif input_ext == ".webp": self._save_as_webp(pil_image, output_path, options)
+                    elif input_ext in (".tiff", ".tif"): self._save_as_tiff(pil_image, output_path, options)
+                    elif input_ext == ".bmp": self._save_as_bmp(pil_image, output_path, options)
+                    else: pil_image.save(output_path)
                 else:
-                    # Si el original era un vector (SVG, PDF, AI), se ha rasterizado.
-                    # Guardar como PNG por defecto para mantener la transparencia.
-                    print(f"DEBUG: Guardando (sin convertir) vector rasterizado como PNG.")
                     self._save_as_png(pil_image, output_path, options)
             
-            elif output_format == "PNG":
-                self._save_as_png(pil_image, output_path, options)
-            
-            elif output_format in ["JPG", "JPEG"]:
-                self._save_as_jpg(pil_image, output_path, options)
-            
-            elif output_format == "WEBP":
-                self._save_as_webp(pil_image, output_path, options)
-            
-            elif output_format == "PDF":
-                self._save_as_pdf(pil_image, output_path, options)
-            
-            elif output_format == "TIFF":
-                self._save_as_tiff(pil_image, output_path, options)
-            
-            elif output_format == "ICO":
-                self._save_as_ico(pil_image, output_path, options)
-            
-            elif output_format == "BMP":
-                self._save_as_bmp(pil_image, output_path, options)
-            
+            elif output_format == "PNG": self._save_as_png(pil_image, output_path, options)
+            elif output_format in ["JPG", "JPEG"]: self._save_as_jpg(pil_image, output_path, options)
+            elif output_format == "WEBP": self._save_as_webp(pil_image, output_path, options)
+            elif output_format == "AVIF": self._save_as_avif(pil_image, output_path, options)
+            elif output_format == "PDF": self._save_as_pdf(pil_image, output_path, options)
+            elif output_format == "TIFF": self._save_as_tiff(pil_image, output_path, options)
+            elif output_format == "ICO": self._save_as_ico(pil_image, output_path, options)
+            elif output_format == "BMP": self._save_as_bmp(pil_image, output_path, options)
             else:
                 raise Exception(f"Formato de salida no soportado: {output_format}")
+            
+            # Reporte: Finalizado (100%)
+            if progress_callback: progress_callback(100)
             
             return True
             
@@ -1727,11 +1728,14 @@ class ImageConverter:
                         current_pct = base_progress + (step_size * 0.3)
                         model_name = options.get("rembg_model", "u2netp")
                         
-                        # Mensaje específico porque esto tarda
                         progress_callback("Standardizing", current_pct, f"🤖 IA ({model_name}): {os.path.basename(filepath)}")
-                        print(f"DEBUG: Aplicando Rembg a frame {i+1}/{total_files}...")
                         
-                        fg_image = self.remove_background(fg_image, model_name)
+                        # Adaptador: creamos una función temporal que coincida con lo que espera _load_rembg_lazy
+                        # (pct, msg) -> llama al callback original de video
+                        def temp_callback(p, m):
+                            progress_callback("Standardizing", current_pct, m)
+
+                        fg_image = self.remove_background(fg_image, model_name, progress_callback=temp_callback)
                     
                     # Paso 3: Post-IA / Escalado (80% del paso)
                     current_pct = base_progress + (step_size * 0.8)
@@ -1800,3 +1804,31 @@ class ImageConverter:
                     print(f"INFO: Carpeta temporal de frames eliminada: {temp_frame_dir}")
                 except Exception as e:
                     print(f"ADVERTENCIA: No se pudo eliminar la carpeta temporal: {e}")
+
+    def _save_as_avif(self, img, output_path, options):
+        """Guarda como AVIF con opciones avanzadas."""
+        # Mantener transparencia si está activado
+        if options.get("avif_transparency", True) and img.mode in ("RGBA", "LA", "PA"):
+            save_img = img
+        else:
+            save_img = img.convert("RGB")
+        
+        save_kwargs = {
+            "format": "AVIF",
+            "lossless": options.get("avif_lossless", False),
+            "speed": options.get("avif_speed", 6)
+        }
+        
+        # Calidad solo si no es lossless
+        if not save_kwargs["lossless"]:
+            save_kwargs["quality"] = options.get("avif_quality", 80)
+        
+        save_img.save(output_path, **save_kwargs)
+
+        # Flush para asegurar escritura en disco
+        try:
+            with open(output_path, 'r+b') as f:
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception:
+            pass

@@ -397,14 +397,14 @@ COMPATIBILITY_RULES = {
     ".wav": { "video": [], "audio": ["pcm_s16le", "pcm_s24le"] }
 }
 
-# --- CONSTANTES DE HERRAMIENTAS DE IMAGEN (MarkECI) ---
-IMAGE_INPUT_FORMATS = {".svg", ".eps", ".ai", ".pdf", ".ps"} # Formatos vectoriales/documentos
-IMAGE_EXPORT_FORMATS = ["PNG", "JPG", "JPEG", "WEBP", "BMP", "PDF", "TIFF"]
+# --- CONSTANTES DE HERRAMIENTAS DE IMAGEN ---
+IMAGE_INPUT_FORMATS = {".svg", ".eps", ".ai", ".pdf", ".ps", ".avif"}
+IMAGE_EXPORT_FORMATS = ["PNG", "JPG", "JPEG", "WEBP", "AVIF", "BMP", "PDF", "TIFF"]
 
 # Agrupar formatos por tipo para mejor manejo en la lógica y la UI
-IMAGE_RASTER_FORMATS = {"PNG", "JPG", "JPEG", "WEBP", "BMP", "TIFF"}
+IMAGE_RASTER_FORMATS = {"PNG", "JPG", "JPEG", "WEBP", "BMP", "TIFF", "AVIF"}
 IMAGE_VECTOR_FORMATS = {"PDF"} 
-IMAGE_FORMATS_WITH_QUALITY = {"JPG", "JPEG", "WEBP"}
+FORMATS_WITH_TRANSPARENCY = {"PNG", "WEBP", "TIFF", "ICO", "PDF", "AVIF"}
 
 # DPI por defecto para rasterización (de PDF, SVG, etc.)
 DEFAULT_RASTER_DPI = 300

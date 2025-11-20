@@ -284,11 +284,11 @@ class PlaylistErrorDialog(ctk.CTkToplevel):
 
 class Tooltip:
     """
-    Crea un tooltip emergente para cualquier widget de CustomTkinter.
-    Se muestra después de un retraso y se oculta al salir el mouse.
-    MEJORADO: Ajusta automáticamente su posición para no salirse de la pantalla.
+    Crea un tooltip emergente.
+    CORREGIDO v2: Robusto para Multi-Monitor, DPI Scaling y Coordenadas Negativas.
+    Usa la geometría de la ventana principal como referencia segura.
     """
-    def __init__(self, widget, text, delay_ms=2000, wraplength=300):
+    def __init__(self, widget, text, delay_ms=500, wraplength=300):
         self.widget = widget
         self.text = text
         self.delay = delay_ms
@@ -296,173 +296,118 @@ class Tooltip:
         self.tooltip_window = None
         self.timer_id = None
 
-        # Vincular eventos al widget
+        # Vincular eventos
         self.widget.bind("<Enter>", self.on_enter)
         self.widget.bind("<Leave>", self.on_leave)
+        self.widget.bind("<ButtonPress>", self.on_leave)
 
     def on_enter(self, event=None):
-        """Inicia el temporizador para mostrar el tooltip."""
         self.schedule_tooltip()
 
     def on_leave(self, event=None):
-        """Cancela el temporizador y oculta el tooltip."""
         self.hide_tooltip()
 
     def schedule_tooltip(self):
-        """Cancela cualquier temporizador existente e inicia uno nuevo."""
         self.cancel_timer()
         self.timer_id = self.widget.after(self.delay, self.show_tooltip)
 
-    def _get_monitor_bounds(self, x_mouse, y_mouse):
-        """
-        Detecta los límites del monitor donde está el cursor.
-        Retorna (x_min, y_min, x_max, y_max) del monitor actual.
-        """
-        try:
-            # Intentar obtener info de todos los monitores usando tkinter
-            root = self.widget.winfo_toplevel()
-            
-            # Obtener la geometría de la ventana raíz para calcular monitor virtual completo
-            screen_width = root.winfo_screenwidth()
-            screen_height = root.winfo_screenheight()
-            
-            # Para sistemas multi-monitor, necesitamos calcular en qué monitor está el cursor
-            # Si x_mouse está fuera de la pantalla principal, ajustamos los límites
-            
-            # Detectar el ancho de un solo monitor (asumiendo monitores del mismo tamaño)
-            # En la mayoría de configuraciones, cada monitor tiene el mismo ancho
-            
-            # Calcular en qué "monitor virtual" está el cursor
-            # (esto funciona para configuraciones horizontales estándar)
-            monitor_index = x_mouse // screen_width
-            
-            # Calcular límites del monitor actual
-            monitor_x_min = monitor_index * screen_width
-            monitor_x_max = (monitor_index + 1) * screen_width
-            monitor_y_min = 0
-            monitor_y_max = screen_height
-            
-            return (monitor_x_min, monitor_y_min, monitor_x_max, monitor_y_max)
-            
-        except Exception:
-            # Si falla, usar las dimensiones completas de la pantalla
-            screen_width = self.widget.winfo_screenwidth()
-            screen_height = self.widget.winfo_screenheight()
-            return (0, 0, screen_width, screen_height)
+    def cancel_timer(self):
+        if self.timer_id:
+            self.widget.after_cancel(self.timer_id)
+            self.timer_id = None
 
     def show_tooltip(self):
-        """Crea y muestra la ventana del tooltip con posicionamiento inteligente multi-monitor."""
-        
-        # Colores (ajustados para el tema oscuro)
-        bg_color = "#131212"
-        fg_color = "#DCE4EE"
-        border_color = "#565b5f"
-        
-        # Crear la ventana solo si no existe
-        if not (self.tooltip_window and self.tooltip_window.winfo_exists()):
+        if self.tooltip_window and self.tooltip_window.winfo_exists():
+            return
+
+        # Colores (Tema Oscuro)
+        bg_color = "#1a1a1a"
+        fg_color = "#e0e0e0"
+        border_color = "#404040"
+
+        # 1. Crear ventana (Oculta)
+        self.tooltip_window = ctk.CTkToplevel(self.widget)
+        self.tooltip_window.withdraw() 
+        self.tooltip_window.overrideredirect(True)
+        self.tooltip_window.attributes("-topmost", True)
+
+        # 2. Contenido
+        frame = ctk.CTkFrame(
+            self.tooltip_window,
+            fg_color=bg_color,
+            border_width=1,
+            border_color=border_color,
+            corner_radius=4
+        )
+        frame.pack()
+
+        label = ctk.CTkLabel(
+            frame,
+            text=self.text,
+            fg_color="transparent",
+            text_color=fg_color,
+            font=ctk.CTkFont(size=12),
+            wraplength=self.wraplength,
+            justify="left",
+            padx=8, 
+            pady=4
+        )
+        label.pack()
+
+        # 3. Calcular dimensiones del tooltip
+        frame.update_idletasks()
+        tip_w = frame.winfo_reqwidth()
+        tip_h = frame.winfo_reqheight()
+
+        # 4. Calcular Posición Inteligente (Relativa a la Ventana Principal)
+        try:
+            # Posición absoluta del mouse
+            mouse_x = self.widget.winfo_pointerx()
+            mouse_y = self.widget.winfo_pointery()
+
+            # Información de la ventana "Madre" (DowP)
+            # Esto nos da los límites seguros donde el usuario está mirando
+            root = self.widget.winfo_toplevel()
+            root_x = root.winfo_rootx()
+            root_y = root.winfo_rooty()
+            root_w = root.winfo_width()
+            root_h = root.winfo_height()
+
+            # Offsets iniciales
+            offset_x = 15
+            offset_y = 10
+
+            # Cálculo tentativo (Abajo-Derecha)
+            x = mouse_x + offset_x
+            y = mouse_y + offset_y
+
+            # LÓGICA DE REBOTE (Flip Logic)
+            # Si el tooltip se sale por la derecha de la ventana de DowP...
+            if (x + tip_w) > (root_x + root_w):
+                # ... lo ponemos a la izquierda del cursor
+                x = mouse_x - tip_w - offset_x
             
-            # Crear la ventana emergente
-            self.tooltip_window = ctk.CTkToplevel(self.widget)
-            self.tooltip_window.overrideredirect(True)  # Sin barra de título
-            self.tooltip_window.configure(fg_color=bg_color)
+            # Si el tooltip se sale por abajo de la ventana de DowP...
+            # (Añadimos un margen de 50px extra porque la barra de tareas suele estar abajo)
+            if (y + tip_h) > (root_y + root_h + 50): 
+                # ... lo ponemos arriba del cursor
+                y = mouse_y - tip_h - offset_y
 
-            # Crear un Frame que SÍ acepta bordes
-            frame = ctk.CTkFrame(
-                self.tooltip_window,
-                fg_color=bg_color,
-                border_width=1,
-                border_color=border_color,
-                corner_radius=5
-            )
-            frame.pack()
-
-            # Crear la Etiqueta DENTRO del frame, sin bordes
-            label = ctk.CTkLabel(
-                frame,
-                text=self.text,
-                fg_color="transparent",
-                text_color=fg_color,
-                padx=8,
-                pady=5,
-                font=ctk.CTkFont(size=12),
-                wraplength=self.wraplength,
-                justify="left"
-            )
-            label.pack()
+            # 5. Aplicar (Sin clamping forzado a 0 para soportar monitores a la izquierda)
+            self.tooltip_window.geometry(f"{tip_w}x{tip_h}+{x}+{y}")
+            self.tooltip_window.deiconify()
             
-            # Ocultar la ventana inicialmente para calcular su posición
-            self.tooltip_window.withdraw()
-
-        # Forzar a la ventana a calcular su tamaño
-        self.tooltip_window.update_idletasks() 
-
-        # Obtener dimensiones del tooltip
-        tooltip_width = self.tooltip_window.winfo_reqwidth()
-        tooltip_height = self.tooltip_window.winfo_reqheight()
-
-        # Obtener posición del mouse
-        x_mouse = self.widget.winfo_pointerx()
-        y_mouse = self.widget.winfo_pointery()
-        
-        # Obtener límites del monitor donde está el cursor
-        monitor_x_min, monitor_y_min, monitor_x_max, monitor_y_max = self._get_monitor_bounds(x_mouse, y_mouse)
-        
-        # Offsets predeterminados (tooltip a la derecha y abajo del cursor)
-        offset_x = 15
-        offset_y = 10
-        margin = 10  # Margen desde los bordes
-        
-        # Calcular posición inicial
-        x = x_mouse + offset_x
-        y = y_mouse + offset_y
-        
-        # AJUSTE HORIZONTAL: Si se sale por la derecha del monitor actual
-        if x + tooltip_width > monitor_x_max - margin:
-            x = x_mouse - tooltip_width - offset_x
-            
-            # Si aún así se sale por la izquierda del monitor actual
-            if x < monitor_x_min + margin:
-                x = max(monitor_x_min + margin, x_mouse - tooltip_width // 2)
-        
-        # AJUSTE VERTICAL: Si se sale por abajo del monitor actual
-        if y + tooltip_height > monitor_y_max - margin:
-            y = y_mouse - tooltip_height - offset_y
-            
-            # Si aún así se sale por arriba del monitor actual
-            if y < monitor_y_min + margin:
-                y = max(monitor_y_min + margin, y_mouse - tooltip_height // 2)
-        
-        # Asegurar que nunca quede fuera de los límites del monitor actual
-        x = max(monitor_x_min + margin, min(x, monitor_x_max - tooltip_width - margin))
-        y = max(monitor_y_min + margin, min(y, monitor_y_max - tooltip_height - margin))
-        
-        self.tooltip_window.geometry(f"+{x}+{y}")
-        self.tooltip_window.lift()
-        self.tooltip_window.deiconify()  # Mostrar la ventana
+        except Exception as e:
+            print(f"Error mostrando tooltip: {e}")
+            if self.tooltip_window:
+                self.tooltip_window.destroy()
+                self.tooltip_window = None
 
     def hide_tooltip(self):
-        """Cancela el temporizador y oculta la ventana."""
         self.cancel_timer()
-        if self.tooltip_window and self.tooltip_window.winfo_exists():
-            self.tooltip_window.withdraw()  # Ocultar la ventana
-
-    def cancel_timer(self):
-        """Cancela el trabajo 'after' pendiente, si existe."""
-        if self.timer_id:
-            self.widget.after_cancel(self.timer_id)
-            self.timer_id = None
-
-    def hide_tooltip(self):
-        """Cancela el temporizador y oculta la ventana."""
-        self.cancel_timer()
-        if self.tooltip_window and self.tooltip_window.winfo_exists():
-            self.tooltip_window.withdraw()  # Ocultar la ventana
-
-    def cancel_timer(self):
-        """Cancela el trabajo 'after' pendiente, si existe."""
-        if self.timer_id:
-            self.widget.after_cancel(self.timer_id)
-            self.timer_id = None
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
 
 class CTkColorPicker(ctk.CTkToplevel):
     """
