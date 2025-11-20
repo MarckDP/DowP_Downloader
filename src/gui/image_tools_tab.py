@@ -327,7 +327,7 @@ class ImageToolsTab(ctk.CTkFrame):
         
         self.export_formats = [
             "No Convertir", 
-            "PNG", "JPG", "WEBP", "AVIF", "PDF", "TIFF", "ICO", "BMP"
+            "PNG", "JPG", "WEBP", "AVIF", "PDF", "TIFF", "ICO", "BMP",
             "--- Video ---",
             ".mp4 (H.264)",
             ".mov (ProRes)",
@@ -3757,4 +3757,5 @@ class ImageToolsTab(ctk.CTkFrame):
             session.close()
             # Reactivar controles
             self.app.after(0, lambda: self.rembg_model_menu.configure(state="normal"))
+
             self.app.after(0, lambda: self.rembg_family_menu.configure(state="normal"))
