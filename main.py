@@ -7,11 +7,12 @@ import atexit
 import tkinter as tk 
 import pillow_avif
 
+
 from tkinter import messagebox
 from PIL import Image, ImageTk
 
 
-APP_VERSION = "1.2.7"
+APP_VERSION = "1.2.8"
 
 if getattr(sys, 'frozen', False):
     PROJECT_ROOT = os.path.dirname(sys.executable)
@@ -28,6 +29,7 @@ GHOSTSCRIPT_BIN_DIR = os.path.join(BIN_DIR, "ghostscript")
 # --- NUEVO: Rutas para Modelos de IA ---
 MODELS_DIR = os.path.join(BIN_DIR, "models")
 REMBG_MODELS_DIR = os.path.join(MODELS_DIR, "rembg")
+UPSCALING_DIR = os.path.join(MODELS_DIR, "upscaling")
 
 # Configurar variable de entorno para que rembg use nuestra carpeta
 os.environ["U2NET_HOME"] = REMBG_MODELS_DIR

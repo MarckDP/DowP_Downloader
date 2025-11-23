@@ -43,7 +43,9 @@ def download_media(url, ydl_opts, progress_callback, cancellation_event: threadi
         nonlocal fragment_started
         
         if cancellation_event.is_set():
-            raise UserCancelledError("Descarga cancelada por el usuario.")
+            print("DEBUG: Evento de cancelación detectado en el hook de yt-dlp.")
+            # Lanzar DownloadError hace que yt-dlp aborte limpiamente
+            raise yt_dlp.utils.DownloadError("Descarga cancelada por el usuario.")
         
         status = d.get('status', 'N/A')
         

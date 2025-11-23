@@ -1448,7 +1448,7 @@ class QueueManager:
                         bitrate_mbps = float(recode_options["custom_bitrate_value"] or "8")
                         bitrate_k = int(bitrate_mbps * 1000)
                         if "nvenc" in ffmpeg_codec_name:
-                            params_str = f"-c:v {ffmpeg_codec_name} -preset p5 -rc vbr -b:v {bitrate_k}k -maxrate {bitrate_k}k"
+                            params_str = f"-c:v {ffmpeg_codec_name} -preset p5 -rc vbr -b:v {bitrate_k}k -maxrate {bitrate_k}k -pix_fmt yuv420p"
                         else:
                             params_str = f"-c:v {ffmpeg_codec_name} -b:v {bitrate_k}k -maxrate {bitrate_k}k -bufsize {bitrate_k*2}k -pix_fmt yuv420p"
                         final_ffmpeg_params.extend(params_str.split())

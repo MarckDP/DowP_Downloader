@@ -9,6 +9,7 @@ from customtkinter import filedialog
 from PIL import Image
 import requests
 from io import BytesIO
+import queue
 import gc
 import os
 import re
@@ -163,6 +164,18 @@ def handle_clear_active_target():
         ACTIVE_TARGET_SID = None
 
         socketio.emit('active_target_update', {'activeTarget': None})
+
+# ==========================================
+# ✅ NUEVO: Escuchar archivos desde Adobe
+# ==========================================
+@socketio.on('adobe_push_files')
+def handle_adobe_push_files(data):
+    """Recibe una lista de archivos desde Premiere/AE y los procesa."""
+    files = data.get('files', [])
+    if files and main_app_instance:
+        print(f"INFO: Recibidos {len(files)} archivos desde Adobe.")
+        # Usamos .after para ejecutar la lógica en el hilo principal de la UI
+        main_app_instance.after(0, main_app_instance.handle_adobe_files, files)
 
 def run_flask_app():
     """Función que corre el servidor. Usa gevent para WebSockets."""
@@ -403,6 +416,9 @@ class MainWindow(TkBase):
         self.PRESETS_FILE = os.path.join(self.APP_DATA_DIR, "presets.json") 
         # --- FIN DE LA MODIFICACIÓN ---
 
+        self.ui_update_queue = queue.Queue()
+        self._process_ui_queue()
+
         self.launch_target = launch_target
         self.is_shutting_down = False
         self.cancellation_event = threading.Event()
@@ -507,6 +523,23 @@ class MainWindow(TkBase):
         self._last_clipboard_check = "" 
         self.bind("<FocusIn>", self._on_app_focus)
         self.after(100, self._show_window_when_ready)
+
+    def _process_ui_queue(self):
+        """Revisa la cola de actualizaciones y ejecuta las acciones en el hilo principal."""
+        try:
+            while True:
+                # Obtener tarea sin bloquear
+                task = self.ui_update_queue.get_nowait()
+                func, args = task
+                try:
+                    func(*args)
+                except Exception as e:
+                    print(f"ERROR al procesar tarea de UI: {e}")
+        except queue.Empty:
+            pass
+        finally:
+            # Reprogramar la revisión
+            self.after(100, self._process_ui_queue)
     
     def run_initial_setup(self):
         """
@@ -524,17 +557,23 @@ class MainWindow(TkBase):
 
         # 2. Verificación de Inkscape (Segundo plano)
         from src.core.setup import check_inkscape_status
-        threading.Thread(
-            target=lambda: self.on_inkscape_check_complete(check_inkscape_status(lambda t, v: None)),
-            daemon=True
-        ).start()
         
+        def run_inkscape_check():
+            result = check_inkscape_status(lambda t, v: None)
+            # Encolar la actualización en lugar de llamar a after
+            self.ui_update_queue.put((self.on_inkscape_check_complete, (result,)))
+
+        threading.Thread(target=run_inkscape_check, daemon=True).start()
+
         # 3. Verificación de Ghostscript (Segundo plano)
         from src.core.setup import check_ghostscript_status
-        threading.Thread(
-            target=lambda: self.on_ghostscript_check_complete(check_ghostscript_status(lambda t, v: None)),
-            daemon=True
-        ).start()
+        
+        def run_ghostscript_check():
+            result = check_ghostscript_status(lambda t, v: None)
+            # Encolar
+            self.ui_update_queue.put((self.on_ghostscript_check_complete, (result,)))
+
+        threading.Thread(target=run_ghostscript_check, daemon=True).start()
         
         # 4. COMPROBACIÓN PRINCIPAL (Solo entorno base en LoadingWindow)
         from src.core.setup import check_environment_status 
@@ -580,24 +619,52 @@ class MainWindow(TkBase):
         # ---------------------------------------------------------------
         # 5. DESCARGA DE MODELOS DE IA (HILO DE FONDO EN SINGLE TAB)
         # ---------------------------------------------------------------
-        from src.core.setup import check_and_download_rembg_models
+        # Añadimos la importación de la nueva función
+        from src.core.setup import check_and_download_rembg_models, check_and_download_upscaling_tools
 
         def rembg_background_task():
-            # Actualizar label inicial
-            self.after(0, lambda: self.single_tab.rembg_status_label.configure(text="Modelos IA: Verificando..."))
+            # Encolar actualización inicial
+            self.ui_update_queue.put((
+                lambda: self.single_tab.rembg_status_label.configure(text="Modelos IA: Verificando..."), 
+                ()
+            ))
             
-            # Ejecutar descarga pasando el callback de la SingleTab
-            success = check_and_download_rembg_models(
-                lambda text, val: self.single_tab.update_setup_download_progress('rembg', text, val)
-            )
+            # Definir callbacks que encolen (para pasar a las funciones de setup)
+            def update_progress_safe(text, val):
+                self.ui_update_queue.put((
+                    self.single_tab.update_setup_download_progress, 
+                    ('rembg', text, val)
+                ))
+
+            # 1. Ejecutar descarga REMBG
+            success_rembg = check_and_download_rembg_models(update_progress_safe)
             
-            # Actualizar label final
-            if success:
-                self.after(0, lambda: self.single_tab.rembg_status_label.configure(text="Modelos IA: Listos ✅\n(Instalados)"))
-                # Limpiar barra de progreso
-                self.after(0, lambda: self.single_tab.update_setup_download_progress('rembg', "Modelos IA listos.", 0))
+            # 2. Ejecutar descarga UPSCALING
+            if success_rembg:
+                 self.ui_update_queue.put((
+                    lambda: self.single_tab.rembg_status_label.configure(text="IA Upscaling: Verificando..."),
+                    ()
+                 ))
+                 
+                 success_upscale = check_and_download_upscaling_tools(update_progress_safe)
             else:
-                self.single_tab.rembg_status_label.configure(text="Modelos IA: Error ❌")
+                success_upscale = False
+
+            # Encolar actualización final
+            if success_rembg and success_upscale:
+                self.ui_update_queue.put((
+                    lambda: self.single_tab.rembg_status_label.configure(text="Modelos IA: Listos ✅\n(Instalados)"),
+                    ()
+                ))
+                self.ui_update_queue.put((
+                    self.single_tab.update_setup_download_progress,
+                    ('rembg', "Todos los modelos IA listos.", 0)
+                ))
+            else:
+                self.ui_update_queue.put((
+                    lambda: self.single_tab.rembg_status_label.configure(text="Modelos IA: Error ❌"),
+                    ()
+                ))
 
         # Lanzar hilo independiente que NO bloquea la ventana de carga
         threading.Thread(target=rembg_background_task, daemon=True).start()
@@ -957,24 +1024,35 @@ class MainWindow(TkBase):
             from src.core.setup import download_and_install_ffmpeg
 
             def download_task():
-                # --- ESTA LÍNEA CAMBIA ---
-                success = download_and_install_ffmpeg(latest_version, download_url, 
-                    lambda text, val: self.single_tab.update_setup_download_progress('ffmpeg', text, val)) 
+                # Usar un callback seguro para el progreso
+                def progress_safe(text, val):
+                    self.ui_update_queue.put((self.single_tab.update_setup_download_progress, ('ffmpeg', text, val)))
+
+                success = download_and_install_ffmpeg(latest_version, download_url, progress_safe) 
 
                 if success:
                     ffmpeg_bin_path = os.path.join(BIN_DIR, "ffmpeg")
                     if ffmpeg_bin_path not in os.environ['PATH']:
-                        print(f"INFO: Actualizando PATH en tiempo de ejecución con: {ffmpeg_bin_path}")
                         os.environ['PATH'] = ffmpeg_bin_path + os.pathsep + os.environ['PATH']
 
-                    self.after(0, self.ffmpeg_processor.run_detection_async,  
-                            lambda s, m: self.on_ffmpeg_detection_complete(s, m, show_ready_message=True))
-                    self.after(0, lambda: self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {latest_version} \n(Instalado)"))
-                    # --- ESTA LÍNEA CAMBIA ---
-                    self.after(0, self.single_tab.update_setup_download_progress, 'ffmpeg', f"✅ FFmpeg {latest_version} instalado.", 100)
+                    # USAR COLA PARA TODO
+                    self.ui_update_queue.put((
+                        self.ffmpeg_processor.run_detection_async, 
+                        (lambda s, m: self.on_ffmpeg_detection_complete(s, m, show_ready_message=True),)
+                    ))
+                    self.ui_update_queue.put((
+                        lambda: self.single_tab.ffmpeg_status_label.configure(text=f"FFmpeg: {latest_version} \n(Instalado)"), 
+                        ()
+                    ))
+                    self.ui_update_queue.put((
+                        self.single_tab.update_setup_download_progress, 
+                        ('ffmpeg', f"✅ FFmpeg {latest_version} instalado.", 100)
+                    ))
                 else:
-                    # --- ESTA LÍNEA CAMBIA ---
-                    self.after(0, self.single_tab.update_setup_download_progress, 'ffmpeg', "Falló la descarga de FFmpeg.", 0)
+                    self.ui_update_queue.put((
+                        self.single_tab.update_setup_download_progress, 
+                        ('ffmpeg', "Falló la descarga de FFmpeg.", 0)
+                    ))
 
             threading.Thread(target=download_task, daemon=True).start()
 
@@ -988,22 +1066,29 @@ class MainWindow(TkBase):
             from src.core.setup import download_and_install_deno
 
             def download_deno_task():
-                # --- ESTA LÍNEA CAMBIA ---
-                success = download_and_install_deno(latest_deno_version, deno_download_url, 
-                    lambda text, val: self.single_tab.update_setup_download_progress('deno', text, val)) 
+                def progress_safe(text, val):
+                    self.ui_update_queue.put((self.single_tab.update_setup_download_progress, ('deno', text, val)))
+
+                success = download_and_install_deno(latest_deno_version, deno_download_url, progress_safe) 
 
                 if success:
                     deno_bin_path = os.path.join(BIN_DIR, "deno")
                     if deno_bin_path not in os.environ['PATH']:
-                        print(f"INFO: Actualizando PATH en tiempo de ejecución con: {deno_bin_path}")
                         os.environ['PATH'] = deno_bin_path + os.pathsep + os.environ['PATH']
 
-                    self.after(0, lambda: self.single_tab.deno_status_label.configure(text=f"Deno: {latest_deno_version} \n(Instalado)")) 
-                    # --- ESTA LÍNEA CAMBIA ---
-                    self.after(0, self.single_tab.update_setup_download_progress, 'deno', f"✅ Deno {latest_deno_version} instalado.", 100)
+                    self.ui_update_queue.put((
+                        lambda: self.single_tab.deno_status_label.configure(text=f"Deno: {latest_deno_version} \n(Instalado)"), 
+                        ()
+                    ))
+                    self.ui_update_queue.put((
+                        self.single_tab.update_setup_download_progress, 
+                        ('deno', f"✅ Deno {latest_deno_version} instalado.", 100)
+                    ))
                 else:
-                    # --- ESTA LÍNEA CAMBIA ---
-                    self.after(0, self.single_tab.update_setup_download_progress, 'deno', "Falló la descarga de Deno.", 0)
+                    self.ui_update_queue.put((
+                        self.single_tab.update_setup_download_progress, 
+                        ('deno', "Falló la descarga de Deno.", 0)
+                    ))
 
             threading.Thread(target=download_deno_task, daemon=True).start()
 
@@ -1017,29 +1102,38 @@ class MainWindow(TkBase):
             from src.core.setup import download_and_install_poppler
 
             def download_poppler_task():
-                success = download_and_install_poppler(latest_poppler_version, poppler_download_url, 
-                    lambda text, val: self.single_tab.update_setup_download_progress('poppler', text, val)) 
+                def progress_safe(text, val):
+                    self.ui_update_queue.put((self.single_tab.update_setup_download_progress, ('poppler', text, val)))
+
+                success = download_and_install_poppler(latest_poppler_version, poppler_download_url, progress_safe) 
                 
                 if success:
-                    # Asegurar PATH en tiempo de ejecución
                     poppler_bin_path = os.path.join(BIN_DIR, "poppler")
                     if poppler_bin_path not in os.environ['PATH']:
                         os.environ['PATH'] = poppler_bin_path + os.pathsep + os.environ['PATH']
                     
-                    self.after(0, lambda: self.single_tab.poppler_status_label.configure(text=f"Poppler: {latest_poppler_version} \n(Instalado)")) 
-                    self.after(0, self.single_tab.update_setup_download_progress, 'poppler', f"✅ Poppler instalado.", 100)
+                    self.ui_update_queue.put((
+                        lambda: self.single_tab.poppler_status_label.configure(text=f"Poppler: {latest_poppler_version} \n(Instalado)"),
+                        ()
+                    )) 
+                    self.ui_update_queue.put((
+                        self.single_tab.update_setup_download_progress, 
+                        ('poppler', f"✅ Poppler instalado.", 100)
+                    ))
                 else:
-                    self.after(0, self.single_tab.update_setup_download_progress, 'poppler', "Falló la descarga de Poppler.", 0)
+                    self.ui_update_queue.put((
+                        self.single_tab.update_setup_download_progress, 
+                        ('poppler', "Falló la descarga de Poppler.", 0)
+                    ))
 
             threading.Thread(target=download_poppler_task, daemon=True).start()
 
     def on_ffmpeg_detection_complete(self, success, message, show_ready_message=False):
-        # 1. Creamos una función interna que contiene TODA la lógica de UI original
+        # 1. Definir la lógica de actualización
         def update_ui():
             if success:
                 self.single_tab.recode_video_checkbox.configure(text="Recodificar Video", state="normal") 
                 self.single_tab.recode_audio_checkbox.configure(text="Recodificar Audio", state="normal")
-                
                 self.single_tab.apply_quick_preset_checkbox.configure(text="Activar recodificación Rápida", state="normal")
                 
                 if self.ffmpeg_processor.gpu_vendor:
@@ -1061,12 +1155,11 @@ class MainWindow(TkBase):
                 print(f"FFmpeg detection error: {message}")
                 self.single_tab.recode_video_checkbox.configure(text="Recodificación no disponible", state="disabled") 
                 self.single_tab.recode_audio_checkbox.configure(text="(Error FFmpeg)", state="disabled") 
-                
                 self.single_tab.apply_quick_preset_checkbox.configure(text="Recodificación no disponible (Error FFmpeg)", state="disabled") 
                 self.single_tab.apply_quick_preset_checkbox.deselect() 
 
-        # 2. IMPORTANTE: Enviamos esa función al hilo principal
-        self.after(0, update_ui)
+        # 2. SOLUCIÓN: Usar la cola en lugar de self.after
+        self.ui_update_queue.put((update_ui, ()))
 
     def _iniciar_auto_actualizacion(self, installer_url, version_str):
         """
@@ -1724,3 +1817,67 @@ class MainWindow(TkBase):
 
         # 4. Detección final de códecs (si no se ha hecho)
         self.ffmpeg_processor.run_detection_async(self.on_ffmpeg_detection_complete)
+
+    # ==========================================
+    # ✅ NUEVA FUNCIÓN: Router de Archivos Adobe
+    # ==========================================
+    def handle_adobe_files(self, file_paths):
+        """
+        Clasifica y envía los archivos recibidos a la pestaña correcta.
+        """
+        # 1. Normalizar rutas y verificar existencia
+        valid_paths = [os.path.normpath(p) for p in file_paths if os.path.exists(p)]
+        
+        if not valid_paths:
+            print("ADVERTENCIA: Ninguno de los archivos recibidos existe.")
+            return
+
+        images = []
+        media = [] # Video y Audio
+
+        # 2. Clasificar
+        # Obtenemos extensiones de imagen de la pestaña (si existe) o usamos un set básico
+        img_exts = self.image_tab.COMPATIBLE_EXTENSIONS if hasattr(self, 'image_tab') else ('.png', '.jpg', '.jpeg')
+        
+        for path in valid_paths:
+            ext = os.path.splitext(path)[1].lower()
+            
+            # Es imagen?
+            if ext in img_exts:
+                images.append(path)
+            # Es video o audio? (Usamos las constantes globales de la app)
+            elif ext.lstrip('.') in self.VIDEO_EXTENSIONS or ext.lstrip('.') in self.AUDIO_EXTENSIONS:
+                media.append(path)
+
+        # 3. Enrutar IMÁGENES -> Herramientas de Imagen
+        if images:
+            print(f"INFO: Enviando {len(images)} imágenes a Herramientas de Imagen.")
+            self.tab_view.set("Herramientas de Imagen")
+            self.image_tab._process_imported_files(images)
+            
+            # Si SOLO había imágenes, terminamos aquí
+            if not media:
+                return
+
+        # 4. Enrutar MEDIA (Video/Audio)
+        if media:
+            count = len(media)
+            
+            if count == 1:
+                # CASO A: 1 Archivo -> Proceso Único
+                print(f"INFO: Enviando 1 archivo a Proceso Único: {media[0]}")
+                self.tab_view.set("Proceso Único")
+                # Llamamos a la nueva función pública que crearemos en el Paso 2
+                self.single_tab.import_local_file_from_path(media[0])
+                
+            else:
+                # CASO B: 2+ Archivos -> Proceso por Lotes
+                print(f"INFO: Enviando {count} archivos a Proceso por Lotes.")
+                self.tab_view.set("Proceso por Lotes")
+                # Usamos la función existente que maneja Drops
+                self.batch_tab._handle_dropped_batch_files(media)
+        
+        # Traer ventana al frente
+        self.deiconify()
+        self.lift()
+        self.focus_force()

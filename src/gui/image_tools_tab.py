@@ -11,9 +11,11 @@ import yt_dlp
 import time      
 import gc
 import uuid
+import webbrowser
+import subprocess
 
 from urllib.parse import urlparse 
-from PIL import ImageGrab, Image   
+from PIL import ImageGrab, Image, ImageTk  
 from tkinter import Menu, messagebox
 from tkinter import Menu
 from customtkinter import filedialog
@@ -21,10 +23,13 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from src.core.exceptions import UserCancelledError
-from .dialogs import Tooltip, MultiPageDialog
+from .dialogs import Tooltip, MultiPageDialog, ManualDownloadDialog
 from src.core.image_converter import ImageConverter
 from src.core.image_processor import ImageProcessor
-from src.core.constants import REMBG_MODEL_FAMILIES 
+from src.core.constants import (
+    REMBG_MODEL_FAMILIES, REALESRGAN_MODELS, WAIFU2X_MODELS, REALSR_MODELS, SRMD_MODELS,
+    IMAGE_RASTER_FORMATS, IMAGE_RAW_FORMATS
+)
 from main import REMBG_MODELS_DIR, MODELS_DIR
 
 try:
@@ -33,23 +38,550 @@ except ImportError:
     print("ERROR: tkinterdnd2 no encontrado en image_tools_tab")
     DND_FILES = None
 
+class InteractiveImageViewer(ctk.CTkCanvas):
+    """
+    Visor de imágenes avanzado con soporte para Zoom (Rueda) y Paneo (Clic Izquierdo).
+    Mantiene la resolución original para inspección de calidad.
+    """
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        
+        # Configuración visual para integrarse con el tema oscuro
+        self.configure(bg="#1D1D1D", highlightthickness=0)
+        
+        # Estado interno
+        self.original_image = None  # La imagen PIL en resolución completa
+        self.tk_image = None        # Referencia para evitar garbage collection
+        
+        # Transformación
+        self.scale = 1.0
+        self.pan_x = 0
+        self.pan_y = 0
+        
+        # Variables para arrastre
+        self._drag_data = {"x": 0, "y": 0}
+        
+        # --- Bindings (Eventos) ---
+        
+        # Paneo (Clic izquierdo y arrastrar)
+        self.bind("<ButtonPress-1>", self._on_drag_start)
+        self.bind("<B1-Motion>", self._on_drag_move)
+        
+        # Zoom (Rueda del mouse) - Soporte multiplataforma
+        self.bind("<MouseWheel>", self._on_mouse_wheel) # Windows/MacOS
+        self.bind("<Button-4>", self._on_mouse_wheel)   # Linux Subir
+        self.bind("<Button-5>", self._on_mouse_wheel)   # Linux Bajar
+        
+        # Redibujar al cambiar tamaño de ventana
+        self.bind("<Configure>", self._on_resize)
+
+    def load_image(self, image_source):
+        """
+        Carga una imagen.
+        Args:
+            image_source: Puede ser un objeto PIL.Image o una ruta de archivo (str).
+        """
+        # Limpiar canvas
+        self.delete("all")
+        self.original_image = None
+        
+        if not image_source:
+            return
+
+        try:
+            # Si es una ruta, cargarla (para obtener full res)
+            if isinstance(image_source, str):
+                if os.path.exists(image_source):
+                    self.original_image = Image.open(image_source)
+            # Si es un objeto imagen, usarlo directamente
+            elif isinstance(image_source, Image.Image):
+                self.original_image = image_source
+            
+            if self.original_image:
+                # Resetear vista
+                self.pan_x = 0
+                self.pan_y = 0
+                self.fit_image() # Ajustar inicial
+        except Exception as e:
+            print(f"ERROR InteractiveImageViewer: No se pudo cargar la imagen: {e}")
+
+    def fit_image(self):
+        """Ajusta la imagen para que quepa completamente en el visor (Zoom to Fit)"""
+        if not self.original_image: return
+        
+        # ✅ CORRECCIÓN: Forzar actualización de geometría antes de leer dimensiones
+        self.update_idletasks()
+        
+        # Obtener dimensiones del canvas (o usar defaults si aún no se dibuja)
+        cw = self.winfo_width() or 400
+        ch = self.winfo_height() or 300
+        
+        # ✅ VALIDACIÓN: Si el canvas todavía no tiene tamaño real, usar defaults razonables
+        if cw < 50 or ch < 50:
+            print("DEBUG: Canvas aún no renderizado, usando dimensiones default")
+            cw, ch = 400, 300
+        
+        iw, ih = self.original_image.size
+        
+        # Calcular escala para ajustar
+        scale_w = cw / iw
+        scale_h = ch / ih
+        self.scale = min(scale_w, scale_h) * 0.95  # 95% para dejar un pequeño margen
+        
+        # Centrar
+        new_w = int(iw * self.scale)
+        new_h = int(ih * self.scale)
+        self.pan_x = (cw - new_w) / 2
+        self.pan_y = (ch - new_h) / 2
+        
+        print(f"DEBUG: fit_image() → Canvas: {cw}×{ch}, Imagen: {iw}×{ih}, Escala: {self.scale:.2f}, Pan: ({self.pan_x:.0f}, {self.pan_y:.0f})")
+        
+        self._redraw()
+
+    def _on_drag_start(self, event):
+        """Inicia el arrastre"""
+        self._drag_data["x"] = event.x
+        self._drag_data["y"] = event.y
+        self.configure(cursor="fleur") # Cambiar cursor a 'mover'
+
+    def _on_drag_move(self, event):
+        """Calcula el desplazamiento"""
+        if not self.original_image: return
+        
+        dx = event.x - self._drag_data["x"]
+        dy = event.y - self._drag_data["y"]
+        
+        self.pan_x += dx
+        self.pan_y += dy
+        
+        self._drag_data["x"] = event.x
+        self._drag_data["y"] = event.y
+        
+        self._redraw()
+        
+    def _on_mouse_wheel(self, event):
+        """Maneja el zoom centrado en el cursor"""
+        if not self.original_image: return
+        
+        # Determinar dirección del scroll
+        if event.num == 5 or event.delta < 0:
+            scale_factor = 0.9 # Alejar
+        else:
+            scale_factor = 1.1 # Acercar
+            
+        # Coordenadas del mouse (punto fijo del zoom)
+        mouse_x = event.x
+        mouse_y = event.y
+        
+        # Calcular qué punto de la imagen está bajo el mouse ANTES del zoom
+        # Fórmula: img_x = (screen_x - pan_x) / current_scale
+        img_x = (mouse_x - self.pan_x) / self.scale
+        img_y = (mouse_y - self.pan_y) / self.scale
+        
+        # Aplicar nuevo zoom
+        new_scale = self.scale * scale_factor
+        
+        # Límites de seguridad (evitar zoom infinito o microscópico)
+        if new_scale < 0.01 or new_scale > 50.0:
+            return
+            
+        self.scale = new_scale
+        
+        # Recalcular pan para mantener el punto bajo el mouse estático
+        # Fórmula: new_pan = screen - (img * new_scale)
+        self.pan_x = mouse_x - (img_x * self.scale)
+        self.pan_y = mouse_y - (img_y * self.scale)
+        
+        self._redraw()
+
+    def _on_resize(self, event):
+        """Reajusta si cambia el tamaño de la ventana"""
+        if self.original_image and self.tk_image is None:
+            self.fit_image()
+        else:
+            self._redraw()
+
+    def _redraw(self):
+        """Dibuja la imagen redimensionada y recortada según el estado actual"""
+        if not self.original_image: return
+        
+        self.delete("all")
+        
+        cw = self.winfo_width()
+        ch = self.winfo_height()
+        
+        # Dimensiones finales teóricas
+        final_w = int(self.original_image.width * self.scale)
+        final_h = int(self.original_image.height * self.scale)
+        
+        # Optimización: Determinar la región visible (Viewport)
+        # Inversa: (0,0) pantalla -> (-pan_x/scale, -pan_y/scale) imagen
+        left = max(0, -self.pan_x / self.scale)
+        top = max(0, -self.pan_y / self.scale)
+        right = min(self.original_image.width, (cw - self.pan_x) / self.scale)
+        bottom = min(self.original_image.height, (ch - self.pan_y) / self.scale)
+        
+        # Si no hay nada visible, salir
+        if right <= left or bottom <= top:
+            return
+
+        # Coordenadas para recortar (Crop Box)
+        crop_box = (int(left), int(top), int(right), int(bottom))
+        
+        # Tamaño en pantalla de ese recorte
+        display_w = int((right - left) * self.scale)
+        display_h = int((bottom - top) * self.scale)
+        
+        # Posición en pantalla donde dibujar
+        screen_x = max(0, self.pan_x)
+        screen_y = max(0, self.pan_y)
+        
+        if display_w > 0 and display_h > 0:
+            # 1. Recortar la parte visible de la imagen original (Rápido)
+            try:
+                region = self.original_image.crop(crop_box)
+                
+                # 2. Redimensionar solo esa parte (Rápido)
+                # Usamos NEAREST si está muy cerca (pixel art look) o BILINEAR para suavidad
+                resample_method = Image.Resampling.NEAREST if self.scale > 3.0 else Image.Resampling.BILINEAR
+                resized_region = region.resize((display_w, display_h), resample_method)
+                
+                # 3. Convertir a Tkinter y dibujar
+                self.tk_image = ImageTk.PhotoImage(resized_region)
+                self.create_image(screen_x, screen_y, anchor="nw", image=self.tk_image)
+                
+            except Exception as e:
+                print(f"Error redibujando: {e}")
+        
+        self.configure(cursor="arrow") # Restaurar cursor
+
+class ComparisonViewer(ctk.CTkCanvas):
+    """
+    Visor de comparación avanzado (Antes/Después) con Zoom y Paneo.
+    - Rueda: Zoom
+    - Clic en línea blanca: Mover Slider
+    - Clic derecho (o Espacio + Clic): Paneo (Mover imagen)
+    """
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        self.configure(bg="#1D1D1D", highlightthickness=0)
+
+        # Datos de imágenes (PIL)
+        self.img_before = None # Original
+        self.img_after = None  # Resultado
+        self.tk_image_left = None
+        self.tk_image_right = None
+        self.checker_tile = None # Patrón de fondo
+
+        # Estado de Vista
+        self.scale = 1.0
+        self.pan_x = 0
+        self.pan_y = 0
+        self.slider_pos = 0.5 # 0.0 a 1.0 (50% inicial)
+        
+        # Estado de Interacción
+        self._drag_data = {"x": 0, "y": 0, "mode": None} # mode: 'slider' o 'pan'
+        self.is_space_held = False
+
+        # --- Bindings ---
+        # Mouse
+        self.bind("<ButtonPress-1>", self._on_left_down)
+        self.bind("<B1-Motion>", self._on_left_drag)
+        self.bind("<ButtonRelease-1>", self._on_left_up)
+        
+        self.bind("<ButtonPress-3>", self._on_right_down) # Paneo alternativo
+        self.bind("<B3-Motion>", self._on_right_drag)
+
+        # Zoom
+        self.bind("<MouseWheel>", self._on_zoom)
+        self.bind("<Button-4>", self._on_zoom)
+        self.bind("<Button-5>", self._on_zoom)
+
+        # Teclado (Espacio para mano)
+        self.bind("<KeyPress-space>", self._on_space_down)
+        self.bind("<KeyRelease-space>", self._on_space_up)
+        
+        # Redimensionar ventana
+        self.bind("<Configure>", self._on_resize)
+        
+        # Foco para teclado
+        self.bind("<Enter>", lambda e: self.focus_set())
+
+    def load_images(self, img_original, img_result):
+        """Carga las imágenes PIL (deben ser del mismo tamaño o se redimensionarán)."""
+        self.delete("all")
+        
+        if not img_original or not img_result: return
+
+        # Asegurar que ambas tengan el mismo tamaño (usar el tamaño del resultado)
+        w, h = img_result.size
+        if img_original.size != (w, h):
+            self.img_before = img_original.resize((w, h), Image.Resampling.LANCZOS)
+        else:
+            self.img_before = img_original
+            
+        self.img_after = img_result
+        
+        # Generar patrón de ajedrez pequeño para el fondo
+        self._create_checker_pattern()
+
+        # Ajustar zoom inicial para ver todo ("Fit")
+        self.fit_to_window()
+
+    def fit_to_window(self):
+        """Resetea el zoom y centra la imagen."""
+        if not self.img_after: return
+        
+        cw = self.winfo_width() or 400
+        ch = self.winfo_height() or 300
+        iw, ih = self.img_after.size
+        
+        scale_w = cw / iw
+        scale_h = ch / ih
+        self.scale = min(scale_w, scale_h) * 0.95
+        
+        new_w = iw * self.scale
+        new_h = ih * self.scale
+        
+        self.pan_x = (cw - new_w) / 2
+        self.pan_y = (ch - new_h) / 2
+        self.slider_pos = 0.5
+        self._redraw()
+
+    def _create_checker_pattern(self):
+        """Crea un patrón de ajedrez para transparencia."""
+        from PIL import ImageDraw
+        size = 20
+        checker = Image.new("RGB", (size*2, size*2), (200, 200, 200))
+        draw = ImageDraw.Draw(checker)
+        draw.rectangle([0, 0, size, size], fill=(255, 255, 255))
+        draw.rectangle([size, size, size*2, size*2], fill=(255, 255, 255))
+        self.checker_tile = ImageTk.PhotoImage(checker)
+
+    def _on_resize(self, event):
+        if self.img_after and not self.tk_image_left:
+            self.fit_to_window()
+        else:
+            self._redraw()
+
+    # --- LÓGICA DE DIBUJADO (EL NÚCLEO) ---
+    def _redraw(self):
+        if not self.img_after: return
+        self.delete("all")
+
+        cw = self.winfo_width()
+        ch = self.winfo_height()
+        iw, ih = self.img_after.size
+
+        # 1. Coordenadas de la imagen en pantalla
+        # (pan_x, pan_y) es la esquina superior izquierda de la imagen
+        
+        # 2. Determinar la línea divisoria en pantalla
+        # La línea está en: pan_x + (ancho_imagen_escalado * slider_pos)
+        scaled_w = iw * self.scale
+        scaled_h = ih * self.scale
+        screen_slider_x = self.pan_x + (scaled_w * self.slider_pos)
+
+        # 3. Optimización: Calcular Viewport (qué parte de la imagen original ver)
+        # Inversa: pantalla -> imagen
+        # left_img = (0 - pan_x) / scale
+        
+        # Coordenadas visibles en la imagen original
+        vis_left = max(0, -self.pan_x / self.scale)
+        vis_top = max(0, -self.pan_y / self.scale)
+        vis_right = min(iw, (cw - self.pan_x) / self.scale)
+        vis_bottom = min(ih, (ch - self.pan_y) / self.scale)
+
+        if vis_right <= vis_left or vis_bottom <= vis_top:
+            return # Nada visible
+
+        # Dibujar Fondo Ajedrez (Tiles)
+        # Tkinter tilea automáticamente si la imagen es menor que el area
+        # Pero para simplificar y rendimiento, dibujamos un rectángulo gris de fondo
+        self.create_rectangle(0, 0, cw, ch, fill="#1D1D1D", width=0)
+        
+        # --- DIBUJAR IMAGEN IZQUIERDA (RESULTADO / AFTER) ---
+        # Se ve desde el borde izquierdo de la imagen (0) hasta el slider
+        # Pero recortado por el viewport
+        
+        # Límite en coordenadas de imagen del slider
+        slider_img_x = iw * self.slider_pos
+        
+        # El recorte de la izquierda va desde vis_left hasta min(vis_right, slider_img_x)
+        left_crop_r = min(vis_right, slider_img_x)
+        
+        if left_crop_r > vis_left:
+            crop_l = (vis_left, vis_top, left_crop_r, vis_bottom)
+            region_l = self.img_after.crop(crop_l)
+            
+            # Escalar al tamaño de pantalla
+            disp_w_l = int((left_crop_r - vis_left) * self.scale)
+            disp_h_l = int((vis_bottom - vis_top) * self.scale)
+            
+            if disp_w_l > 0 and disp_h_l > 0:
+                # Usar Nearest para zoom muy cercano (ver píxeles)
+                method = Image.Resampling.NEAREST if self.scale > 2.0 else Image.Resampling.BILINEAR
+                region_l = region_l.resize((disp_w_l, disp_h_l), method)
+                
+                self.tk_image_left = ImageTk.PhotoImage(region_l)
+                
+                # Posición en pantalla: pan_x + (vis_left * scale)
+                pos_x = self.pan_x + (vis_left * self.scale)
+                pos_y = self.pan_y + (vis_top * self.scale)
+                
+                self.create_image(pos_x, pos_y, anchor="nw", image=self.tk_image_left)
+
+        # --- DIBUJAR IMAGEN DERECHA (ORIGINAL / BEFORE) ---
+        # Va desde slider hasta el borde derecho
+        
+        right_crop_l = max(vis_left, slider_img_x)
+        
+        if vis_right > right_crop_l:
+            crop_r = (right_crop_l, vis_top, vis_right, vis_bottom)
+            region_r = self.img_before.crop(crop_r)
+            
+            disp_w_r = int((vis_right - right_crop_l) * self.scale)
+            disp_h_r = int((vis_bottom - vis_top) * self.scale)
+            
+            if disp_w_r > 0 and disp_h_r > 0:
+                method = Image.Resampling.NEAREST if self.scale > 2.0 else Image.Resampling.BILINEAR
+                region_r = region_r.resize((disp_w_r, disp_h_r), method)
+                
+                self.tk_image_right = ImageTk.PhotoImage(region_r)
+                
+                pos_x = self.pan_x + (right_crop_l * self.scale)
+                pos_y = self.pan_y + (vis_top * self.scale)
+                
+                self.create_image(pos_x, pos_y, anchor="nw", image=self.tk_image_right)
+
+        # --- DIBUJAR LÍNEA DEL SLIDER ---
+        # Solo si está dentro de la pantalla
+        if 0 <= screen_slider_x <= cw:
+            # Línea
+            self.create_line(screen_slider_x, 0, screen_slider_x, ch, fill="white", width=2)
+            # Manija (Círculo)
+            cy = ch / 2
+            self.create_oval(screen_slider_x-6, cy-6, screen_slider_x+6, cy+6, fill="white", outline="gray")
+            
+            # Etiquetas flotantes
+            if self.scale > 0.5: # Solo si no está muy alejado
+                self.create_text(screen_slider_x - 10, cy - 20, text="Resultado", fill="white", anchor="e", font=("Arial", 10, "bold"))
+                self.create_text(screen_slider_x + 10, cy - 20, text="Original", fill="white", anchor="w", font=("Arial", 10, "bold"))
+
+    # --- EVENTOS ---
+
+    def _on_zoom(self, event):
+        if not self.img_after: return
+        
+        if event.num == 5 or event.delta < 0:
+            factor = 0.9
+        else:
+            factor = 1.1
+            
+        mouse_x = event.x
+        mouse_y = event.y
+        
+        # Punto bajo el mouse antes del zoom
+        img_x = (mouse_x - self.pan_x) / self.scale
+        img_y = (mouse_y - self.pan_y) / self.scale
+        
+        new_scale = self.scale * factor
+        if new_scale < 0.05 or new_scale > 50.0: return
+        
+        self.scale = new_scale
+        self.pan_x = mouse_x - (img_x * self.scale)
+        self.pan_y = mouse_y - (img_y * self.scale)
+        self._redraw()
+
+    def _on_left_down(self, event):
+        self._drag_data["x"] = event.x
+        self._drag_data["y"] = event.y
+        
+        # Detectar si clicamos cerca del slider
+        if not self.img_after: return
+        iw = self.img_after.width
+        screen_slider_x = self.pan_x + (iw * self.scale * self.slider_pos)
+        
+        # Umbral de detección del slider (15px)
+        if abs(event.x - screen_slider_x) < 15 and not self.is_space_held:
+            self._drag_data["mode"] = "slider"
+            self.configure(cursor="sb_h_double_arrow")
+        else:
+            # Si mantenemos espacio, siempre es pan. Si no, y estamos lejos, también puede ser pan (opcional)
+            # Aquí hacemos: Espacio = Pan, Clic lejos = Pan (como pediste)
+            self._drag_data["mode"] = "pan"
+            self.configure(cursor="fleur")
+
+    def _on_left_drag(self, event):
+        if not self.img_after: return
+        
+        dx = event.x - self._drag_data["x"]
+        dy = event.y - self._drag_data["y"]
+        
+        if self._drag_data["mode"] == "pan":
+            self.pan_x += dx
+            self.pan_y += dy
+        
+        elif self._drag_data["mode"] == "slider":
+            # Convertir dx de pantalla a porcentaje de imagen
+            # dx_img = dx / scale
+            # slider_delta = dx_img / img_width
+            img_w_screen = self.img_after.width * self.scale
+            if img_w_screen > 0:
+                self.slider_pos += dx / img_w_screen
+                self.slider_pos = max(0.0, min(1.0, self.slider_pos))
+        
+        self._drag_data["x"] = event.x
+        self._drag_data["y"] = event.y
+        self._redraw()
+
+    def _on_left_up(self, event):
+        self._drag_data["mode"] = None
+        if self.is_space_held:
+            self.configure(cursor="hand2")
+        else:
+            self.configure(cursor="arrow")
+
+    # Paneo alternativo con clic derecho
+    def _on_right_down(self, event):
+        self._drag_data["x"] = event.x
+        self._drag_data["y"] = event.y
+        self.configure(cursor="fleur")
+
+    def _on_right_drag(self, event):
+        dx = event.x - self._drag_data["x"]
+        dy = event.y - self._drag_data["y"]
+        self.pan_x += dx
+        self.pan_y += dy
+        self._drag_data["x"] = event.x
+        self._drag_data["y"] = event.y
+        self._redraw()
+
+    def _on_space_down(self, event):
+        if not self.is_space_held:
+            self.is_space_held = True
+            self.configure(cursor="hand2")
+
+    def _on_space_up(self, event):
+        self.is_space_held = False
+        self.configure(cursor="arrow")
+
 class ImageToolsTab(ctk.CTkFrame):
     """
     Pestaña de Herramientas de Imagen, diseñada para la conversión
     y procesamiento de lotes grandes de archivos.
     """
 
-    # Extensiones de entrada compatibles (¡puedes añadir más aquí!)
-    # Combinamos raster, vector y otros formatos comunes
+    # Extensiones de entrada compatibles
     COMPATIBLE_EXTENSIONS = (
         # Raster (Pillow)
         ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif", ".avif",
-        # Vectoriales (Ghostscript/Cairo)
+        # Vectoriales
         ".pdf", ".svg", ".eps", ".ai", ".ps",
-        # Otros formatos (Pillow)
+        # Otros
         ".psd", ".tga", ".jp2", ".ico",
-        # Formatos de cámara (requieren plugins, pero Pillow intenta)
-        ".cr2", ".nef", ".orf", ".dng"
+        # --- NUEVO: Formatos RAW de cámara ---
+        ".cr2", ".dng", ".arw", ".nef", ".orf", ".rw2", ".sr2", ".raf", ".cr3", ".pef"
     )
     
     # Colores de botones (copiados de tus otras pestañas para consistencia)
@@ -69,8 +601,12 @@ class ImageToolsTab(ctk.CTkFrame):
         self.conversion_complete_event = threading.Event()
 
         # Crear la instancia del motor de procesamiento
-        self.image_processor = ImageProcessor(poppler_path=poppler_path, 
-                                            inkscape_path=inkscape_path)
+        # --- NUEVO: Pasamos ffmpeg_path ---
+        self.image_processor = ImageProcessor(
+            poppler_path=poppler_path, 
+            inkscape_path=inkscape_path,
+            ffmpeg_path=self.app.ffmpeg_processor.ffmpeg_path
+        )
         
         # Crear la instancia del conversor
         self.image_converter = ImageConverter(poppler_path=poppler_path,
@@ -92,17 +628,17 @@ class ImageToolsTab(ctk.CTkFrame):
 
         # --- 1. Diseño de la Rejilla Principal (3 Zonas) ---
         
-        # Fila 0: Contenido principal (Izquierda 40%, Derecha 60%)
+        # Fila 0: Contenido principal (Izquierda 50%, Derecha 50%)
         self.grid_rowconfigure(0, weight=1)
         # Fila 1: Panel de Salida (Altura fija)
         self.grid_rowconfigure(1, weight=0)
         # Fila 2: Panel de Progreso (Altura fija)
         self.grid_rowconfigure(2, weight=0) 
         
-        # ✅ CAMBIO: Pesos iguales (1 y 1) para dividir la pantalla al 50%
-        # También aumenté un poco el minsize para que no se aplaste mucho.
-        self.grid_columnconfigure(0, weight=1, minsize=350)
-        self.grid_columnconfigure(1, weight=1, minsize=350)
+        # ✅ CORRECCIÓN CRÍTICA: Pesos EXACTAMENTE iguales + sin minsize
+        # El minsize puede causar desbalance si una columna crece más que la otra
+        self.grid_columnconfigure(0, weight=1, uniform="cols")
+        self.grid_columnconfigure(1, weight=1, uniform="cols")
         
         # --- 2. Crear los Paneles ---
         self._create_left_panel()
@@ -272,16 +808,18 @@ class ImageToolsTab(ctk.CTkFrame):
         self.right_panel = ctk.CTkFrame(self)
         self.right_panel.grid(row=0, column=1, padx=(5, 10), pady=(10, 5), sticky="nsew")
 
-        self.right_panel.grid_rowconfigure(0, weight=40) # Visor (40% alto)
-        self.right_panel.grid_rowconfigure(1, weight=0)  # Título (fijo)
-        self.right_panel.grid_rowconfigure(2, weight=60) # Opciones (60% alto)
+        # CORRECCIÓN: Usar proporciones para que el visor no sea gigante.
+        # weight=2 (Visor) vs weight=3 (Opciones) da un reparto aprox de 40% / 60%
+        self.right_panel.grid_rowconfigure(0, weight=2) 
+        self.right_panel.grid_rowconfigure(1, weight=0) 
+        self.right_panel.grid_rowconfigure(2, weight=3) 
         self.right_panel.grid_columnconfigure(0, weight=1)
 
         # --- 1. Zona de Visor (Fila 0) ---
         self.viewer_frame = ctk.CTkFrame(self.right_panel, fg_color="#1D1D1D")
         self.viewer_frame.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="nsew")
-        self.viewer_frame.grid_columnconfigure(0, weight=1)
-        self.viewer_frame.grid_rowconfigure(0, weight=1)
+        
+        # CAMBIO: Quitamos la configuración interna de grid, usaremos .place()
         self.viewer_frame.grid_propagate(False) 
 
         self.viewer_placeholder = ctk.CTkLabel(
@@ -289,7 +827,8 @@ class ImageToolsTab(ctk.CTkFrame):
             text="Selecciona un archivo de la lista para previsualizarlo",
             text_color="gray"
         )
-        self.viewer_placeholder.grid(row=0, column=0, sticky="nsew")
+        # CAMBIO: Usar place para centrar perfectamente
+        self.viewer_placeholder.place(relx=0.5, rely=0.5, anchor="center")
 
         # --- 2. Zona de Título (Fila 1) ---
         self.title_frame = ctk.CTkFrame(self.right_panel)
@@ -572,6 +1111,88 @@ class ImageToolsTab(ctk.CTkFrame):
         # Inicializar menús con el default
         default_family = "Rembg Standard (U2Net)"
         self.rembg_family_menu.set(default_family)
+
+        # ---------------------------------------------------------
+        # 3.4.6: Módulo "Cuadrito" Maestro de Reescalado IA (NUEVO)
+        # ---------------------------------------------------------
+        self.upscale_master_frame = ctk.CTkFrame(self.options_frame)
+        self.upscale_master_frame.pack(fill="x", padx=5, pady=(0, 5))
+        self.upscale_master_frame.grid_columnconfigure(0, weight=1)
+
+        self.upscale_checkbox = ctk.CTkCheckBox(
+            self.upscale_master_frame,
+            text="Reescalado con IA",
+            command=self._on_toggle_upscale_frame,
+            fg_color="#2cc985", hover_color="#229e68" # Un verde distintivo
+        )
+        self.upscale_checkbox.pack(fill="x", padx=10, pady=5)
+
+        Tooltip(self.upscale_checkbox, "Aumenta la resolución y mejora la calidad usando Redes Neuronales (Real-ESRGAN / Waifu2x).", delay_ms=1000)
+
+        self.upscale_options_frame = ctk.CTkFrame(self.upscale_master_frame, fg_color="transparent")
+        
+        # Configurar columnas para que se repartan bien el espacio
+        # Col 0: Label "Motor" | Col 1: Menu Motor | Col 2: Label "Tile" | Col 3: Entry Tile
+        self.upscale_options_frame.grid_columnconfigure((1, 3), weight=1)
+
+        # --- FILA 0: Motor ---
+        ctk.CTkLabel(self.upscale_options_frame, text="Motor:").grid(row=0, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.upscale_engine_menu = ctk.CTkOptionMenu(
+            self.upscale_options_frame,
+            values=["Real-ESRGAN", "Waifu2x", "RealSR (Fotos Reales)", "SRMD (Enfoque/Deblur)"], # <-- Añadido
+            command=self._on_upscale_engine_change
+        )
+        self.upscale_engine_menu.grid(row=0, column=1, columnspan=3, padx=(0, 10), pady=5, sticky="ew")
+
+        # --- FILA 1: Modelo ---
+        ctk.CTkLabel(self.upscale_options_frame, text="Modelo:").grid(row=1, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.upscale_model_menu = ctk.CTkOptionMenu(
+            self.upscale_options_frame, 
+            values=["-"],
+            command=self._on_upscale_model_change  # ✅ Esto debe estar
+        )
+        self.upscale_model_menu.grid(row=1, column=1, columnspan=3, padx=(0, 10), pady=5, sticky="ew")
+
+        # --- FILA 2: Escala (Izq) y Tile Size (Der) ---
+        
+        # Escala
+        ctk.CTkLabel(self.upscale_options_frame, text="Escala:").grid(row=2, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.upscale_scale_menu = ctk.CTkOptionMenu(
+            self.upscale_options_frame, 
+            values=["2x", "3x", "4x"], 
+            width=70 # Hacemos este menú más pequeño
+        )
+        self.upscale_scale_menu.set("2x")
+        self.upscale_scale_menu.grid(row=2, column=1, padx=(0, 10), pady=5, sticky="w") # Sticky W para que no se estire
+
+        # Tile Size (Movido aquí arriba)
+        ctk.CTkLabel(self.upscale_options_frame, text="Tile Size:").grid(row=2, column=2, padx=(5, 5), pady=5, sticky="e")
+        self.upscale_tile_entry = ctk.CTkEntry(self.upscale_options_frame, width=60, placeholder_text="0")
+        self.upscale_tile_entry.insert(0, "0") # 0 = Auto
+        self.upscale_tile_entry.grid(row=2, column=3, padx=(0, 10), pady=5, sticky="w") # Sticky W
+        
+        Tooltip(self.upscale_tile_entry, "Tamaño del bloque de procesamiento.\nDéjalo en 0 para Auto.\nSi la app se cierra sola (Crash), prueba con 200 o 100 (consume menos VRAM).", delay_ms=1000)
+
+        # --- FILA 3: Reducción de Ruido (Solo Waifu2x) ---
+        self.upscale_denoise_label = ctk.CTkLabel(self.upscale_options_frame, text="Reducir Ruido:")
+        self.upscale_denoise_label.grid(row=3, column=0, padx=(10, 5), pady=5, sticky="w")
+        
+        self.upscale_denoise_menu = ctk.CTkOptionMenu(
+            self.upscale_options_frame, 
+            values=["-1 (Ninguna)", "0 (Baja)", "1 (Media)", "2 (Alta)", "3 (Máxima)"],
+            # Ahora tiene toda la fila para él solo si quiere
+        )
+        self.upscale_denoise_menu.set("2 (Alta)")
+        self.upscale_denoise_menu.grid(row=3, column=1, columnspan=3, padx=(0, 10), pady=5, sticky="ew")
+
+        # --- FILA 4: TTA ---
+        self.upscale_tta_check = ctk.CTkCheckBox(self.upscale_options_frame, text="TTA (Mejor calidad, muy lento)")
+        self.upscale_tta_check.grid(row=4, column=0, columnspan=4, padx=10, pady=5, sticky="w")
+
+        self.upscale_options_frame.pack_forget()
+        
+        # Inicializar lógica del menú
+        self._on_upscale_engine_change("Real-ESRGAN")
 
         # 3.5: Módulo "Cuadrito" Maestro de Cambio de Fondo
         self.background_master_frame = ctk.CTkFrame(self.options_frame)
@@ -1082,7 +1703,10 @@ class ImageToolsTab(ctk.CTkFrame):
             self.canvas_width_entry.insert(0, str(width))
             self.canvas_height_entry.delete(0, "end")
             self.canvas_height_entry.insert(0, str(height))
+            
+            # 🔥 NUEVO: Mostrar overflow SOLO para presets (NO para personalizado)
             self.canvas_overflow_frame.grid(row=3, column=0, columnspan=2, padx=0, pady=0, sticky="ew")
+            
             print(f"Preset de canvas aplicado: {width}×{height}")
 
     def _on_toggle_background_frame(self):
@@ -1252,6 +1876,113 @@ class ImageToolsTab(ctk.CTkFrame):
         
         self.option_frames["BMP"] = bmp_frame
 
+    # --- Lógica de Reescalado UI ---
+
+    def _on_toggle_upscale_frame(self):
+        """Muestra/Oculta opciones de reescalado."""
+        if self.upscale_checkbox.get() == 1:
+            self.upscale_options_frame.pack(fill="x", padx=5, pady=0, after=self.upscale_checkbox)
+        else:
+            self.upscale_options_frame.pack_forget()
+
+    def _on_upscale_engine_change(self, engine):
+        """Carga modelos y ajusta visibilidad según el motor."""
+        
+        # 🔍 DEBUG
+        print(f"DEBUG: Cambiando a motor: {engine}")
+        
+        if engine == "Real-ESRGAN":
+            models_list = list(REALESRGAN_MODELS.keys())
+            self.upscale_model_menu.configure(values=models_list)
+            self.upscale_model_menu.set(models_list[0])
+            
+            # Ocultar Denoise
+            self.upscale_denoise_label.grid_remove()
+            self.upscale_denoise_menu.grid_remove()
+            
+        elif engine == "Waifu2x":
+            models_list = list(WAIFU2X_MODELS.keys())
+            self.upscale_model_menu.configure(values=models_list)
+            self.upscale_model_menu.set(models_list[0])
+            
+            # Mostrar Denoise
+            self.upscale_denoise_label.grid()
+            self.upscale_denoise_menu.grid()
+
+        elif "RealSR" in engine:
+            models_list = list(REALSR_MODELS.keys())
+            self.upscale_model_menu.configure(values=models_list)
+            self.upscale_model_menu.set(models_list[0])
+            
+            # Ocultar Denoise
+            self.upscale_denoise_label.grid_remove()
+            self.upscale_denoise_menu.grid_remove()
+
+        elif "SRMD" in engine:
+            models_list = list(SRMD_MODELS.keys())
+            self.upscale_model_menu.configure(values=models_list)
+            self.upscale_model_menu.set(models_list[0])
+            
+            # Mostrar Denoise
+            self.upscale_denoise_label.configure(text="Nivel Ruido/Blur:")
+            self.upscale_denoise_label.grid()
+            self.upscale_denoise_menu.grid()
+        
+        # ✅ CRÍTICO: Pasar el motor explícitamente
+        selected_model = self.upscale_model_menu.get()
+        print(f"DEBUG: Después de cambiar motor, modelo seleccionado: {selected_model}")
+        self._on_upscale_model_change(selected_model, engine=engine)
+
+    def _on_upscale_model_change(self, selected_model_friendly, engine=None):
+        """Actualiza el menú de ESCALAS permitido."""
+        
+        # Si no se pasa el motor explícitamente, lo leemos del menú
+        if engine is None:
+            engine = self.upscale_engine_menu.get()
+        
+        # 🔍 DEBUG: Imprimir para ver qué está pasando
+        print(f"DEBUG Upscale: Motor={engine}, Modelo={selected_model_friendly}")
+        
+        valid_scales = []
+        
+        if engine == "Real-ESRGAN":
+            if selected_model_friendly in REALESRGAN_MODELS:
+                valid_scales = REALESRGAN_MODELS[selected_model_friendly]["scales"]
+                print(f"DEBUG: Escalas encontradas para {selected_model_friendly}: {valid_scales}")
+            else:
+                print(f"⚠️ ADVERTENCIA: Modelo '{selected_model_friendly}' no encontrado en REALESRGAN_MODELS")
+                
+        elif engine == "Waifu2x":
+            if selected_model_friendly in WAIFU2X_MODELS:
+                valid_scales = WAIFU2X_MODELS[selected_model_friendly]["scales"]
+                
+        elif "RealSR" in engine:
+            if selected_model_friendly in REALSR_MODELS:
+                valid_scales = REALSR_MODELS[selected_model_friendly]["scales"]
+                
+        elif "SRMD" in engine:
+            if selected_model_friendly in SRMD_MODELS:
+                valid_scales = SRMD_MODELS[selected_model_friendly]["scales"]
+        
+        if not valid_scales:
+            print(f"⚠️ ADVERTENCIA: No se encontraron escalas válidas. Usando fallback ['4x']")
+            valid_scales = ["4x"]  # Fallback seguro
+        
+        # 🔍 DEBUG: Ver qué valores se van a establecer
+        print(f"DEBUG: Configurando menú con escalas: {valid_scales}")
+        print(f"DEBUG: Escala actual antes de cambiar: {self.upscale_scale_menu.get()}")
+        
+        # ✅ Actualizar el menú con las escalas válidas
+        self.upscale_scale_menu.configure(values=valid_scales)
+        
+        # ✅ Si la escala actual no está en las válidas, cambiar a la primera
+        current_scale = self.upscale_scale_menu.get()
+        if current_scale not in valid_scales:
+            print(f"DEBUG: Cambiando escala de '{current_scale}' a '{valid_scales[0]}'")
+            self.upscale_scale_menu.set(valid_scales[0])
+        else:
+            print(f"DEBUG: Manteniendo escala actual '{current_scale}'")
+
     # ==================================================================
     # --- NUEVA LÓGICA DE UI DE ESCALADO ---
     # ==================================================================
@@ -1276,7 +2007,6 @@ class ImageToolsTab(ctk.CTkFrame):
     def _on_resize_preset_changed(self, selection):
         """Aplica el preset seleccionado o muestra el frame personalizado."""
         # Mapeo de presets a dimensiones (basado en el lado más largo)
-        # Esto respeta la proporción de la imagen original
         preset_map = {
             "4K UHD (Máx: 3840×2160)": (3840, 2160),
             "2K QHD (Máx: 2560×1440)": (2560, 1440),
@@ -1304,11 +2034,16 @@ class ImageToolsTab(ctk.CTkFrame):
                     self.resize_height_entry.delete(0, "end")
                     self.resize_height_entry.insert(0, str(height))
                     
-                    print(f"Preset aplicado: {width}×{height}")
+                    # 🔥 NUEVO: FORZAR checkbox de proporción para presets
+                    self.resize_aspect_lock.select()  # ✅ Siempre activado para presets
+                    self.resize_aspect_lock.configure(state="disabled")  # 🔒 Bloqueado
+                    
+                    print(f"Preset aplicado: {width}×{height} (Proporción forzada)")
                 else:
-                    # "No escalar" - limpiar campos
+                    # "No escalar" - limpiar campos y desbloquear checkbox
                     self.resize_width_entry.delete(0, "end")
                     self.resize_height_entry.delete(0, "end")
+                    self.resize_aspect_lock.configure(state="normal")  # 🔓 Desbloquear
 
     # ==================================================================
     # --- FUNCIONES DE CONVERTIR A VIDEO ---
@@ -1655,32 +2390,62 @@ class ImageToolsTab(ctk.CTkFrame):
             
             self._on_toggle_background_frame()
 
-            # -- Rembg (IA) --
             # CORRECCIÓN: Asegurar inicialización incluso sin settings
+            # -- Rembg (IA) --
             rem = settings.get("rembg", {})
-            if rem.get("enabled"): self.rembg_checkbox.select()
-            else: self.rembg_checkbox.deselect()
             
-            # 1. Obtener familia (guardada o default)
+            # 1. Restaurar estado del checkbox
+            if rem.get("enabled"): 
+                self.rembg_checkbox.select()
+            else: 
+                self.rembg_checkbox.deselect()
+            
+            # 2. Obtener familia guardada o usar default
             saved_family = rem.get("family", "Rembg Standard (U2Net)")
             self.rembg_family_menu.set(saved_family)
             
-            # 2. CRÍTICO: Forzar la población del menú de modelos AHORA
-            # Esto llenará el segundo menú con los valores correctos
+            # 3. CRÍTICO: Forzar la población del menú de modelos AHORA
+            # Esto llenará el segundo menú con los valores correctos basados en la familia
             self._on_rembg_family_change(saved_family) 
             
-            # 3. Establecer el modelo específico (si existe)
+            # 4. Establecer el modelo específico (si existe y es válido)
             saved_model = rem.get("model")
             if saved_model:
-                # Verificar que el modelo existe en la lista recién poblada
                 current_values = self.rembg_model_menu.cget("values")
                 if current_values and saved_model in current_values:
                     self.rembg_model_menu.set(saved_model)
-                    
-                    # CORRECCIÓN: Usar modo silencioso para no molestar al iniciar
+                    # Validar silencioamente si está instalado (cambia el label de estado)
                     self._on_rembg_model_change(saved_model, silent=True)
             
+            # 5. Mostrar u ocultar el panel según el checkbox
             self._on_toggle_rembg_frame()
+
+            # -- Upscaling (IA) -- (Aseguramos que esto también se cargue)
+            if settings.get("upscale_enabled"): self.upscale_checkbox.select()
+            else: self.upscale_checkbox.deselect()
+            
+            if settings.get("upscale_engine"): 
+                self.upscale_engine_menu.set(settings["upscale_engine"])
+                # Importante: Actualizar los modelos disponibles para este motor
+                self._on_upscale_engine_change(settings["upscale_engine"])
+                
+            if settings.get("upscale_model_friendly"):
+                # Verificar si el modelo existe en la lista actual antes de setearlo
+                current_models = self.upscale_model_menu.cget("values")
+                if settings["upscale_model_friendly"] in current_models:
+                    self.upscale_model_menu.set(settings["upscale_model_friendly"])
+                    # Actualizar escalas permitidas
+                    self._on_upscale_model_change(settings["upscale_model_friendly"])
+
+            if settings.get("upscale_scale"): self.upscale_scale_menu.set(settings["upscale_scale"])
+            if settings.get("upscale_denoise"): self.upscale_denoise_menu.set(settings["upscale_denoise"])
+            if settings.get("upscale_tile"): 
+                self.upscale_tile_entry.delete(0, "end")
+                self.upscale_tile_entry.insert(0, settings["upscale_tile"])
+            if settings.get("upscale_tta"): self.upscale_tta_check.select()
+            else: self.upscale_tta_check.deselect()
+            
+            self._on_toggle_upscale_frame()
             
         except Exception as e:
             print(f"ERROR al restaurar configuración de imágenes: {e}")
@@ -1729,10 +2494,19 @@ class ImageToolsTab(ctk.CTkFrame):
             },
             
             "rembg": {
-                "enabled": self.rembg_checkbox.get(),
+                "enabled": self.rembg_checkbox.get() == 1, # Forzar booleano
                 "family": self.rembg_family_menu.get(),
                 "model": self.rembg_model_menu.get()
-            }
+            },
+            
+            # --- NUEVAS OPCIONES DE REESCALADO (Asegúrate de que esto también esté guardado si no lo estaba) ---
+            "upscale_enabled": self.upscale_checkbox.get() == 1,
+            "upscale_engine": self.upscale_engine_menu.get(),
+            "upscale_model_friendly": self.upscale_model_menu.get(), 
+            "upscale_scale": self.upscale_scale_menu.get(),
+            "upscale_denoise": self.upscale_denoise_menu.get(),
+            "upscale_tile": self.upscale_tile_entry.get(),
+            "upscale_tta": self.upscale_tta_check.get() == 1
         }
         
         # Enviar a la app principal
@@ -2155,7 +2929,7 @@ class ImageToolsTab(ctk.CTkFrame):
             text="Selecciona un archivo de la lista para previsualizarlo",
             text_color="gray"
         )
-        self.viewer_placeholder.grid(row=0, column=0, sticky="nsew")
+        self.viewer_placeholder.place(relx=0.5, rely=0.5, anchor="center")
         
         # Limpiar el título
         self.title_entry.delete(0, "end")
@@ -2209,10 +2983,24 @@ class ImageToolsTab(ctk.CTkFrame):
         # 2. Lógica para el Visor y Título
         first_index = selected_indices[0]
         try:
-            # 1. AHORA OBTENEMOS LA TUPLA
-            (filepath, page_num) = self.file_list_data[first_index]
+            # --- CAMBIO AQUÍ: Detectar si tenemos resultado procesado ---
+            item_data = self.file_list_data[first_index]
             
-            # 2. Quitar la extensión (.pdf) para el título
+            filepath = item_data[0]
+            page_num = item_data[1]
+            output_path = item_data[2] if len(item_data) > 2 else None
+            
+            # Si tenemos output_path, lanzamos el comparador en lugar del visor normal
+            if output_path and os.path.exists(output_path):
+                self._start_comparison_viewer(filepath, output_path, page_num)
+                # Actualizamos título y salimos para no ejecutar la lógica antigua
+                title_no_ext = os.path.splitext(os.path.basename(filepath))[0]
+                self.title_entry.delete(0, "end")
+                self.title_entry.insert(0, title_no_ext) 
+                return 
+            # ------------------------------------------------------------
+            
+            # 2. Quitar la extensión (.pdf) para el título...
             title_no_ext = os.path.splitext(os.path.basename(filepath))[0]
             
             # 3. Crear un título de salida sugerido
@@ -2488,7 +3276,7 @@ class ImageToolsTab(ctk.CTkFrame):
         successfully_processed_paths = []
         
         try:
-            for i, input_path in enumerate(self.file_list_data):
+            for i, item_data in enumerate(self.file_list_data): # cambiamos 'input_path' por 'item_data' para no confundir
                 
                 if cancel_event.is_set():
                     print("INFO: Proceso cancelado por el usuario")
@@ -2496,7 +3284,13 @@ class ImageToolsTab(ctk.CTkFrame):
                         text=f"Cancelado: {p} archivos procesados antes de cancelar"))
                     break
                 
-                (input_path, page_num) = self.file_list_data[i]
+                # --- CORRECCIÓN: Desempaquetado flexible (Soporta 2 o 3 valores) ---
+                item_data = self.file_list_data[i]
+                input_path = item_data[0]
+                page_num = item_data[1]
+                # Ignoramos el tercer valor (ruta de salida) si existe
+                # -------------------------------------------------------------------
+                
                 filename = os.path.basename(input_path)
                 
                 # --- CALLBACK DE PROGRESO FINO ---
@@ -2541,12 +3335,22 @@ class ImageToolsTab(ctk.CTkFrame):
                         output_path, 
                         options,
                         page_number=page_num,
-                        progress_callback=internal_callback  # <--- AQUÍ ESTÁ LA MAGIA
+                        progress_callback=internal_callback,
+                        cancellation_event=cancel_event 
                     )
                     
                     if success:
                         processed += 1
                         print(f"✅ Convertido: {filename} → {os.path.basename(output_path)}")
+                        
+                        # --- CAMBIO AQUÍ: Guardamos la ruta de salida en la lista de datos ---
+                        # Obtenemos los datos actuales (entrada, pagina)
+                        current_data = self.file_list_data[i]
+                        input_p, page_p = current_data if len(current_data) == 2 else (current_data[0], current_data[1])
+                        
+                        # Actualizamos la tupla con la ruta de salida
+                        self.file_list_data[i] = (input_p, page_p, output_path)
+                        # ---------------------------------------------------------------------
 
                         successfully_processed_paths.append(output_path)
 
@@ -2634,11 +3438,15 @@ class ImageToolsTab(ctk.CTkFrame):
                 if errors > 0:
                     summary += f" ({errors} errores)"
                 
+                # Actualizar la etiqueta inferior (Feedback visual suficiente)
                 self.app.after(0, lambda s=summary: self.progress_label.configure(text=s))
                 self.app.after(0, lambda: self.progress_bar.set(1.0))
                 
-                # 🔧 NUEVO: Diálogo de resumen con detalles de errores
-                self.app.after(0, lambda: self._show_process_summary(processed, skipped, errors, error_details))
+                # 🔴 CAMBIO: Solo mostrar el diálogo si hubo ERRORES
+                if errors > 0:
+                     self.app.after(0, lambda: self._show_process_summary(processed, skipped, errors, error_details))
+                else:
+                     print(f"INFO: Proceso terminado exitosamente. Resumen: {summary}")
         
         except Exception as e:
             error_msg = f"Error crítico durante el procesamiento: {e}"
@@ -2657,6 +3465,8 @@ class ImageToolsTab(ctk.CTkFrame):
             # ✅ CORRECCIÓN: Reactivar el botón único de importar
             if hasattr(self, 'import_button'):
                 self.app.after(0, lambda: self.import_button.configure(state="normal"))
+
+            self.image_converter.clear_ai_sessions()
 
     def _show_process_summary(self, processed, skipped, errors, error_details):
         """
@@ -2833,6 +3643,15 @@ class ImageToolsTab(ctk.CTkFrame):
             # Opciones de rembg
             "rembg_enabled": self.rembg_checkbox.get() == 1,
             "rembg_model": real_model_name,
+            
+            # --- NUEVAS OPCIONES DE REESCALADO ---
+            "upscale_enabled": self.upscale_checkbox.get() == 1,
+            "upscale_engine": self.upscale_engine_menu.get(),
+            "upscale_model_friendly": self.upscale_model_menu.get(), # Pasamos nombre amigable, el converter lo traduce
+            "upscale_scale": self.upscale_scale_menu.get().replace("x", ""),
+            "upscale_denoise": self.upscale_denoise_menu.get().split(" ")[0], # "-1", "0", etc.
+            "upscale_tile": self.upscale_tile_entry.get(),
+            "upscale_tta": self.upscale_tta_check.get() == 1
         }
         
         return options
@@ -2842,7 +3661,10 @@ class ImageToolsTab(ctk.CTkFrame):
         if not self.file_list_data:
             return None
         
-        filepath, page_num = self.file_list_data[0]
+        # SOLUCIÓN: Tomamos el ítem completo y extraemos solo lo que necesitamos (índice 0)
+        item_data = self.file_list_data[0]
+        filepath = item_data[0]
+        # Ignoramos el resto (page_num o output_path) porque aquí no hacen falta
         
         try:
             # Usamos Pillow en modo 'lazy' (solo lee cabeceras)
@@ -3311,83 +4133,65 @@ class ImageToolsTab(ctk.CTkFrame):
 
     def _display_thumbnail_in_viewer(self, pil_image, original_filepath, is_loading=False):
         """
-        (Hilo de UI) Muestra la miniatura generada en el visor.
+        (Hilo de UI) Muestra la imagen en el visor interactivo.
+        ✅ CORREGIDO: Fuerza centrado correcto en el primer load
         """
-        # 1. Limpiar el visor anterior
+        # 1. Limpiar el frame
         for widget in self.viewer_frame.winfo_children():
             widget.destroy()
 
-        # 2. Comprobar si esta miniatura es obsoleta
+        # 2. Comprobar obsolescencia
         if original_filepath is not None and original_filepath != self.last_preview_path:
-            print(f"DEBUG: Miniatura obsoleta de '{os.path.basename(original_filepath)}' descartada.")
-            # No hacemos nada, dejamos el visor "Cargando..." para la nueva imagen
             return
 
         if is_loading:
-            # 3. Mostrar "Cargando..."
             self.viewer_placeholder = ctk.CTkLabel(
                 self.viewer_frame, text="Cargando...", text_color="gray"
             )
-            self.viewer_placeholder.grid(row=0, column=0, sticky="nsew")
+            self.viewer_placeholder.place(relx=0.5, rely=0.5, anchor="center")
         
-        elif pil_image:
-            # 4. Mostrar la imagen generada
-            try:
-                # Calcular el tamaño máximo disponible en el visor
-                max_width = self.viewer_frame.winfo_width() - 20  # Padding
-                max_height = self.viewer_frame.winfo_height() - 20
-                
-                # Si el frame aún no tiene tamaño (primera carga), usar valores por defecto
-                if max_width < 50 or max_height < 50:
-                    max_width = 400
-                    max_height = 300
-                
-                # Calcular el tamaño manteniendo la relación de aspecto
-                img_width, img_height = pil_image.size
-                aspect_ratio = img_width / img_height
-                
-                # Ajustar al contenedor manteniendo la relación de aspecto
-                if img_width > max_width or img_height > max_height:
-                    if aspect_ratio > (max_width / max_height):
-                        # La imagen es más ancha
-                        display_width = max_width
-                        display_height = int(max_width / aspect_ratio)
-                    else:
-                        # La imagen es más alta
-                        display_height = max_height
-                        display_width = int(max_height * aspect_ratio)
-                else:
-                    # La imagen cabe sin redimensionar
-                    display_width = img_width
-                    display_height = img_height
-                
-                ctk_image = ctk.CTkImage(
-                    light_image=pil_image, 
-                    dark_image=pil_image, 
-                    size=(display_width, display_height)
-                )
-                
-                self.viewer_placeholder = ctk.CTkLabel(
-                    self.viewer_frame, 
-                    text="", 
-                    image=ctk_image
-                )
-                self.viewer_placeholder.grid(row=0, column=0)
-            except Exception as e:
-                print(f"ERROR: No se pudo mostrar la CTkImage: {e}")
-                self.viewer_placeholder = ctk.CTkLabel(
-                    self.viewer_frame, text="Error al mostrar imagen", text_color="orange"
-                )
-                self.viewer_placeholder.grid(row=0, column=0, sticky="nsew")
-        
+        elif pil_image or (original_filepath and os.path.exists(original_filepath)):
+            # 3. Instanciar Visor Interactivo
+            self.image_viewer = InteractiveImageViewer(self.viewer_frame)
+            self.image_viewer.pack(expand=True, fill="both")
+            
+            # ✅ CRÍTICO: Forzar actualización de geometría ANTES de cargar
+            self.image_viewer.update_idletasks()
+            
+            # Detectar formato
+            ext = os.path.splitext(original_filepath)[1].lower().lstrip('.').upper() if original_filepath else ""
+            if ext == "JPG": ext = "JPEG"
+            
+            is_raster_compatible = ext in IMAGE_RASTER_FORMATS
+            
+            # Cargar imagen
+            if original_filepath and os.path.exists(original_filepath) and is_raster_compatible:
+                print(f"DEBUG: Visor cargando Raster desde disco: {original_filepath}")
+                self.image_viewer.load_image(original_filepath)
+            elif pil_image:
+                print(f"DEBUG: Visor cargando Vector/Miniatura desde memoria")
+                self.image_viewer.load_image(pil_image)
+            else:
+                self.viewer_placeholder = ctk.CTkLabel(self.viewer_frame, text="Error al cargar imagen", text_color="orange")
+                self.viewer_placeholder.place(relx=0.5, rely=0.5, anchor="center")
+                return
+            
+            # ✅ CORRECCIÓN: Programar un segundo fit después de que Tk termine de renderizar
+            # Esto garantiza que las dimensiones sean las correctas
+            def delayed_fit():
+                if hasattr(self, 'image_viewer') and self.image_viewer.winfo_exists():
+                    self.image_viewer.fit_image()
+            
+            self.after(100, delayed_fit)  # 100ms después
+
         else:
-            # 5. Mostrar el placeholder por defecto
+            # 4. Placeholder por defecto
             self.viewer_placeholder = ctk.CTkLabel(
                 self.viewer_frame, 
                 text="Selecciona un archivo de la lista para previsualizarlo",
                 text_color="gray"
             )
-            self.viewer_placeholder.grid(row=0, column=0, sticky="nsew")
+            self.viewer_placeholder.place(relx=0.5, rely=0.5, anchor="center")
 
     def _start_thumbnail_worker(self):
         """Inicia el hilo worker de miniaturas si no está activo"""
@@ -3403,26 +4207,17 @@ class ImageToolsTab(ctk.CTkFrame):
     def _thumbnail_worker_loop(self):
         """
         Worker que procesa la cola de miniaturas una a la vez.
-        Solo genera la miniatura si sigue siendo la última solicitada.
         """
         while True:
             try:
-                # 1. Obtener la tupla (filepath, page_num) de la cola
                 (filepath, page_num) = self.thumbnail_queue.get(timeout=3.0)
-                
-                # 2. Crear la clave única
                 cache_key = f"{filepath}::{page_num}"
-                
             except queue.Empty:
-                # Si la cola está vacía por 3 segundos, terminar el worker
                 break
             
-            # 3. Verificar si esta miniatura sigue siendo relevante
             if cache_key != self.last_preview_path:
-                print(f"DEBUG: Miniatura de '{os.path.basename(filepath)}' (pág. {page_num}) saltada (obsoleta)")
                 continue
             
-            # Generar la miniatura
             try:
                 # Obtener el tamaño del contenedor del visor
                 try:
@@ -3446,76 +4241,89 @@ class ImageToolsTab(ctk.CTkFrame):
                     continue
                 
                 if pil_image:
-                    # Crear CTkImage
+                    # Crear CTkImage para la lista
                     ctk_image = ctk.CTkImage(
                         light_image=pil_image,
                         dark_image=pil_image,
                         size=(pil_image.width, pil_image.height)
                     )
                     
-                    # 6. Guardar en caché con la clave única
-                    with self.thumbnail_lock:
-                        self.thumbnail_cache[cache_key] = ctk_image
+                    # --- CORRECCIÓN AQUÍ: Guardar como DICCIONARIO ---
+                    cache_data = {
+                        'ctk': ctk_image,  # Para mostrar rápido
+                        'pil': pil_image   # Para el visor interactivo (Zoom)
+                    }
                     
-                    # 7. Mostrar en la UI (desde el hilo principal)
-                    self.app.after(0, self._display_cached_thumbnail, ctk_image, cache_key)
+                    with self.thumbnail_lock:
+                        # 1. Limpieza: Si el caché es muy grande, borrar el más antiguo
+                        if len(self.thumbnail_cache) > 50: # Límite de 50 imágenes
+                            # Borrar el primer elemento (el más viejo insertado)
+                            oldest_key = next(iter(self.thumbnail_cache))
+                            del self.thumbnail_cache[oldest_key]
+                            
+                        self.thumbnail_cache[cache_key] = cache_data
+                    
+                    self.app.after(0, self._display_cached_thumbnail, cache_data, cache_key)
                 
             except Exception as e:
                 print(f"ERROR: No se pudo generar miniatura para {filepath} (pág {page_num}): {e}")
                 # 8. Mostrar error en la UI
                 self.app.after(0, self._display_thumbnail_in_viewer, None, cache_key)
 
-    def _display_cached_thumbnail(self, ctk_image, original_filepath):
+    def _display_cached_thumbnail(self, cache_data, original_filepath):
         """
-        Muestra una miniatura que ya está en formato CTkImage.
-        Más rápido que _display_thumbnail_in_viewer porque no convierte PIL->CTk.
+        Muestra una miniatura desde la caché.
+        CORREGIDO: Lee correctamente el diccionario {'ctk', 'pil'} para permitir zoom en vectores.
         """
-        # Verificar si esta miniatura es obsoleta
+        # Verificar obsolescencia
         if original_filepath != self.last_preview_path:
             return
         
-        # Limpiar el visor anterior
+        # Limpiar
         for widget in self.viewer_frame.winfo_children():
             widget.destroy()
+            
+        # Instanciar Visor
+        self.image_viewer = InteractiveImageViewer(self.viewer_frame)
+        self.image_viewer.pack(expand=True, fill="both")
         
-        # Calcular dimensiones con aspecto
-        max_width = self.viewer_frame.winfo_width() - 20
-        max_height = self.viewer_frame.winfo_height() - 20
+        # Obtener la ruta real
+        key_parts = original_filepath.split("::")
+        real_path = key_parts[0]
         
-        if max_width < 50 or max_height < 50:
-            max_width = 400
-            max_height = 300
+        # --- LÓGICA DE CARGA ---
         
-        img_width = ctk_image.cget("size")[0]
-        img_height = ctk_image.cget("size")[1]
-        aspect_ratio = img_width / img_height
+        # 1. Detectar si es Raster (JPG, PNG...) -> Cargar desde disco (Mejor calidad)
+        ext = os.path.splitext(real_path)[1].lower().lstrip('.').upper()
+        if ext == "JPG": ext = "JPEG"
         
-        # Ajustar al contenedor manteniendo la relación de aspecto
-        if img_width > max_width or img_height > max_height:
-            if aspect_ratio > (max_width / max_height):
-                display_width = max_width
-                display_height = int(max_width / aspect_ratio)
-            else:
-                display_height = max_height
-                display_width = int(max_height * aspect_ratio)
+        is_raster_compatible = ext in IMAGE_RASTER_FORMATS
+        
+        if os.path.exists(real_path) and os.path.isfile(real_path) and is_raster_compatible:
+             print(f"DEBUG: Cargando imagen local Full Res desde caché: {real_path}")
+             self.image_viewer.load_image(real_path)
+             
         else:
-            display_width = img_width
-            display_height = img_height
-        
-        # Crear una nueva imagen redimensionada
-        display_image = ctk.CTkImage(
-            light_image=ctk_image._light_image,
-            dark_image=ctk_image._dark_image,
-            size=(display_width, display_height)
-        )
-        
-        label = ctk.CTkLabel(
-            self.viewer_frame,
-            text="",
-            image=display_image
-        )
-        label.image = display_image  # Mantener referencia
-        label.grid(row=0, column=0)
+             # 2. Es Vector (SVG, PDF) -> Usar la imagen PIL guardada en memoria
+             # 'cache_data' puede venir directo del worker (dict) o ser un CTkImage antiguo
+             
+             pil_image_to_show = None
+             
+             # Si nos pasaron el dict directamente (desde worker)
+             if isinstance(cache_data, dict) and 'pil' in cache_data:
+                 pil_image_to_show = cache_data['pil']
+                 
+             # Si no, buscar en self.thumbnail_cache
+             elif original_filepath in self.thumbnail_cache:
+                 stored = self.thumbnail_cache[original_filepath]
+                 if isinstance(stored, dict) and 'pil' in stored:
+                     pil_image_to_show = stored['pil']
+            
+             if pil_image_to_show:
+                 print(f"DEBUG: Cargando vector desde memoria (PIL): {real_path}")
+                 self.image_viewer.load_image(pil_image_to_show)
+             else:
+                 print("ERROR: No se encontraron datos de imagen en la caché.")
 
     def import_folder_from_path(self, folder_path):
         """
@@ -3615,8 +4423,6 @@ class ImageToolsTab(ctk.CTkFrame):
         CORRECCIÓN: Si la herramienta (checkbox) está apagada, no hace nada.
         """
         # --- NUEVA GUARDIA DE SEGURIDAD ---
-        # Si el usuario no ha activado la casilla "Eliminar Fondo", 
-        # no tiene sentido verificar ni pedir descargas. Salimos inmediatamente.
         if self.rembg_checkbox.get() != 1:
             return
         # ----------------------------------
@@ -3625,9 +4431,7 @@ class ImageToolsTab(ctk.CTkFrame):
 
         family = self.rembg_family_menu.get()
         
-        # Buscar el modelo en la estructura anidada
         model_info = REMBG_MODEL_FAMILIES.get(family, {}).get(selected_model)
-        
         if not model_info: return
 
         filename = model_info["file"]
@@ -3637,6 +4441,7 @@ class ImageToolsTab(ctk.CTkFrame):
         target_dir = os.path.join(MODELS_DIR, folder)
         file_path = os.path.join(target_dir, filename)
         
+        # Verificar existencia
         if os.path.exists(file_path) and os.path.getsize(file_path) > 1024:
             self.rembg_status_label.configure(text="✅ Modelo listo", text_color="gray")
             self.start_process_button.configure(state="normal")
@@ -3646,116 +4451,300 @@ class ImageToolsTab(ctk.CTkFrame):
             if silent:
                 return
 
-            # Preguntar al usuario si quiere descargar
-            response = messagebox.askyesno(
-                "Descargar Modelo IA", 
-                f"El modelo '{selected_model}' no está instalado.\n\n"
-                f"Se descargará en: bin/models/{folder}/\n"
-                "¿Deseas descargarlo ahora?"
-            )
-            
-            if response:
-                self.rembg_model_menu.configure(state="disabled")
-                self.rembg_family_menu.configure(state="disabled")
-                self.start_process_button.configure(state="disabled")
+            # --- NUEVA LÓGICA HÍBRIDA ---
+            # Si es RMBG 2.0 PERO la URL no es la de danielgatis (que es pública), forzar manual.
+            if family == "RMBG 2.0 (BriaAI)" and "danielgatis" not in model_info["url"]:
                 
-                threading.Thread(
-                    target=self._download_rembg_model_thread, 
-                    args=(model_info, file_path), 
-                    daemon=True
-                ).start()
-            else:
-                 self.rembg_status_label.configure(text="❌ Descarga cancelada", text_color="red")
+                # Callback para actualizar la UI si el usuario lo descarga correctamente
+                def on_manual_success():
+                    self.rembg_status_label.configure(text="✅ Modelo listo (Manual)", text_color="green")
+                    self.start_process_button.configure(state="normal")
+
+                # Instanciar el diálogo desde dialogs.py
+                ManualDownloadDialog(
+                    master=self.app, # Usar self.app como master para centrar mejor
+                    model_info=model_info, 
+                    target_dir=target_dir, 
+                    filename=filename,
+                    on_success_callback=on_manual_success
+                )
+                return
+            # ---------------------------------------------------------------------
 
     def _download_rembg_model_thread(self, model_info, file_path):
         """
-        Descarga el modelo con estrategia ROBUSTA (Reintentos + Timeouts largos).
-        Diseñado para conexiones lentas o inestables.
+        Descarga optimizada para velocidad (Buffer grande).
         """
         url = model_info["url"]
         
         # Asegurar que la carpeta existe
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         
-        # --- CONFIGURACIÓN DE ROBUSTEZ ---
-        # Configurar una sesión con reintentos automáticos
+        # Configurar sesión robusta
         session = requests.Session()
-        
-        # Estrategia de reintentos:
-        # total=5: Intentará 5 veces si falla.
-        # backoff_factor=1: Esperará 1s, 2s, 4s entre intentos (para dar tiempo al internet de volver).
-        # status_forcelist: Reintentar si el servidor da errores temporales (500, 502, etc).
-        retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
-        
+        retries = Retry(total=5, backoff_factor=0.5, status_forcelist=[500, 502, 503, 504])
         adapter = HTTPAdapter(max_retries=retries)
         session.mount('http://', adapter)
         session.mount('https://', adapter)
-        # ----------------------------------
+
+        temp_path = file_path + ".part"
 
         try:
-            self.app.after(0, lambda: self.rembg_status_label.configure(text="⏳ Conectando...", text_color="#52a2f2"))
+            self.app.after(0, lambda: self.rembg_status_label.configure(text="🚀 Conectando...", text_color="#52a2f2"))
             
-            # Timeout elevado (30s para conectar, 60s para leer datos)
-            response = session.get(url, stream=True, timeout=(30, 60))
+            # Stream=True es vital
+            response = session.get(url, stream=True, timeout=(10, 120))
             response.raise_for_status()
             
-            total_length = response.headers.get('content-length')
+            total_length = int(response.headers.get('content-length', 0))
             
-            with open(file_path, 'wb') as f:
-                if total_length is None:
-                    f.write(response.content)
-                else:
-                    dl = 0
-                    total_length = int(total_length)
-                    last_percent = -1
-                    
-                    # Chunk size aumentado ligeramente para buffer
-                    for chunk in response.iter_content(chunk_size=16384): 
-                        if chunk:
-                            dl += len(chunk)
-                            f.write(chunk)
-                            
-                            # Calcular porcentaje
+            # --- OPTIMIZACIÓN DE VELOCIDAD ---
+            # 1. Buffer grande: 1MB a 4MB es ideal para archivos grandes en Python.
+            # 16KB es demasiado pequeño y causa cuello de botella en la CPU.
+            chunk_size = 4 * 1024 * 1024  # 4 MB
+            
+            dl = 0
+            last_percent = -1
+            
+            with open(temp_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                        dl += len(chunk)
+                        
+                        if total_length > 0:
                             percent = int(100 * dl / total_length)
-                            
-                            # Actualizar UI solo si cambió el porcentaje (para no saturar el hilo)
+                            # Solo actualizar UI si cambió el porcentaje para no congelar
                             if percent > last_percent:
                                 last_percent = percent
-                                # Mostrar progreso y tamaño descargado
                                 downloaded_mb = dl / (1024 * 1024)
                                 total_mb = total_length / (1024 * 1024)
-                                status_text = f"⏳ {percent}% ({downloaded_mb:.1f}/{total_mb:.1f} MB)"
-                                self.app.after(0, lambda t=status_text: self.rembg_status_label.configure(text=t, text_color="#52a2f2"))
+                                status_text = f"⬇️ {percent}% ({downloaded_mb:.1f}/{total_mb:.1f} MB)"
+                                self.app.after(0, lambda t=status_text: self.rembg_status_label.configure(text=t))
 
-            # Verificación final de tamaño (si el servidor envió content-length)
-            if total_length is not None and os.path.getsize(file_path) != total_length:
-                raise Exception("El archivo descargado está incompleto.")
+            # Renombrar al finalizar (Atomicidad: evita archivos corruptos si se cancela a medias)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            os.rename(temp_path, file_path)
 
-            self.app.after(0, lambda: self.rembg_status_label.configure(text="✅ Descarga completada", text_color="green"))
-            
-            # Habilitar botón de proceso inmediatamente
+            # Verificación final
+            if total_length > 0 and os.path.getsize(file_path) != total_length:
+                raise Exception("Tamaño de archivo incorrecto tras descarga.")
+
+            self.app.after(0, lambda: self.rembg_status_label.configure(text="✅ Instalado", text_color="green"))
             self.app.after(0, lambda: self.start_process_button.configure(state="normal"))
             
         except Exception as e:
-            print(f"ERROR ROBUSO descargando modelo: {e}")
-            
-            # Mensaje de error amigable para el usuario
-            error_msg = "❌ Error de red"
-            if "timeout" in str(e).lower():
-                error_msg = "❌ Internet muy lento (Timeout)"
-            elif "connection" in str(e).lower():
-                error_msg = "❌ Fallo de conexión"
-                
-            self.app.after(0, lambda m=error_msg: self.rembg_status_label.configure(text=m, text_color="red"))
-            
-            # Limpiar archivo corrupto/incompleto para evitar errores futuros
-            if os.path.exists(file_path):
-                try: os.remove(file_path)
+            print(f"ERROR descarga: {e}")
+            if os.path.exists(temp_path):
+                try: os.remove(temp_path)
                 except: pass
+                
+            self.app.after(0, lambda: self.rembg_status_label.configure(text="❌ Error descarga", text_color="red"))
+            self.app.after(0, lambda: messagebox.showerror("Error", f"Fallo al descargar:\n{e}"))
         
         finally:
             session.close()
-            # Reactivar controles
             self.app.after(0, lambda: self.rembg_model_menu.configure(state="normal"))
-
             self.app.after(0, lambda: self.rembg_family_menu.configure(state="normal"))
+
+    # --- NUEVOS MÉTODOS PARA EL SLIDER ANTES/DESPUÉS ---
+
+    def _create_checkerboard(self, w, h, size=10):
+        """Crea una imagen de fondo tipo ajedrez para transparencia."""
+        img = Image.new("RGB", (w, h), (200, 200, 200)) # Gris claro
+        pixels = img.load()
+        for y in range(h):
+            for x in range(w):
+                if ((x // size) + (y // size)) % 2 == 0:
+                    pixels[x, y] = (255, 255, 255) # Blanco
+        return img
+
+    def _start_comparison_viewer(self, input_path, output_path, page_num):
+        """Inicia el modo de comparación con Zoom y Paneo real."""
+        
+        # 1. Limpiar el frame
+        for widget in self.viewer_frame.winfo_children():
+            widget.destroy()
+
+        try:
+            ext = os.path.splitext(input_path)[1].lower()
+            vector_exts = (".pdf", ".ai", ".eps", ".svg", ".ps")
+            is_vector = ext in vector_exts
+            
+            # 🔥 NUEVO: Detectar si es RAW
+            raw_exts = tuple(f.lower() for f in IMAGE_RAW_FORMATS)
+            is_raw = ext in raw_exts
+            
+            img_before = None
+            
+            # --- CASO 1: Archivos RAW ---
+            if is_raw:
+                print(f"DEBUG: Cargando RAW para comparación: {os.path.basename(input_path)}")
+                try:
+                    import rawpy
+                    import numpy as np
+                    
+                    with rawpy.imread(input_path) as raw:
+                        rgb = raw.postprocess(
+                            use_camera_wb=True,
+                            half_size=True,
+                            no_auto_bright=False,
+                            output_bps=8,
+                            output_color=rawpy.ColorSpace.sRGB,
+                            demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD
+                        )
+                    
+                    img_before = Image.fromarray(rgb).convert("RGBA")
+                    
+                    try:
+                        from PIL import ImageOps
+                        img_before = ImageOps.exif_transpose(img_before)
+                    except:
+                        pass
+                        
+                except ImportError:
+                    print("⚠️ rawpy no disponible para vista previa RAW")
+                    img_before = None
+                except Exception as e:
+                    print(f"❌ Error cargando RAW para comparación: {e}")
+                    img_before = None
+            
+            # --- CASO 2: Vectoriales ---
+            elif is_vector:
+                print("DEBUG: Renderizando vector a alta resolución para comparación...")
+                try:
+                    img_before = self.image_processor.generate_thumbnail(
+                        input_path, size=(3000, 3000), page_number=page_num
+                    )
+                except Exception as e:
+                    print(f"ADVERTENCIA: Falló renderizado HQ vector: {e}")
+            
+            # --- CASO 3: Raster normal ---
+            if img_before is None and not is_raw:
+                print("DEBUG: Cargando imagen original directa (Raster o Fallback)")
+                img_before = Image.open(input_path).convert("RGBA")
+
+            # Cargar Resultado
+            img_after = Image.open(output_path).convert("RGBA")
+            
+            # ✅ Validación: Si no hay imagen "antes", usar la de salida
+            if not img_before:
+                print("⚠️ No se pudo cargar original, mostrando solo resultado")
+                img_before = img_after.copy()
+            
+            if not img_after: 
+                print("ERROR: No se pudieron cargar las imágenes para comparar")
+                return
+
+            # ✅ CORRECCIÓN: Ajustar la imagen BEFORE al tamaño de AFTER manteniendo aspecto
+            # Esto evita el estiramiento forzado
+            if img_before.size != img_after.size:
+                print(f"DEBUG: Redimensionando 'antes' de {img_before.size} a {img_after.size} (manteniendo aspecto)")
+                
+                # Crear un canvas transparente del tamaño del resultado
+                canvas_before = Image.new("RGBA", img_after.size, (0, 0, 0, 0))
+                
+                # Calcular el tamaño que debería tener la imagen original para caber
+                original_w, original_h = img_before.size
+                target_w, target_h = img_after.size
+                
+                # Calcular escala manteniendo proporción (fit)
+                scale_w = target_w / original_w
+                scale_h = target_h / original_h
+                scale = min(scale_w, scale_h)  # Usar el menor para que quepa completamente
+                
+                new_w = int(original_w * scale)
+                new_h = int(original_h * scale)
+                
+                # Redimensionar manteniendo calidad
+                img_before_resized = img_before.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                
+                # Centrar en el canvas
+                x = (target_w - new_w) // 2
+                y = (target_h - new_h) // 2
+                
+                canvas_before.paste(img_before_resized, (x, y), img_before_resized if img_before_resized.mode == 'RGBA' else None)
+                
+                img_before = canvas_before
+                print(f"✅ Imagen 'antes' ajustada correctamente: {img_before.size}")
+
+            # 3. Instanciar nuestro visor avanzado
+            self.compare_viewer = ComparisonViewer(self.viewer_frame)
+            self.compare_viewer.place(relx=0, rely=0, relwidth=1, relheight=1)
+            
+            # 4. Cargar las imágenes en el visor
+            self.compare_viewer.load_images(img_before, img_after)
+            
+            # 5. Mostrar instrucciones flotantes
+            self._show_comparison_instructions()
+
+        except Exception as e:
+            print(f"Error iniciando comparación: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _show_comparison_instructions(self):
+        """Muestra una etiqueta temporal sobre cómo usar el visor."""
+        info_label = ctk.CTkLabel(
+            self.viewer_frame, 
+            text="🔍 Rueda: Zoom  |  🖱️ Clic + Arrastre: Mover Imagen  |  📏 Línea Blanca: Slider",
+            fg_color="#333333", text_color="white", corner_radius=5,
+            font=ctk.CTkFont(size=11)
+        )
+        info_label.place(relx=0.5, rely=0.95, anchor="center")
+        
+        # Ocultar después de 5 segundos
+        self.after(5000, info_label.destroy)
+
+    def _on_slider_drag(self, event):
+        """Calcula la posición X relativa a la imagen."""
+        local_x = event.x - self.img_x
+        width = self.pil_after_source.width
+        local_x = max(0, min(local_x, width))
+        self._update_slider_crop(local_x)
+
+    def _update_slider_crop(self, x):
+        """Recorta ambas imágenes para evitar superposición (Transparencia correcta)."""
+        from PIL import ImageTk
+        width = self.pil_after_source.width
+        height = self.pil_after_source.height
+        
+        # Mover línea
+        self.compare_canvas.coords(self.line_id, self.img_x + x, self.img_y, self.img_x + x, self.img_y + height)
+        
+        # Recortar AFTER (Izquierda -> X)
+        if x > 0:
+            crop = self.pil_after_source.crop((0, 0, x, height))
+            self.photo_after_crop = ImageTk.PhotoImage(crop)
+            self.compare_canvas.itemconfig("after", image=self.photo_after_crop)
+            self.compare_canvas.coords("after", self.img_x, self.img_y)
+        else:
+            self.compare_canvas.itemconfig("after", image="")
+
+        # Recortar BEFORE (X -> Derecha)
+        if x < width:
+            crop = self.pil_before_source.crop((x, 0, width, height))
+            self.photo_before_crop = ImageTk.PhotoImage(crop)
+            self.compare_canvas.itemconfig("before", image=self.photo_before_crop)
+            self.compare_canvas.coords("before", self.img_x + x, self.img_y)
+        else:
+            self.compare_canvas.itemconfig("before", image="")
+
+    # Test rápido en cualquier parte de tu código
+    def test_raw_support():
+        try:
+            import rawpy
+            print("✅ rawpy instalado correctamente")
+            print(f"   Versión LibRaw: {rawpy.libraw_version}")
+            
+            # Mostrar algunos formatos soportados
+            formats = ['.dng', '.cr2', '.cr3', '.nef', '.arw', '.orf']
+            print(f"   Formatos RAW soportados: {', '.join(formats)}")
+            return True
+        except ImportError:
+            print("❌ rawpy NO está instalado")
+            return False
+
+    # Llamar al inicio de tu app
+    test_raw_support()

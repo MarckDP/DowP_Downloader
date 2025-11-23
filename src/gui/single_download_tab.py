@@ -41,7 +41,7 @@ def resource_path(relative_path):
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
-from main import PROJECT_ROOT
+from main import PROJECT_ROOT, MODELS_DIR
 # -------------------------------------------------
 
 class SingleDownloadTab(ctk.CTkFrame):
@@ -321,11 +321,42 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.end_m.pack(side="left", fill="x", expand=True)
         ctk.CTkLabel(end_time_frame, text=":", font=ctk.CTkFont(size=14)).pack(side="left", padx=5)
         self.end_s.pack(side="left", fill="x", expand=True)
-        self.keep_original_on_clip_check = ctk.CTkCheckBox(self.fragment_options_frame, text="Conservar completo (solo modo URL)")
-        self.keep_original_on_clip_check.grid(row=3, column=0, columnspan=2, pady=(5,0), sticky="w")
+
+        # 1. Checkbox: Corte Preciso
+        self.precise_clip_check = ctk.CTkCheckBox(
+            self.fragment_options_frame, 
+            text="Corte Preciso (Lento/Recodificar)",
+            command=self._on_precise_clip_toggle  # <-- VINCULACIÓN
+        )
+        self.precise_clip_check.grid(row=3, column=0, columnspan=2, pady=(5,0), sticky="w")
+        Tooltip(self.precise_clip_check, "Activado: Recodifica bordes para exactitud (Lento).\nDesactivado: Corta en keyframes (Rápido, menos preciso).", delay_ms=1000)
+
+        # 2. NUEVO Checkbox: Descargar Completo (Rápido)
+        self.force_full_download_check = ctk.CTkCheckBox(
+            self.fragment_options_frame, 
+            text="Descargar completo para cortar (Rápido)",
+            command=self._on_force_full_download_toggle # <-- VINCULACIÓN
+        )
+        self.force_full_download_check.grid(row=4, column=0, columnspan=2, pady=(5,0), sticky="w")
+        
+        Tooltip(self.force_full_download_check, 
+                "Recomendado para internet rápido.\n"
+                "Baja todo el video a máxima velocidad y lo corta en tu PC.\n"
+                "Evita la lentitud del procesamiento en la nube de YouTube.", 
+                delay_ms=1000)
+
+        # 3. Conservar completo (Mover a row=5)
+        self.keep_original_on_clip_check = ctk.CTkCheckBox(
+            self.fragment_options_frame, 
+            text="Conservar completo (solo modo URL)",
+            command=self._on_keep_original_clip_toggle # <-- VINCULACIÓN AÑADIDA
+        )
+        self.keep_original_on_clip_check.grid(row=5, column=0, columnspan=2, pady=(5,0), sticky="w")
+        
+        # 4. Warning Label (Mover a row=6)
         self.time_warning_label = ctk.CTkLabel(self.fragment_options_frame, text="", text_color="orange", wraplength=280, justify="left")
-        # La posicionaremos en la fila 3, ocupando ambas columnas
-        self.time_warning_label.grid(row=4, column=0, columnspan=2, pady=(5,0), sticky="w")
+        self.time_warning_label.grid(row=6, column=0, columnspan=2, pady=(5,0), sticky="w")
+
         ctk.CTkLabel(options_scroll_frame, text="Subtítulos", font=ctk.CTkFont(weight="bold")).pack(fill="x", padx=10, pady=(5, 2))
         subtitle_options_frame = ctk.CTkFrame(options_scroll_frame)
         subtitle_options_frame.pack(fill="x", padx=5, pady=(0, 10))
@@ -448,13 +479,24 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.check_ghostscript_button.grid(row=11, column=0, padx=10, pady=(0, 10), sticky="ew")
 
         # --- SECCIÓN MODELOS IA (rembg) ---
+        # --- SECCIÓN MODELOS IA (rembg) ---
         self.rembg_status_label = ctk.CTkLabel(
             maintenance_frame, 
             text="Modelos IA: Pendiente...", 
             wraplength=280, 
             justify="left"
         )
-        self.rembg_status_label.grid(row=12, column=0, padx=10, pady=(5, 10), sticky="ew")
+        self.rembg_status_label.grid(row=12, column=0, padx=10, pady=(5, 5), sticky="ew") # Reduje pady inferior
+
+        # ✅ NUEVO BOTÓN
+        self.open_models_folder_button = ctk.CTkButton(
+            maintenance_frame,
+            text="Abrir Carpeta de Modelos",
+            command=self._open_ai_models_folder,
+            fg_color="#555555", hover_color="#444444", # Color gris discreto
+            height=24
+        )
+        self.open_models_folder_button.grid(row=13, column=0, padx=10, pady=(0, 15), sticky="ew")
 
         details_frame = ctk.CTkFrame(info_frame)
         details_frame.pack(side="left", fill="both", expand=True, padx=(0,10), pady=10)
@@ -1123,20 +1165,27 @@ class SingleDownloadTab(ctk.CTkFrame):
         Returns:
             str: La ruta final al archivo que debe ser procesado (ya sea el original o el fragmento).
         """
-        is_fragment_mode = options.get("fragment_enabled") and (options.get("start_time") or options.get("end_time"))
+        # Verificar si el usuario QUERÍA un fragmento
+        user_wanted_fragment = options.get("fragment_enabled") and (options.get("start_time") or options.get("end_time"))
         
-        if not is_fragment_mode:
-            # No hay que cortar, devolvemos la ruta original sin cambios.
+        if not user_wanted_fragment:
             return downloaded_filepath
 
-        # 🆕 NUEVO: Verificar si ya fue cortado por yt-dlp
-        # Si fragment_enabled es False, significa que yt-dlp ya lo cortó
-        if not options.get("fragment_enabled"):
-            print("DEBUG: ✅ El fragmento ya fue descargado directamente por yt-dlp. Saltando corte.")
+        # Lógica de detección:
+        # 1. Si "force_full_download" estaba ON, yt-dlp bajó todo → NECESITAMOS CORTAR.
+        # 2. Si "fragment_enabled" sigue siendo True, significa que yt-dlp NO lo cortó (o forzamos full) → NECESITAMOS CORTAR.
+        # 3. Si "fragment_enabled" fue puesto a False en _perform_download, ya está cortado.
+
+        if options.get("force_full_download"):
+            print("DEBUG: 🎬 Video completo descargado por solicitud (Modo Rápido). Cortando localmente...")
+        
+        elif not options.get("fragment_enabled"):
+            # Esta bandera se apaga en _perform_download si yt-dlp tuvo éxito nativo
+            print("DEBUG: ✅ El fragmento ya fue descargado directamente por yt-dlp. Saltando corte local.")
             return downloaded_filepath
 
         # Si llegamos aquí, necesitamos cortar con FFmpeg
-        print("DEBUG: 🎬 El video completo fue descargado. Procediendo a cortar con FFmpeg...")
+        print("DEBUG: ✂️ Iniciando corte local con FFmpeg...")
         clipped_filepath = self._execute_fragment_clipping(
             input_filepath=downloaded_filepath,
             start_time=options.get("start_time"),
@@ -1148,15 +1197,35 @@ class SingleDownloadTab(ctk.CTkFrame):
         options["start_time"] = ""
         options["end_time"] = ""
         
-        # Manejamos la eliminación del archivo original completo.
+        # Manejo del archivo original (Borrar o Renombrar a _full)
         try:
-            if not options.get("keep_original_on_clip"):
+            if options.get("keep_original_on_clip"):
+                # Lógica para conservar: Renombrar agregando _full
+                directory = os.path.dirname(downloaded_filepath)
+                filename = os.path.basename(downloaded_filepath)
+                name, ext = os.path.splitext(filename)
+                
+                # Crear nombre nuevo: video_full.mp4
+                new_full_name = f"{name}_full{ext}"
+                new_full_path = os.path.join(directory, new_full_name)
+                
+                # Renombrar (si ya existe uno igual, lo sobrescribe o falla según el SO, idealmente validar antes)
+                if os.path.exists(new_full_path):
+                    try: os.remove(new_full_path)
+                    except: pass
+                
+                os.rename(downloaded_filepath, new_full_path)
+                print(f"DEBUG: Archivo original conservado como: {new_full_path}")
+                
+            else:
+                # Lógica normal: Borrar el original
                 os.remove(downloaded_filepath)
                 print(f"DEBUG: Archivo original completo eliminado tras el recorte: {downloaded_filepath}")
+                
         except OSError as err:
-            print(f"ADVERTENCIA: No se pudo eliminar el archivo completo original tras el recorte: {err}")
+            print(f"ADVERTENCIA: Error gestionando el archivo original tras el recorte: {err}")
             
-        # Devolvemos la ruta al nuevo fragmento.
+        # Devolvemos la ruta al nuevo fragmento (esto es lo que se mostrará en la UI como "Completado")
         return clipped_filepath
 
     def _on_recode_mode_change(self, mode):
@@ -1314,6 +1383,49 @@ class SingleDownloadTab(ctk.CTkFrame):
         else:
             self.fragment_options_frame.pack_forget()
 
+    # --- NUEVOS MÉTODOS DE EXCLUSIVIDAD CON BLOQUEO VISUAL ---
+    def _on_precise_clip_toggle(self):
+        """
+        Si se activa Corte Preciso: Desactiva y bloquea Descarga Completa.
+        Si se desactiva: Desbloquea Descarga Completa.
+        """
+        if self.precise_clip_check.get() == 1:
+            self.force_full_download_check.deselect()
+            self.force_full_download_check.configure(state="disabled")
+        else:
+            self.force_full_download_check.configure(state="normal")
+
+    def _on_force_full_download_toggle(self):
+        """
+        Si se activa Descarga Completa: Desactiva y bloquea Corte Preciso.
+        Si se desactiva: Desbloquea Corte Preciso.
+        """
+        if self.force_full_download_check.get() == 1:
+            self.precise_clip_check.deselect()
+            self.precise_clip_check.configure(state="disabled")
+        else:
+            self.precise_clip_check.configure(state="normal")
+
+    def _on_keep_original_clip_toggle(self):
+        """
+        Si se activa Conservar Completo:
+        - Desactiva y bloquea 'Corte Preciso' y 'Descarga Completa'.
+        Si se desactiva:
+        - Desbloquea ambas opciones para que el usuario elija.
+        """
+        if self.keep_original_on_clip_check.get() == 1:
+            # Bloquear y desmarcar "Corte Preciso"
+            self.precise_clip_check.deselect()
+            self.precise_clip_check.configure(state="disabled")
+
+            # Bloquear y desmarcar "Descarga Completa"
+            self.force_full_download_check.deselect()
+            self.force_full_download_check.configure(state="disabled")
+        else:
+            # Desbloquear ambos (volver a estado normal)
+            self.precise_clip_check.configure(state="normal")
+            self.force_full_download_check.configure(state="normal")    
+
     def _handle_time_input(self, event, widget, next_widget=None):
         """Valida la entrada de tiempo y salta al siguiente campo."""
         text = widget.get()
@@ -1371,6 +1483,30 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.open_folder_button.configure(state="disabled")
             threading.Thread(target=self._process_local_file_info, args=(filepath,), daemon=True).start()
 
+    # ==========================================
+    # ✅ NUEVA FUNCIÓN: API Pública para importar
+    # ==========================================
+    def import_local_file_from_path(self, filepath):
+        """
+        Importa un archivo local directamente sin abrir diálogo.
+        Usado por la integración con Adobe.
+        """
+        if not os.path.exists(filepath):
+            return
+
+        # 1. Preparar la UI (limpiar modo URL)
+        self.reset_to_url_mode()
+        
+        # 2. Configurar estado visual
+        self.auto_save_thumbnail_check.pack_forget()
+        self.cancellation_event.clear()
+        self.progress_label.configure(text=f"Analizando archivo local: {os.path.basename(filepath)}...")
+        self.progress_bar.start()
+        self.open_folder_button.configure(state="disabled")
+        
+        # 3. Iniciar análisis en hilo
+        threading.Thread(target=self._process_local_file_info, args=(filepath,), daemon=True).start()
+
     def _process_local_file_info(self, filepath):
         info = self.ffmpeg_processor.get_local_media_info(filepath)
 
@@ -1388,6 +1524,13 @@ class SingleDownloadTab(ctk.CTkFrame):
 
             self.keep_original_quick_checkbox.select()
             self.keep_original_quick_checkbox.configure(state="disabled")
+
+            # --- NUEVO: Deshabilitar estrategias de descarga en modo local ---
+            self.precise_clip_check.deselect()
+            self.precise_clip_check.configure(state="disabled")
+            
+            self.force_full_download_check.deselect()
+            self.force_full_download_check.configure(state="disabled")
 
             # 🆕 También deshabilitar en modo extraer
             if hasattr(self, 'keep_original_extract_checkbox'):
@@ -1525,6 +1668,10 @@ class SingleDownloadTab(ctk.CTkFrame):
 
     def reset_to_url_mode(self):
         self.keep_original_on_clip_check.configure(state="normal")
+        
+        self.precise_clip_check.configure(state="normal")
+        self.force_full_download_check.configure(state="normal")
+        
         self.local_file_path = None
         self.url_entry.configure(state="normal")
         self.analyze_button.configure(state="normal")
@@ -3695,31 +3842,46 @@ class SingleDownloadTab(ctk.CTkFrame):
 
     def cancel_operation(self):
         """
-        Maneja la cancelación de cualquier operación activa, ya sea análisis o descarga.
-        Ahora termina forzosamente el proceso y espera a que libere archivos.
+        Maneja la cancelación de cualquier operación activa.
+        Mata procesos huérfanos de FFmpeg para liberar a yt-dlp inmediatamente.
         """
         print("DEBUG: Botón de Cancelar presionado.")
         self.cancellation_event.set()
+        
+        # 1. Cancelar el procesador interno (si se está usando recodificación local)
         self.ffmpeg_processor.cancel_current_process()
         
+        # 2. FUERZA BRUTA: Matar ffmpeg.exe para liberar a yt-dlp
+        # yt-dlp lanza ffmpeg como subproceso interno sin darnos el PID.
+        # Si no matamos ffmpeg, yt-dlp espera hasta que termine la descarga para cancelar.
+        if os.name == 'nt':
+            try:
+                print("DEBUG: Intentando matar procesos FFmpeg externos (yt-dlp)...")
+                subprocess.run(
+                    ['taskkill', '/F', '/IM', 'ffmpeg.exe', '/T'], 
+                    stdout=subprocess.DEVNULL, 
+                    stderr=subprocess.DEVNULL,
+                    creationflags=0x08000000 # CREATE_NO_WINDOW
+                )
+            except Exception as e:
+                print(f"ADVERTENCIA: No se pudieron matar procesos FFmpeg externos: {e}")
+
+        # 3. Cancelar subprocesos propios (si tenemos el PID guardado)
         if self.active_subprocess_pid:
             print(f"DEBUG: Intentando terminar el árbol de procesos para el PID: {self.active_subprocess_pid}")
             try:
-                # 🆕 Terminar el proceso
                 subprocess.run(
                     ['taskkill', '/PID', str(self.active_subprocess_pid), '/T', '/F'],
                     check=True,
                     capture_output=True, 
-                    text=True
+                    text=True,
+                    creationflags=0x08000000 # CREATE_NO_WINDOW
                 )
-                print(f"DEBUG: Proceso {self.active_subprocess_pid} y sus hijos terminados exitosamente.")
-                
-                # 🆕 Esperar a que el SO libere los archivos
-                time.sleep(1.5)  # Dar tiempo al sistema operativo
+                print(f"DEBUG: Proceso {self.active_subprocess_pid} terminado.")
+                time.sleep(1.0)
                 gc.collect()
-                
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                print(f"ADVERTENCIA: No se pudo terminar el proceso {self.active_subprocess_pid} con taskkill: {e}")
+            except Exception as e:
+                print(f"ADVERTENCIA: Falló taskkill por PID: {e}")
             
             self.active_subprocess_pid = None
 
@@ -3792,6 +3954,8 @@ class SingleDownloadTab(ctk.CTkFrame):
             "fragment_enabled": self.fragment_checkbox.get() == 1,
             "start_time": self._get_formatted_time(self.start_h, self.start_m, self.start_s),
             "end_time": self._get_formatted_time(self.end_h, self.end_m, self.end_s),
+            "precise_clip_enabled": self.precise_clip_check.get() == 1,
+            "force_full_download": self.force_full_download_check.get() == 1, # <-- NUEVO
             "keep_original_on_clip": self.keep_original_on_clip_check.get() == 1 
         }
 
@@ -4226,7 +4390,8 @@ class SingleDownloadTab(ctk.CTkFrame):
                         bitrate_mbps = float(recode_options["custom_bitrate_value"])
                         bitrate_k = int(bitrate_mbps * 1000)
                         if "nvenc" in ffmpeg_codec_name:
-                            params_str = f"-c:v {ffmpeg_codec_name} -preset p5 -rc vbr -b:v {bitrate_k}k -maxrate {bitrate_k}k"
+                            # CORREGIDO: Añadido pix_fmt para evitar error con archivos 4:2:2
+                            params_str = f"-c:v {ffmpeg_codec_name} -preset p5 -rc vbr -b:v {bitrate_k}k -maxrate {bitrate_k}k -pix_fmt yuv420p"
                         else:
                             params_str = f"-c:v {ffmpeg_codec_name} -b:v {bitrate_k}k -maxrate {bitrate_k}k -bufsize {bitrate_k*2}k -pix_fmt yuv420p"
                         final_ffmpeg_params.extend(params_str.split())
@@ -4430,7 +4595,16 @@ class SingleDownloadTab(ctk.CTkFrame):
         }
         
         # 🆕 CORRECCIÓN CRÍTICA: Manejo correcto de fragmentos
-        is_fragment_mode = options.get("fragment_enabled") and (options.get("start_time") or options.get("end_time"))
+        want_fragment = options.get("fragment_enabled") and (options.get("start_time") or options.get("end_time"))
+        force_full = options.get("force_full_download", False)
+        keep_full = options.get("keep_original_on_clip", False) # <--- NUEVO
+        
+        # Lógica Maestra:
+        # Usamos el modo fragmento de YT-DLP (descarga parcial) SOLO SI:
+        # 1. El usuario quiere un fragmento.
+        # 2. NO forzó la descarga completa (Modo Rápido).
+        # 3. NO quiere conservar el original (porque necesitamos bajarlo todo para conservarlo).
+        is_fragment_mode = want_fragment and not force_full and not keep_full
 
         if is_fragment_mode:
             start_time_str = options.get("start_time") or ""  # 🆕 Puede estar vacío
@@ -4466,9 +4640,12 @@ class SingleDownloadTab(ctk.CTkFrame):
                         ranges = [(start_seconds, float('inf'))]  # Hasta el infinito = hasta el final
                     
                     ydl_opts['download_ranges'] = download_range_func(None, ranges)
-                    ydl_opts['force_keyframes_at_cuts'] = True
                     
-                    print(f"DEBUG: ✅ download_ranges configurado: {ranges}")
+                    # --- MODIFICACIÓN: Usar el checkbox ---
+                    use_precise = options.get("precise_clip_enabled", False)
+                    ydl_opts['force_keyframes_at_cuts'] = use_precise
+                    
+                    print(f"DEBUG: ✅ download_ranges configurado: {ranges} | Preciso: {use_precise}")
                     
                 except Exception as e:
                     print(f"DEBUG: ⚠️ Error configurando download_ranges: {e}")
@@ -4481,7 +4658,10 @@ class SingleDownloadTab(ctk.CTkFrame):
                 else:
                     download_section = f"*{start_time_str if start_time_str else '0'}-inf"
             
-            cli_command = f"yt-dlp -f \"{precise_selector}\" --download-sections \"{download_section}\" --force-keyframes-at-cuts \"{options['url']}\" -o \"{output_template}\""
+            # Construir string de flag
+            force_keyframe_flag = "--force-keyframes-at-cuts" if options.get("precise_clip_enabled") else ""
+            
+            cli_command = f"yt-dlp -f \"{precise_selector}\" --download-sections \"{download_section}\" {force_keyframe_flag} \"{options['url']}\" -o \"{output_template}\""
             
             print(f"\n{'='*80}")
             print(f"🔍 COMANDO EQUIVALENTE DE CLI:")
@@ -4564,6 +4744,15 @@ class SingleDownloadTab(ctk.CTkFrame):
                         return downloaded_filepath, temp_video_for_extraction
                         
                     except Exception as fragment_error:
+                        # ✅ NUEVO: Detectar si fue una cancelación
+                        # Verificamos si el evento está activo O si el mensaje de error dice "cancelada"
+                        is_cancellation = self.cancellation_event.is_set() or "cancelada" in str(fragment_error).lower()
+                        
+                        if is_cancellation:
+                            print("DEBUG: 🛑 Cancelación detectada en fragmento. Abortando sin diálogo de fallback.")
+                            raise UserCancelledError("Descarga cancelada por el usuario.")
+
+                        # Si NO fue cancelación, es un error real -> Mostrar diálogo
                         print(f"DEBUG: ❌ Error en descarga de fragmento: {fragment_error}")
                         print(f"DEBUG: 🔍 Tipo de error: {type(fragment_error).__name__}")
                         
@@ -6806,3 +6995,22 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.app.after(0, self.app.on_ghostscript_check_complete, status_info)
 
         threading.Thread(target=check_task, daemon=True).start()
+
+    def _open_ai_models_folder(self):
+        """Abre la carpeta donde se guardan los modelos de IA."""
+        if not os.path.exists(MODELS_DIR):
+            try:
+                os.makedirs(MODELS_DIR, exist_ok=True)
+            except:
+                pass
+
+        print(f"INFO: Abriendo carpeta de modelos: {MODELS_DIR}")
+        try:
+            if os.name == 'nt': # Windows
+                os.startfile(MODELS_DIR)
+            elif sys.platform == 'darwin': # Mac
+                subprocess.Popen(['open', MODELS_DIR])
+            else: # Linux
+                subprocess.Popen(['xdg-open', MODELS_DIR])
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir la carpeta:\n{e}")

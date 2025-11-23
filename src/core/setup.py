@@ -6,8 +6,10 @@ import sys
 import tarfile
 import zipfile
 import requests
+
 from packaging import version
-from main import PROJECT_ROOT, BIN_DIR, FFMPEG_BIN_DIR, REMBG_MODELS_DIR
+from main import PROJECT_ROOT, BIN_DIR, FFMPEG_BIN_DIR, REMBG_MODELS_DIR, UPSCALING_DIR
+from src.core.constants import UPSCALING_TOOLS 
 
 DENO_BIN_DIR = os.path.join(BIN_DIR, "deno")
 POPPLER_BIN_DIR = os.path.join(BIN_DIR, "poppler") 
@@ -751,3 +753,88 @@ def check_ghostscript_status(progress_callback):
     except Exception as e:
         return {"status": "error", "message": f"Error verificando Ghostscript: {e}"}
     
+def check_and_download_upscaling_tools(progress_callback):
+    """
+    Verifica y descarga las herramientas de reescalado (Real-ESRGAN y Waifu2x).
+    Se instalan en bin/models/upscaling/{herramienta}.
+    """
+    os.makedirs(UPSCALING_DIR, exist_ok=True)
+    
+    total_tools = len(UPSCALING_TOOLS)
+    processed_count = 0
+    
+    try:
+        for key, info in UPSCALING_TOOLS.items():
+            tool_name = info["name"]
+            folder_name = info["folder"]
+            exe_name = info["exe"]
+            url = info["url"]
+            
+            target_folder = os.path.join(UPSCALING_DIR, folder_name)
+            target_exe = os.path.join(target_folder, exe_name)
+            
+            # Verificar si ya existe
+            if os.path.exists(target_exe):
+                print(f"INFO: {tool_name} encontrado en {target_folder}")
+                processed_count += 1
+                continue
+                
+            # Si no existe, descargar
+            progress_msg = f"Descargando IA Upscaling ({processed_count+1}/{total_tools}): {tool_name}..."
+            print(f"INFO: {progress_msg}")
+            # Usamos un rango de progreso visual del 60% al 90%
+            progress_callback(progress_msg, 60 + (processed_count * 15))
+            
+            # Descargar ZIP
+            zip_filename = f"{folder_name}_temp.zip"
+            zip_path = os.path.join(UPSCALING_DIR, zip_filename)
+            
+            try:
+                with requests.get(url, stream=True, timeout=120) as r:
+                    r.raise_for_status()
+                    with open(zip_path, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            if chunk: f.write(chunk)
+                
+                progress_callback(f"Extrayendo {tool_name}...", 70 + (processed_count * 15))
+                
+                # Descomprimir
+                temp_extract_dir = os.path.join(UPSCALING_DIR, f"{folder_name}_temp_extract")
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(temp_extract_dir)
+                
+                # Mover contenido: Los zips suelen tener una carpeta dentro (ej: realesrgan-windows-v...)
+                # Buscamos esa carpeta interna y movemos su contenido a la carpeta destino limpia
+                extracted_items = os.listdir(temp_extract_dir)
+                source_path = temp_extract_dir
+                
+                # Si solo hay una carpeta dentro, entramos en ella
+                if len(extracted_items) == 1 and os.path.isdir(os.path.join(temp_extract_dir, extracted_items[0])):
+                    source_path = os.path.join(temp_extract_dir, extracted_items[0])
+                
+                # Mover a destino final (bin/models/upscaling/realesrgan)
+                if os.path.exists(target_folder):
+                    shutil.rmtree(target_folder)
+                shutil.move(source_path, target_folder)
+                
+                print(f"INFO: ✅ {tool_name} instalado correctamente.")
+                
+                # Limpieza
+                os.remove(zip_path)
+                if os.path.exists(temp_extract_dir):
+                    shutil.rmtree(temp_extract_dir)
+                    
+            except Exception as e:
+                print(f"ERROR descargando {tool_name}: {e}")
+                # Limpiar en caso de error
+                if os.path.exists(zip_path): os.remove(zip_path)
+                return False
+            
+            processed_count += 1
+            
+        return True
+
+    except Exception as e:
+        print(f"ERROR CRÍTICO gestionando herramientas de reescalado: {e}")
+        progress_callback(f"Error en Upscaling: {e}", -1)
+        return False

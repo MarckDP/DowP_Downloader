@@ -1,8 +1,13 @@
 import os
 import io
 import tempfile
+import threading
 import subprocess
 import pillow_avif
+
+from src.core.constants import REALESRGAN_MODELS, WAIFU2X_MODELS, REALSR_MODELS, SRMD_MODELS
+from src.core.constants import IMAGE_RASTER_FORMATS, IMAGE_INPUT_FORMATS, IMAGE_RAW_FORMATS
+from main import BIN_DIR
 
 try:
     from pdf2image import convert_from_path, pdfinfo_from_path
@@ -35,6 +40,7 @@ try:
 except ImportError:
     CAN_IMG2PDF = False
     print("ADVERTENCIA: 'img2pdf' no instalado. Conversión a PDF será más lenta")
+
 
 
 class ImageConverter:
@@ -125,36 +131,150 @@ class ImageConverter:
             print(f"ERROR INESPERADO cargando rembg: {e}")
             return False
         
-    def remove_background(self, pil_image, model_filename="u2netp.onnx", progress_callback=None):
-        """Elimina el fondo (Carga Diferida con feedback visual)."""
+    def clear_ai_sessions(self):
+        """Libera la memoria de los modelos de IA cargados."""
+        if self.rembg_sessions:
+            print(f"DEBUG: Liberando {len(self.rembg_sessions)} sesiones de IA de la memoria.")
+            self.rembg_sessions.clear()
+            
+        # Forzar al recolector de basura de Python
+        import gc
+        gc.collect()
         
-        # 1. Pasamos el callback a la función de carga
+    def _process_rmbg2(self, pil_image, model_path):
+        """
+        Ejecuta la inferencia específica para RMBG 2.0 usando ONNX Runtime.
+        Replica la lógica de normalización y redimensión a 1024x1024.
+        """
+        try:
+            import numpy as np
+            import onnxruntime as ort
+            
+            # 1. Gestión de Sesión (Caché para no cargar el modelo de 1GB cada vez)
+            if model_path not in self.rembg_sessions:
+                print(f"DEBUG: Cargando sesión ONNX para RMBG 2.0: {model_path}")
+                # Proveedores: Intenta usar CUDA (GPU) si está disponible, si no CPU
+                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+                self.rembg_sessions[model_path] = ort.InferenceSession(model_path, providers=providers)
+            
+            session = self.rembg_sessions[model_path]
+
+            # 2. Preprocesamiento
+            # Convertir a RGB y guardar tamaño original
+            original_image = pil_image.convert("RGB")
+            orig_w, orig_h = original_image.size
+            
+            # Redimensionar a 1024x1024 (Requisito estricto de RMBG 2.0)
+            img_resized = original_image.resize((1024, 1024), Image.Resampling.BILINEAR)
+            
+            # Convertir a Numpy y Normalizar (0-1)
+            img_np = np.array(img_resized).astype(np.float32) / 255.0
+            
+            # Estandarización (ImageNet mean/std)
+            # IMPORTANTE: Definir explícitamente como float32 para evitar que Numpy use float64 (double)
+            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+            std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+            
+            img_np = (img_np - mean) / std
+            
+            # Asegurar tipo final float32 antes de enviar al modelo
+            img_np = img_np.astype(np.float32)
+            
+            # Transponer a (Batch, Channel, Height, Width) -> (1, 3, 1024, 1024)
+            img_np = img_np.transpose(2, 0, 1)
+            img_np = np.expand_dims(img_np, 0)
+
+            # 3. Inferencia
+            input_name = session.get_inputs()[0].name
+            result = session.run(None, {input_name: img_np})
+            mask = result[0][0, 0] # Obtener la máscara (quitando batch y channel)
+
+            # 4. Postprocesamiento
+            # Normalizar máscara a 0-255 y convertir a entero
+            mask = (mask * 255).clip(0, 255).astype(np.uint8)
+            
+            # Convertir máscara de numpy a Imagen PIL
+            mask_img = Image.fromarray(mask, mode='L')
+            
+            # Redimensionar máscara al tamaño ORIGINAL de la imagen
+            mask_img = mask_img.resize((orig_w, orig_h), Image.Resampling.LANCZOS)
+
+            # 5. Aplicar al canal Alfa
+            # Si la imagen original no tiene alfa, agregarlo
+            final_image = pil_image.convert("RGBA")
+            final_image.putalpha(mask_img)
+            
+            return final_image
+
+        except ImportError:
+            print("ERROR: Faltan librerías 'numpy' o 'onnxruntime' para RMBG 2.0")
+            return pil_image
+        except Exception as e:
+            print(f"ERROR en inferencia RMBG 2.0: {e}")
+            return pil_image
+        
+    def remove_background(self, pil_image, model_filename="u2netp.onnx", progress_callback=None):
+        """Elimina el fondo. Soporta 'rembg' estándar y 'RMBG 2.0' nativo."""
+        
+        from main import MODELS_DIR
+        
+        # --- DETECCIÓN DE RMBG 2.0 ---
+        rmbg2_names = [
+            "bria-rmbg-2.0.onnx",
+            "model.onnx", "model_bnb4.onnx", "model_fp16.onnx", 
+            "model_int8.onnx", "model_quantized.onnx", "model_q4.onnx",
+            "model_q4f16.onnx", "model_uint8.onnx"
+        ]
+        
+        rmbg2_path = os.path.join(MODELS_DIR, "rmbg2", model_filename)
+
+        if model_filename in rmbg2_names or os.path.exists(rmbg2_path):
+            if not os.path.exists(rmbg2_path):
+                print(f"ERROR: El modelo RMBG 2.0 no se encuentra en: {rmbg2_path}")
+                return pil_image
+            return self._process_rmbg2(pil_image, rmbg2_path)
+
+        # --- CARGA LAZY DE REMBG ---
         if not self._load_rembg_lazy(progress_callback):
             print("ERROR: La librería de IA no pudo cargarse.")
             return pil_image
 
         try:
-            # --- Mapeo de nombres (Igual que antes) ---
+            # 🔥 NUEVO: Mapeo completo de modelos BiRefNet
+            birefnet_mapping = {
+                # Modelos Generales
+                "birefnet-general.onnx": "birefnet-general",
+                "birefnet-general-lite.onnx": "birefnet-general-lite",
+                
+                # Modelos Especializados
+                "birefnet-portrait.onnx": "birefnet-portrait",
+                "birefnet-dis.onnx": "birefnet-dis",
+                "birefnet-cod.onnx": "birefnet-cod",
+                "birefnet-hrsod.onnx": "birefnet-hrsod",
+                
+                # Modelos Masivos y Alta Resolución
+                "birefnet-massive.onnx": "birefnet-massive",
+                "birefnet-hr-general.onnx": "birefnet-hr-general",
+                "birefnet-hr-matting.onnx": "birefnet-hr-matting"
+            }
+            
+            # Determinar el nombre de sesión
             session_name = None
-            if "BiRefNet-general-epoch_244" in model_filename:
-                session_name = "birefnet-general"
-            elif "BiRefNet-general-bb_swin_v1_tiny" in model_filename:
-                session_name = "birefnet-general-lite"
-            elif "BiRefNet-portrait" in model_filename:
-                session_name = "birefnet-portrait"
+            
+            # ✅ CORREGIDO: Primero buscar en el mapeo de BiRefNet
+            if model_filename in birefnet_mapping:
+                session_name = birefnet_mapping[model_filename]
             else:
+                # Fallback: usar el nombre sin extensión (para u2net, isnet, etc.)
                 session_name = os.path.splitext(model_filename)[0]
 
-            print(f"DEBUG: Usando sesión IA: '{session_name}'")
+            print(f"DEBUG: Usando sesión IA (rembg): '{session_name}'")
 
-            # 2. Crear/Recuperar sesión usando el módulo cargado en self.rembg_module
+            # Crear o reutilizar sesión en caché
             if session_name not in self.rembg_sessions:
-                # Usamos self.rembg_module en lugar del import global
                 self.rembg_sessions[session_name] = self.rembg_module.new_session(model_name=session_name)
             
             session = self.rembg_sessions[session_name]
-            
-            # 3. Ejecutar usando el módulo cargado
             output_image = self.rembg_module.remove(pil_image, session=session)
             
             return output_image
@@ -163,7 +283,7 @@ class ImageConverter:
             print(f"ERROR al procesar IA ({model_filename}): {e}")
             return pil_image
     
-    def convert_file(self, input_path, output_path, options, page_number=None, progress_callback=None):
+    def convert_file(self, input_path, output_path, options, page_number=None, progress_callback=None, cancellation_event=None):
         """
         Convierte un archivo de imagen al formato especificado.
         
@@ -222,6 +342,8 @@ class ImageConverter:
                     target_size = (int(target_width), int(target_height))
             
             # 1. Cargar imagen
+            if cancellation_event and cancellation_event.is_set(): raise UserCancelledError("Cancelado por usuario") # ✅ CHEQUEO
+            
             pil_image = self._load_image(input_path, input_ext, target_size, maintain_aspect, options, page_number=page_number)
             
             if not pil_image:
@@ -230,12 +352,16 @@ class ImageConverter:
             # Reporte: Cargado (30%)
             if progress_callback: progress_callback(30)
             
+            if cancellation_event and cancellation_event.is_set(): raise UserCancelledError("Cancelado por usuario") # ✅ CHEQUEO
+
             # 2. Resize raster
             if resize_enabled and target_size and input_ext not in self.VECTOR_FORMATS:
                 pil_image = self._resize_raster_image(pil_image, target_size, maintain_aspect, options)
             
             # Reporte: Resize listo (40%)
             if progress_callback: progress_callback(40)
+
+            if cancellation_event and cancellation_event.is_set(): raise UserCancelledError("Cancelado por usuario") # ✅ CHEQUEO
 
             # 2.5 Eliminar fondo con IA
             if options.get("rembg_enabled", False):
@@ -251,6 +377,20 @@ class ImageConverter:
                 
                 # Reporte: IA Terminada (80%)
                 if progress_callback: progress_callback(80)
+            
+            if cancellation_event and cancellation_event.is_set(): raise UserCancelledError("Cancelado por usuario") # ✅ CHEQUEO
+
+            # --- 2.6 REESCALADO CON IA (NUEVO BLOQUE) ---
+            if options.get("upscale_enabled", False):
+                print("INFO: Iniciando reescalado con IA...")
+                if progress_callback: progress_callback(50, f"Reescalando ({options['upscale_engine']})...")
+                
+                # ✅ CAMBIO: Pasamos el evento de cancelación al upscaler
+                pil_image = self._upscale_image_ai(pil_image, options, cancellation_event)
+                
+                if progress_callback: progress_callback(60)
+
+            if cancellation_event and cancellation_event.is_set(): raise UserCancelledError("Cancelado por usuario") # ✅ CHEQUEO
             
             # 3. Canvas
             canvas_enabled = options.get("canvas_enabled", False)
@@ -296,9 +436,65 @@ class ImageConverter:
             
             return True
             
+        except UserCancelledError:
+            print(f"INFO: Conversión cancelada para {input_path}")
+            return False # Retorna falso para detener
         except Exception as e:
             print(f"ERROR: Fallo la conversión de {input_path}: {e}")
             return False
+        
+    def _load_raw_with_rawpy(self, filepath):
+        """
+        Revela archivos RAW usando rawpy (LibRaw).
+        ✅ CORREGIDO: Gamma y espacio de color correctos para PNG.
+        """
+        try:
+            import rawpy
+            import numpy as np
+            
+            print(f"INFO: Revelando RAW de alta calidad: {os.path.basename(filepath)}")
+            
+            with rawpy.imread(filepath) as raw:
+                # 🎨 Configuración CORREGIDA (sRGB + Gamma 2.2)
+                rgb = raw.postprocess(
+                    use_camera_wb=True,           # Balance de blancos original
+                    half_size=False,              # Resolución completa
+                    no_auto_bright=False,         # ✅ Auto brillo activado
+                    output_bps=8,                 # ✅ 8 bits (suficiente para PNG)
+                    output_color=rawpy.ColorSpace.sRGB,  # ✅ sRGB (estándar web/PNG)
+                    demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD,  # Balance calidad/velocidad
+                    use_auto_wb=False,            # No cambiar WB
+                    gamma=(2.222, 4.5),           # ✅ Gamma sRGB estándar
+                    bright=1.0,                   # Brillo 100%
+                    highlight_mode=rawpy.HighlightMode.Blend  # ✅ Blend highlights (más natural)
+                )
+            
+            # Convertir a PIL
+            img = Image.fromarray(rgb)
+            
+            # 🔄 Aplicar rotación EXIF
+            try:
+                from PIL import ImageOps
+                img = ImageOps.exif_transpose(img)
+            except:
+                pass
+            
+            print(f"✅ RAW revelado: {img.size[0]}x{img.size[1]} píxeles")
+            return img
+            
+        except ImportError:
+            raise Exception(
+                "❌ rawpy no está instalado.\n\n"
+                "Ejecuta en tu terminal:\n"
+                "pip install rawpy imageio\n\n"
+                "O descarga desde: https://pypi.org/project/rawpy/"
+            )
+        except rawpy.LibRawFileUnsupportedError:
+            raise Exception(f"Formato RAW no soportado por LibRaw: {os.path.splitext(filepath)[1]}")
+        except rawpy.LibRawIOError:
+            raise Exception("Archivo RAW corrupto o inaccesible")
+        except Exception as e:
+            raise Exception(f"Error al revelar RAW: {e}")
     
     def _load_image(self, filepath, ext, target_size=None, maintain_aspect=True, options=None, page_number=None):
         """
@@ -314,8 +510,12 @@ class ImageConverter:
             options = {}
             
         try:
+            # --- NUEVO: RAW DE CÁMARA ---
+            if ext.upper() in IMAGE_RAW_FORMATS:
+                return self._load_raw_with_rawpy(filepath) 
+
             # --- RASTER: Carga directa con Pillow ---
-            if ext in self.RASTER_FORMATS or ext in self.OTHER_FORMATS:
+            elif ext in self.RASTER_FORMATS or ext in self.OTHER_FORMATS:
                 try:
                     # 🔧 NUEVO: Aumentar límite de texto en PNG para archivos con muchos metadatos
                     from PIL import PngImagePlugin
@@ -847,28 +1047,46 @@ class ImageConverter:
     # ========================================================================
     
     def _save_as_png(self, img, output_path, options):
-        """Guarda como PNG con opciones."""
-        # Mantener transparencia si está activado
+        """Guarda como PNG con opciones optimizadas para imágenes grandes."""
+        
+        # 1. Gestionar transparencia
         if options.get("png_transparency", True) and img.mode in ("RGBA", "LA", "PA"):
             save_img = img
         else:
             save_img = img.convert("RGB")
         
-        # Nivel de compresión (0-9, donde 9 es máxima compresión)
+        # 2. Obtener nivel de compresión del usuario
         compression = options.get("png_compression", 6)
         
-        # 🔧 MODIFICADO: Guardar con flush explícito
-        save_img.save(output_path, "PNG", compress_level=compression, optimize=True)
+        # 3. Lógica inteligente para imágenes gigantes (Upscaling)
+        width, height = save_img.size
+        total_pixels = width * height
+        is_huge_image = total_pixels > (3840 * 2160) # Más grande que 4K
         
-        # 🔧 NUEVO: Re-abrir y re-guardar para regenerar metadatos
+        use_optimize = True
+        
+        if is_huge_image:
+            print(f"DEBUG: Imagen gigante detectada ({width}x{height}). Optimizando velocidad de guardado...")
+            # Desactivar optimización extra de Pillow (es muy lenta en 8K)
+            use_optimize = False 
+            # Si la compresión es muy alta, bajarla un poco para no congelar la app
+            if compression > 3:
+                print(f"DEBUG: Reduciendo compresión de {compression} a 3 para velocidad.")
+                compression = 3
+
+        # 4. Guardar UNA SOLA VEZ
+        # Eliminamos el bloque try/except de "regeneración" porque save_img.save ya escribe los metadatos básicos
+        # y la doble escritura es lo que mata el rendimiento.
         try:
-            temp_img = Image.open(output_path)
-            temp_img.load()  # Cargar completamente
-            temp_img.save(output_path, "PNG", compress_level=compression, optimize=True)
-            temp_img.close()
-            print(f"✅ PNG regenerado: {os.path.basename(output_path)}")
+            save_img.save(output_path, "PNG", compress_level=compression, optimize=use_optimize)
+            
+            # Flush explícito para asegurar escritura
+            with open(output_path, 'r+b') as f:
+                f.flush()
+                os.fsync(f.fileno())
+                
         except Exception as e:
-            print(f"⚠️ Advertencia al regenerar PNG: {e}")
+            print(f"ERROR al guardar PNG: {e}")
     
     def _save_as_jpg(self, img, output_path, options):
         """Guarda como JPG con opciones."""
@@ -1195,35 +1413,30 @@ class ImageConverter:
     def _apply_canvas_by_option(self, img, canvas_option, options):
         """
         Aplica canvas según la opción seleccionada.
-        
-        Args:
-            img: PIL.Image - Imagen original
-            canvas_option: str - Opción seleccionada ("Añadir Margen Externo", preset, etc.)
-            options: dict - Opciones adicionales
-        
-        Returns:
-            PIL.Image - Imagen con canvas aplicado
+        ✅ CORREGIDO: Mantiene transparencia correctamente.
         """
         from PIL import Image as PILImage
         from src.core.constants import CANVAS_PRESET_SIZES
         
         img_width, img_height = img.size
         
+        # ✅ CRÍTICO: Asegurar que la imagen esté en RGBA antes de cualquier cosa
+        if img.mode != "RGBA":
+            print(f"DEBUG: Convirtiendo imagen de {img.mode} a RGBA para canvas")
+            img = img.convert("RGBA")
+        
         # Determinar el tamaño del canvas según la opción
         if canvas_option == "Añadir Margen Externo":
-            # Canvas = imagen + margen
             margin = options.get("canvas_margin", 100)
             canvas_width = img_width + (margin * 2)
             canvas_height = img_height + (margin * 2)
             print(f"Margen Externo: Canvas expandido a {canvas_width}×{canvas_height} (margen: {margin}px)")
         
         elif canvas_option == "Añadir Margen Interno":
-            # Canvas = imagen, imagen se reduce
             margin = options.get("canvas_margin", 100)
             canvas_width = img_width
             canvas_height = img_height
             
-            # Reducir la imagen
             new_width = max(1, img_width - (margin * 2))
             new_height = max(1, img_height - (margin * 2))
             
@@ -1235,21 +1448,18 @@ class ImageConverter:
                 print(f"ADVERTENCIA: Margen interno ({margin}px) demasiado grande, imagen no reducida")
         
         elif canvas_option in CANVAS_PRESET_SIZES:
-            # Preset fijo (Instagram, YouTube, etc.)
             canvas_width, canvas_height = CANVAS_PRESET_SIZES[canvas_option]
             print(f"Preset aplicado: Canvas {canvas_width}×{canvas_height}")
         
         elif canvas_option == "Personalizado...":
-            # Dimensiones personalizadas
             canvas_width = int(options.get("canvas_width", img_width))
             canvas_height = int(options.get("canvas_height", img_height))
             print(f"Canvas personalizado: {canvas_width}×{canvas_height}")
         
         else:
-            # "Sin ajuste" o desconocido
             return img
         
-        # Verificar si la imagen excede el canvas (solo para presets y personalizado)
+        # 🔥 Verificar si la imagen excede el canvas (solo para presets y personalizado)
         if canvas_option not in ["Añadir Margen Externo", "Añadir Margen Interno"]:
             exceeds_canvas = img_width > canvas_width or img_height > canvas_height
             
@@ -1262,8 +1472,19 @@ class ImageConverter:
                         f"Activa 'Cambiar Tamaño' para escalar primero."
                     )
                 
+                elif overflow_mode == "Reducir hasta que quepa":
+                    scale_w = canvas_width / img_width
+                    scale_h = canvas_height / img_height
+                    scale = min(scale_w, scale_h)
+                    
+                    new_w = int(img_width * scale)
+                    new_h = int(img_height * scale)
+                    
+                    img = img.resize((new_w, new_h), PILImage.Resampling.LANCZOS)
+                    img_width, img_height = new_w, new_h
+                    print(f"Imagen escalada manteniendo aspecto: {new_w}×{new_h}")
+                
                 elif overflow_mode in ["Recortar al canvas", "Centrar (puede recortar)"]:
-                    # Recortar la imagen al tamaño del canvas (centrado)
                     left = max(0, (img_width - canvas_width) // 2)
                     top = max(0, (img_height - canvas_height) // 2)
                     right = left + canvas_width
@@ -1273,23 +1494,20 @@ class ImageConverter:
                     img_width, img_height = img.size
                     print(f"Imagen recortada a {img_width}×{img_height} para ajustar al canvas")
         
-        # Crear canvas con fondo apropiado
-        if img.mode in ("RGBA", "LA", "PA"):
-            canvas = PILImage.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
-        else:
-            canvas = PILImage.new("RGB", (canvas_width, canvas_height), (255, 255, 255))
+        # ✅ CORRECCIÓN CRÍTICA: Crear canvas TRANSPARENTE siempre que la imagen sea RGBA
+        print(f"DEBUG: Creando canvas RGBA transparente de {canvas_width}×{canvas_height}")
+        canvas = PILImage.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
         
         # Calcular posición
         position = options.get("canvas_position", "Centro")
         x, y = self._calculate_canvas_position(canvas_width, canvas_height, img_width, img_height, position)
         
-        # Pegar imagen en el canvas
-        if img.mode == "RGBA":
-            canvas.paste(img, (x, y), img)
-        else:
-            canvas.paste(img, (x, y))
+        # Pegar imagen en el canvas usando el canal alpha
+        print(f"DEBUG: Pegando imagen RGBA en posición ({x}, {y})")
+        canvas.paste(img, (x, y), img)  # El tercer parámetro usa el canal alpha de img como máscara
         
         print(f"Canvas final: {canvas_width}×{canvas_height} con imagen {img_width}×{img_height} en posición {position}")
+        print(f"✅ Modo del canvas resultante: {canvas.mode}")
         
         return canvas
 
@@ -1674,6 +1892,7 @@ class ImageConverter:
     def create_video_from_images(self, file_data_list, output_path, options, progress_callback, cancellation_event):
         """
         Motor principal para convertir una lista de imágenes a un video.
+        ✅ VERSIÓN BLINDADA: Limpieza garantizada y cancelación instantánea.
         """
         if not self.ffmpeg_processor:
             raise Exception("FFmpeg processor no está inicializado.")
@@ -1696,19 +1915,17 @@ class ImageConverter:
             
             for i, (filepath, page_num) in enumerate(file_data_list):
                 
-                # Verificar cancelación
+                # ✅ 1. CHEQUEO DE CANCELACIÓN (Dentro del bucle)
                 if cancellation_event.is_set():
+                    print("DEBUG: Cancelación detectada durante generación de frames.")
                     raise UserCancelledError("Proceso cancelado por el usuario.")
                 
-                # --- LÓGICA DE PROGRESO MEJORADA ---
-                # Calculamos el progreso base del archivo actual
+                # --- LÓGICA DE PROGRESO ---
                 base_progress = (i / total_files) * 100
-                # Cuánto "vale" este archivo en el total (ej: si son 2 archivos, cada uno vale 50%)
                 step_size = 100 / total_files
                 
-                # Paso 1: Inicio (10% del paso)
                 current_pct = base_progress + (step_size * 0.1)
-                progress_callback("Standardizing", current_pct, f"Cargando: {os.path.basename(filepath)}")
+                progress_callback("Standardizing", current_pct, f"Procesando: {os.path.basename(filepath)}")
                 
                 try:
                     # 2.2. Crear el fondo
@@ -1719,25 +1936,27 @@ class ImageConverter:
                                                 page_number=page_num, options=options)
                     
                     if not fg_image:
-                        print(f"ADVERTENCIA: No se pudo cargar {filepath}, omitiendo frame.")
                         continue
 
                     # --- IA REMBG ---
                     if options.get("rembg_enabled", False):
-                        # Paso 2: Antes de la IA (30% del paso)
+                        # ✅ 2. CHEQUEO DE CANCELACIÓN (Antes de IA pesada)
+                        if cancellation_event.is_set(): raise UserCancelledError("Cancelado")
+
                         current_pct = base_progress + (step_size * 0.3)
                         model_name = options.get("rembg_model", "u2netp")
                         
-                        progress_callback("Standardizing", current_pct, f"🤖 IA ({model_name}): {os.path.basename(filepath)}")
+                        progress_callback("Standardizing", current_pct, f"🤖 IA: {os.path.basename(filepath)}")
                         
-                        # Adaptador: creamos una función temporal que coincida con lo que espera _load_rembg_lazy
-                        # (pct, msg) -> llama al callback original de video
+                        # Adaptador de callback
                         def temp_callback(p, m):
                             progress_callback("Standardizing", current_pct, m)
 
-                        fg_image = self.remove_background(fg_image, model_name, progress_callback=temp_callback)
+                        fg_image = self.remove_background(pil_image=fg_image, model_filename=model_name, progress_callback=temp_callback)
                     
-                    # Paso 3: Post-IA / Escalado (80% del paso)
+                    # ✅ 3. CHEQUEO DE CANCELACIÓN (Después de IA)
+                    if cancellation_event.is_set(): raise UserCancelledError("Cancelado")
+
                     current_pct = base_progress + (step_size * 0.8)
                     progress_callback("Standardizing", current_pct, f"Componiendo: {os.path.basename(filepath)}")
                         
@@ -1751,14 +1970,19 @@ class ImageConverter:
                     frame_path = os.path.join(temp_frame_dir, f"frame_{i:06d}.png")
                     final_frame.save(frame_path, "PNG")
                     
+                except UserCancelledError:
+                    raise # Re-lanzar para salir del bucle inmediatamente
                 except Exception as e:
                     print(f"ERROR: Falló frame {filepath}: {e}")
                     continue
             
             # --- FASE B: CODIFICACIÓN DE VIDEO (FFMPEG) ---
-            print("INFO: Fase A (Estandarización) completada. Iniciando Fase B (Codificación FFmpeg)...")
             
-            # 3. Calcular FPS de entrada
+            # ✅ 4. CHEQUEO DE CANCELACIÓN (Antes de FFmpeg)
+            if cancellation_event.is_set(): raise UserCancelledError("Cancelado antes de codificar.")
+
+            print("INFO: Fase A completada. Iniciando FFmpeg...")
+            
             try:
                 output_fps = int(options.get("video_fps", "30"))
                 duration_frames = int(options.get("video_frame_duration", "3"))
@@ -1766,44 +1990,51 @@ class ImageConverter:
             except ValueError:
                 raise Exception("FPS y Duración deben ser números válidos")
                 
-            # 4. Obtener parámetros de FFmpeg
             pre_params, final_params = self._build_ffmpeg_video_options(options, input_fps)
             
-            # 5. Definir el patrón de entrada
             input_pattern = os.path.join(temp_frame_dir, "frame_%06d.png")
             
-            # 6. Construir las opciones para execute_recode
             ffmpeg_options = {
-                "input_file": input_pattern,  # Entrada de FFmpeg
-                "output_file": output_path,   # Salida de FFmpeg
-                "duration": total_files / input_fps, # Duración total en segundos
+                "input_file": input_pattern,
+                "output_file": output_path,
+                "duration": total_files / input_fps,
                 "ffmpeg_params": final_params,
                 "pre_params": pre_params,
-                "mode": "Video+Audio" # Modo genérico para mapeo
+                "mode": "Video+Audio"
             }
             
-            # 7. Ejecutar FFmpeg
+            # 7. Ejecutar FFmpeg (Pasamos el evento de cancelación)
             self.ffmpeg_processor.execute_recode(
                 ffmpeg_options,
-                lambda p, m: progress_callback("Encoding", p, m), # Callback de progreso Fase B
-                cancellation_event
+                lambda p, m: progress_callback("Encoding", p, m),
+                cancellation_event # ✅ FFmpegProcessor se encargará de matar el proceso si esto se activa
             )
             
-            # 8. Si llegamos aquí, fue un éxito
             return output_path
         
-        except UserCancelledError as e: # <-- Capturar el error específico del try externo
-            print(f"DEBUG: {e}")
-            raise e # Re-lanzarlo para que el hilo de la UI lo maneje
-        
+        except UserCancelledError as e:
+            print(f"DEBUG: Cancelación capturada en create_video_from_images: {e}")
+            raise e # Re-lanzar para la UI
+            
         finally:
-            # 9. Limpiar la carpeta temporal de frames
+            # ✅ LIMPIEZA GARANTIZADA
+            # Este bloque se ejecuta SIEMPRE: si termina bien, si falla, o si se cancela.
             if temp_frame_dir and os.path.exists(temp_frame_dir):
                 try:
-                    shutil.rmtree(temp_frame_dir)
-                    print(f"INFO: Carpeta temporal de frames eliminada: {temp_frame_dir}")
+                    print(f"INFO: Limpiando carpeta temporal de frames: {temp_frame_dir}")
+                    shutil.rmtree(temp_frame_dir) # Borra la carpeta y todo su contenido
                 except Exception as e:
-                    print(f"ADVERTENCIA: No se pudo eliminar la carpeta temporal: {e}")
+                    print(f"ADVERTENCIA: No se pudo eliminar carpeta temporal inmediatamente: {e}")
+                    # Intento secundario asíncrono (para Windows a veces bloquea archivos un segundo)
+                    def retry_delete():
+                        import time
+                        time.sleep(2)
+                        try:
+                            if os.path.exists(temp_frame_dir):
+                                shutil.rmtree(temp_frame_dir)
+                                print("INFO: Limpieza diferida completada.")
+                        except: pass
+                    threading.Thread(target=retry_delete, daemon=True).start()
 
     def _save_as_avif(self, img, output_path, options):
         """Guarda como AVIF con opciones avanzadas."""
@@ -1832,3 +2063,169 @@ class ImageConverter:
                 os.fsync(f.fileno())
         except Exception:
             pass
+    
+    def _upscale_image_ai(self, img, options, cancellation_event=None):
+        """
+        Ejecuta Real-ESRGAN o Waifu2x nativamente.
+        Versión blindada contra errores de variables no definidas.
+        """
+        import subprocess
+        import tempfile
+        
+        # 1. Inicializar variables para evitar errores en 'finally'
+        temp_input_path = None
+        temp_output_path = None
+        
+        try:
+            engine = options.get("upscale_engine")
+            friendly_model = options.get("upscale_model_friendly")
+            
+            # Obtener el nombre interno del modelo
+            if engine == "Real-ESRGAN":
+                model_info = REALESRGAN_MODELS.get(friendly_model, {})
+                internal_model_name = model_info.get("model", "realesr-animevideov3")
+            elif "RealSR" in engine:
+                model_info = REALSR_MODELS.get(friendly_model, {})
+                internal_model_name = model_info.get("model", "models-DF2K")
+            elif "SRMD" in engine: # <-- NUEVO
+                model_info = SRMD_MODELS.get(friendly_model, {})
+                internal_model_name = model_info.get("model", "models-srmd")
+            else:
+                model_info = WAIFU2X_MODELS.get(friendly_model, {})
+                internal_model_name = model_info.get("model", "models-cunet")
+
+            scale = options.get("upscale_scale", "2")
+            tile_size = options.get("upscale_tile", "0") or "0"
+            denoise = options.get("upscale_denoise", "0")
+            use_tta = options.get("upscale_tta", False)
+            
+            # 2. Crear archivos temporales
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_in:
+                temp_input_path = temp_in.name
+            
+            img.save(temp_input_path, "PNG")
+            temp_output_path = temp_input_path.replace(".png", "_out.png")
+            
+            models_root = os.path.join(BIN_DIR, "models", "upscaling")
+            cmd = []
+            
+            if engine == "Real-ESRGAN":
+                exe_path = os.path.join(models_root, "realesrgan", "realesrgan-ncnn-vulkan.exe")
+                
+                cmd = [
+                    exe_path,
+                    "-i", temp_input_path,
+                    "-o", temp_output_path,
+                    "-n", internal_model_name,
+                    "-s", scale,
+                    "-t", tile_size,
+                    "-f", "png"
+                ]
+                if use_tta: cmd.append("-x")
+
+            elif "RealSR" in engine:
+                exe_path = os.path.join(models_root, "realsr", "realsr-ncnn-vulkan.exe")
+                
+                full_model_path = os.path.join(models_root, "realsr", internal_model_name)
+                
+                # SEGURIDAD: RealSR solo soporta escala 4x. 
+                # Si la UI envió otro valor por error, lo forzamos a 4 para evitar imagen rota.
+                forced_scale = "4"
+                
+                cmd = [
+                    exe_path,
+                    "-i", temp_input_path,
+                    "-o", temp_output_path,
+                    "-m", full_model_path,
+                    "-s", forced_scale, # Usamos la escala forzada
+                    "-t", tile_size,
+                    "-f", "png"
+                ]
+                if use_tta: cmd.append("-x")
+
+            elif "SRMD" in engine: # <-- NUEVO BLOQUE COMPLETO
+                exe_path = os.path.join(models_root, "srmd", "srmd-ncnn-vulkan.exe")
+                full_model_path = os.path.join(models_root, "srmd", internal_model_name)
+                
+                cmd = [
+                    exe_path,
+                    "-i", temp_input_path,
+                    "-o", temp_output_path,
+                    "-m", full_model_path,
+                    "-n", denoise, # Usa el valor del menú (-1 a 3)
+                    "-s", scale,
+                    "-t", tile_size,
+                    "-f", "png"
+                ]
+                if use_tta: cmd.append("-x")
+                    
+            elif engine == "Waifu2x":
+                exe_path = os.path.join(models_root, "waifu2x", "waifu2x-ncnn-vulkan.exe")
+                full_model_path = os.path.join(models_root, "waifu2x", internal_model_name)
+                
+                cmd = [
+                    exe_path,
+                    "-i", temp_input_path,
+                    "-o", temp_output_path,
+                    "-m", full_model_path,
+                    "-n", denoise,
+                    "-s", scale,
+                    "-t", tile_size,
+                    "-f", "png"
+                ]
+                if use_tta: cmd.append("-x")
+
+            # 3. Ejecutar
+            if not os.path.exists(exe_path):
+                print(f"ERROR: No se encontró el ejecutable: {exe_path}")
+                return img
+
+            print(f"DEBUG: Ejecutando Upscale ({engine}): {' '.join(cmd)}")
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            
+            # ✅ CAMBIO: Usar Popen para poder cancelar
+            process = subprocess.Popen(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE, 
+                text=True, 
+                creationflags=creationflags
+            )
+            
+            # Bucle de espera que vigila el botón de cancelar
+            while process.poll() is None:
+                if cancellation_event and cancellation_event.is_set():
+                    print("DEBUG: Cancelación detectada durante Upscaling. Matando proceso...")
+                    process.kill()
+                    raise UserCancelledError("Reescalado cancelado por usuario")
+                
+                # Esperar un poco para no saturar CPU
+                import time
+                time.sleep(0.1)
+            
+            # Verificar resultado
+            if process.returncode != 0 or not os.path.exists(temp_output_path):
+                stderr = process.stderr.read()
+                print(f"ERROR Upscaling CLI: {stderr}")
+                return img
+
+            # 4. Cargar resultado
+            upscaled_img = Image.open(temp_output_path)
+            upscaled_img.load()
+            
+            print(f"INFO: Reescalado finalizado. Tamaño: {upscaled_img.size}")
+            return upscaled_img
+
+        except Exception as e:
+            print(f"ERROR CRÍTICO en reescalado: {e}")
+            return img
+            
+        finally:
+            # Limpieza SEGURA: Verificar que la variable no sea None antes de usarla
+            if temp_input_path and os.path.exists(temp_input_path):
+                try: os.remove(temp_input_path) 
+                except: pass
+                
+            if temp_output_path and os.path.exists(temp_output_path):
+                try: os.remove(temp_output_path) 
+                except: pass

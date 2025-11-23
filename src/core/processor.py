@@ -90,16 +90,17 @@ CODEC_PROFILES = {
         },
         "H.264 (NVIDIA NVENC)": {
             "h264_nvenc": {
-                "Calidad Alta (CQP 18)": ['-c:v', 'h264_nvenc', '-preset', 'p7', '-rc', 'vbr', '-cq', '18'],
-                "Calidad Media (CQP 23)": ['-c:v', 'h264_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', '23'],
+                # AÑADIDO: '-pix_fmt', 'yuv420p' al final de las listas
+                "Calidad Alta (CQP 18)": ['-c:v', 'h264_nvenc', '-preset', 'p7', '-rc', 'vbr', '-cq', '18', '-pix_fmt', 'yuv420p'],
+                "Calidad Media (CQP 23)": ['-c:v', 'h264_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', '23', '-pix_fmt', 'yuv420p'],
                 "Bitrate Personalizado (VBR)": "CUSTOM_BITRATE_VBR",
                 "Bitrate Personalizado (CBR)": "CUSTOM_BITRATE_CBR"
             }, "container": ".mp4"
         },
         "H.265/HEVC (NVIDIA NVENC)": {
             "hevc_nvenc": {
-                "Calidad Alta (CQP 20)": ['-c:v', 'hevc_nvenc', '-preset', 'p7', '-rc', 'vbr', '-cq', '20'],
-                "Calidad Media (CQP 24)": ['-c:v', 'hevc_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', '24'],
+                "Calidad Alta (CQP 20)": ['-c:v', 'hevc_nvenc', '-preset', 'p7', '-rc', 'vbr', '-cq', '20', '-pix_fmt', 'yuv420p'],
+                "Calidad Media (CQP 24)": ['-c:v', 'hevc_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', '24', '-pix_fmt', 'yuv420p'],
                 "Bitrate Personalizado (VBR)": "CUSTOM_BITRATE_VBR",
                 "Bitrate Personalizado (CBR)": "CUSTOM_BITRATE_CBR"
             }, "container": ".mp4"
@@ -114,16 +115,17 @@ CODEC_PROFILES = {
         },
         "H.264 (AMD AMF)": {
             "h264_amf": {
-                "Alta Calidad": ['-c:v', 'h264_amf', '-quality', 'quality', '-rc', 'cqp', '-qp_i', '18', '-qp_p', '18'],
-                "Calidad Balanceada": ['-c:v', 'h264_amf', '-quality', 'balanced', '-rc', 'cqp', '-qp_i', '23', '-qp_p', '23'],
+                # AÑADIDO: '-pix_fmt', 'yuv420p'
+                "Alta Calidad": ['-c:v', 'h264_amf', '-quality', 'quality', '-rc', 'cqp', '-qp_i', '18', '-qp_p', '18', '-pix_fmt', 'yuv420p'],
+                "Calidad Balanceada": ['-c:v', 'h264_amf', '-quality', 'balanced', '-rc', 'cqp', '-qp_i', '23', '-qp_p', '23', '-pix_fmt', 'yuv420p'],
                 "Bitrate Personalizado (VBR)": "CUSTOM_BITRATE_VBR",
                 "Bitrate Personalizado (CBR)": "CUSTOM_BITRATE_CBR"
             }, "container": ".mp4"
         },
-        "H.265/HEVC (AMD AMF)": {
-            "hevc_amf": {
-                "Alta Calidad": ['-c:v', 'hevc_amf', '-quality', 'quality', '-rc', 'cqp', '-qp_i', '20', '-qp_p', '20'],
-                "Calidad Balanceada": ['-c:v', 'hevc_amf', '-quality', 'balanced', '-rc', 'cqp', '-qp_i', '24', '-qp_p', '24'],
+        "H.265/HEVC (Intel QSV)": {
+            "hevc_qsv": {
+                "Alta Calidad": ['-c:v', 'hevc_qsv', '-preset', 'veryslow', '-global_quality', '20', '-pix_fmt', 'yuv420p'],
+                "Calidad Media": ['-c:v', 'hevc_qsv', '-preset', 'medium', '-global_quality', '24', '-pix_fmt', 'yuv420p'],
                 "Bitrate Personalizado (VBR)": "CUSTOM_BITRATE_VBR",
                 "Bitrate Personalizado (CBR)": "CUSTOM_BITRATE_CBR"
             }, "container": ".mp4"
@@ -138,8 +140,9 @@ CODEC_PROFILES = {
         },
         "H.264 (Intel QSV)": {
             "h264_qsv": {
-                "Alta Calidad": ['-c:v', 'h264_qsv', '-preset', 'veryslow', '-global_quality', '18'],
-                "Calidad Media": ['-c:v', 'h264_qsv', '-preset', 'medium', '-global_quality', '23'],
+                # AÑADIDO: '-pix_fmt', 'yuv420p'
+                "Alta Calidad": ['-c:v', 'h264_qsv', '-preset', 'veryslow', '-global_quality', '18', '-pix_fmt', 'yuv420p'],
+                "Calidad Media": ['-c:v', 'h264_qsv', '-preset', 'medium', '-global_quality', '23', '-pix_fmt', 'yuv420p'],
                 "Bitrate Personalizado (VBR)": "CUSTOM_BITRATE_VBR",
                 "Bitrate Personalizado (CBR)": "CUSTOM_BITRATE_CBR"
             }, "container": ".mp4"
@@ -487,15 +490,39 @@ class FFmpegProcessor:
                     self.cancel_current_process()
                     raise UserCancelledError("Recodificación cancelada por el usuario.")
                 time.sleep(0.1) # Usar un tiempo de espera más corto
+            # ... (código anterior dentro de execute_recode) ...
+
             stdout_reader_thread.join()
             stderr_reader_thread.join()
+
+            # --- INICIO DE LA MODIFICACIÓN ---
             if process.returncode != 0 and not cancellation_event.is_set():
-                full_error_log = " ".join(error_output_buffer)
-                print(f"\n--- ERROR DETALLADO DE FFmpeg ---\n{full_error_log}\n---------------------------------\n")
-                raise Exception(f"FFmpeg falló (ver consola para detalles técnicos).")
+                # 1. Unir las líneas con saltos de línea para procesarlas mejor
+                full_error_log_text = "\n".join(error_output_buffer)
+                
+                # Imprimir en consola para debug completo (como antes)
+                print(f"\n--- ERROR DETALLADO DE FFmpeg ---\n{full_error_log_text}\n---------------------------------\n")
+                
+                # 2. Filtrar/Extraer las líneas más relevantes para el usuario
+                # FFmpeg suele poner el error crítico al final. Tomamos las últimas 10 líneas.
+                lines = full_error_log_text.split('\n')
+                
+                # Eliminamos líneas vacías al final
+                lines = [L for L in lines if L.strip()]
+                
+                # Tomamos las últimas líneas (ej. 8 líneas) para dar contexto sin llenar toda la pantalla
+                relevant_lines = lines[-8:] if len(lines) > 8 else lines
+                error_summary = "\n".join(relevant_lines)
+
+                # 3. Lanzar la excepción con el resumen del error real
+                raise Exception(f"FFmpeg falló. Detalles:\n\n{error_summary}")
+            # --- FIN DE LA MODIFICACIÓN ---
+
             if cancellation_event.is_set():
                 raise UserCancelledError("Recodificación cancelada por el usuario.")
             return output_file
+
+# ... (resto del código) ...
         except UserCancelledError as e:
             self.cancel_current_process()
             raise e

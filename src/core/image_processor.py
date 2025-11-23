@@ -20,7 +20,7 @@ except ImportError:
 
 # Import format constants
 from src.core.constants import (
-    IMAGE_RASTER_FORMATS, IMAGE_INPUT_FORMATS
+    IMAGE_RASTER_FORMATS, IMAGE_INPUT_FORMATS, IMAGE_RAW_FORMATS
 )
 
 # Convert sets to tuples for .endswith()
@@ -28,10 +28,10 @@ RASTER_EXT = tuple(f.lower() for f in IMAGE_RASTER_FORMATS)
 VECTOR_EXT = tuple(f.lower() for f in IMAGE_INPUT_FORMATS)
 
 class ImageProcessor:
-    def __init__(self, poppler_path=None, inkscape_path=None):
-        """Inicializa el procesador de imágenes con caché."""
+    def __init__(self, poppler_path=None, inkscape_path=None, ffmpeg_path=None):
         self.poppler_path = poppler_path
         self.inkscape_path = inkscape_path
+        self.ffmpeg_path = ffmpeg_path
         
         # ✅ NUEVO: Caché para almacenar el conteo de páginas y evitar bloqueos
         self._page_count_cache = {}
@@ -189,8 +189,44 @@ class ImageProcessor:
             ext = os.path.splitext(filepath)[1].lower()
             pil_image = None
 
+            # ===== NUEVO: RAW DE CÁMARA (RAWPY) =====
+            if ext.upper() in IMAGE_RAW_FORMATS:
+                try:
+                    import rawpy
+                    import numpy as np
+                    
+                    print(f"DEBUG: Revelando RAW con LibRaw: {filepath}")
+                    
+                    with rawpy.imread(filepath) as raw:
+                        # 🎨 Revelar con configuración óptima para previsualización
+                        rgb = raw.postprocess(
+                            use_camera_wb=True,      # Balance de blancos de cámara
+                            half_size=True,          # 🚀 RÁPIDO: Usar 1/4 de resolución para thumbnails
+                            no_auto_bright=False,    # Auto exposición
+                            output_bps=8,            # 8 bits (suficiente para preview)
+                            output_color=rawpy.ColorSpace.sRGB,  # Espacio de color estándar
+                            demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD  # Mejor calidad/velocidad
+                        )
+                    
+                    # Convertir numpy array a PIL Image
+                    pil_image = Image.fromarray(rgb)
+                    
+                    # Aplicar rotación EXIF si existe
+                    try:
+                        from PIL import ImageOps
+                        pil_image = ImageOps.exif_transpose(pil_image)
+                    except:
+                        pass
+                    
+                except ImportError:
+                    print("⚠️ rawpy no instalado. Ejecuta: pip install rawpy")
+                    pil_image = None
+                except Exception as e:
+                    print(f"❌ ERROR al revelar RAW: {e}")
+                    pil_image = None
+
             # ===== RASTER: Carga directa (RÁPIDO) =====
-            if ext in RASTER_EXT:
+            elif ext in RASTER_EXT: 
                 pil_image = Image.open(filepath)
             
             # ===== SVG: CairoSVG primero (MUY RÁPIDO) =====
@@ -283,7 +319,7 @@ class ImageProcessor:
                     # ✅ TRUCO 1: Escala x10. 
                     # Ghostscript renderiza vectores. Al pedirle x10, generamos una imagen gigante.
                     # Esto elimina COMPLETAMENTE los dientes de sierra al reducirla después.
-                    pil_image.load(scale=8) 
+                    pil_image.load(scale=5)
                     
                     # Asegurar modo RGB para poder detectar el blanco
                     if pil_image.mode not in ('RGB', 'RGBA'):

@@ -397,8 +397,12 @@ COMPATIBILITY_RULES = {
     ".wav": { "video": [], "audio": ["pcm_s16le", "pcm_s24le"] }
 }
 
+# --- NUEVO: Definir formatos RAW ---
+IMAGE_RAW_FORMATS = {".CR2", ".DNG", ".ARW", ".NEF", ".ORF", ".RW2", ".SR2", ".RAF", ".CR3", ".PEF"}
 # --- CONSTANTES DE HERRAMIENTAS DE IMAGEN ---
-IMAGE_INPUT_FORMATS = {".svg", ".eps", ".ai", ".pdf", ".ps", ".avif"}
+
+# Actualizar los formatos de entrada permitidos sumando los RAW
+IMAGE_INPUT_FORMATS = {".svg", ".eps", ".ai", ".pdf", ".ps", ".avif"}.union(IMAGE_RAW_FORMATS)
 IMAGE_EXPORT_FORMATS = ["PNG", "JPG", "JPEG", "WEBP", "AVIF", "BMP", "PDF", "TIFF"]
 
 # Agrupar formatos por tipo para mejor manejo en la lógica y la UI
@@ -460,6 +464,7 @@ CANVAS_POSITIONS = [
 
 # Modos de manejo cuando la imagen excede el canvas
 CANVAS_OVERFLOW_MODES = [
+    "Reducir hasta que quepa",           
     "Centrar (puede recortar)",
     "Recortar al canvas",
     "Advertir y no procesar"
@@ -512,20 +517,167 @@ REMBG_MODEL_FAMILIES = {
         }
     },
     "BiRefNet (Next-Gen 2024)": {
-        "General (Ultra Calidad)": {
-            "file": "birefnet-general.onnx", 
+        # --- MODELOS GENERALES ---
+        "General (Estándar)": {
+            "file": "birefnet-general.onnx",  # ✅ Nombre que rembg espera
             "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-epoch_244.onnx",
             "folder": "rembg"
         },
         "General Lite (Rápido)": {
-            "file": "birefnet-general-lite.onnx",
+            "file": "birefnet-general-lite.onnx",  # ✅ Cambiado
             "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
             "folder": "rembg"
         },
-        "Portrait (Retratos HD)": {
-            "file": "birefnet-portrait.onnx",
+        
+        # --- ESPECIALIZADOS ---
+        "Portrait (Retratos)": {
+            "file": "birefnet-portrait.onnx",  # ✅ Cambiado
             "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-portrait-epoch_150.onnx",
             "folder": "rembg"
+        },
+        "DIS (Bordes Finos/Complejo)": {
+            "file": "birefnet-dis.onnx",  # ✅ Cambiado
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-DIS-epoch_590.onnx",
+            "folder": "rembg"
+        },
+        "COD (Objetos Camuflados)": {
+            "file": "birefnet-cod.onnx",  # ✅ Cambiado
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-COD-epoch_125.onnx",
+            "folder": "rembg"
+        },
+        "HRSOD (Alta Detección)": {
+            "file": "birefnet-hrsod.onnx",  # ✅ Cambiado
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-HRSOD_DHU-epoch_115.onnx",
+            "folder": "rembg"
+        },
+        
+        # --- ALTA RESOLUCIÓN (HR) & MASIVOS ---
+        "Massive (Entrenamiento Masivo)": {
+            "file": "birefnet-massive.onnx",  # ✅ Cambiado
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-massive-TR_DIS5K_TR_TEs-epoch_420.onnx",
+            "folder": "rembg"
+        },
+        "HR General (4K/8K)": {
+            "file": "birefnet-hr-general.onnx",  # ✅ Cambiado
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-general-epoch_130.onnx",
+            "folder": "rembg"
+        },
+        "HR Matting (Recorte Ultra Fino)": {
+            "file": "birefnet-hr-matting.onnx",  # ✅ Cambiado
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet_HR-matting-epoch_135.onnx",
+            "folder": "rembg"
         }
+    },
+
+    # --- NUEVO BLOQUE: RMBG 2.0 (Descarga Manual) ---
+    "RMBG 2.0 (BriaAI)": {
+        "Standard (Automático - 977 MB)": {
+            "file": "rmbg2_gatis.onnx", 
+            "url": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx",
+            "folder": "rmbg2"
+        },
+        "Standard (1.02 GB)": {
+            "file": "model.onnx", 
+            "url": "https://huggingface.co/briaai/RMBG-2.0/tree/main/onnx",
+            "folder": "rmbg2" 
+        },
+        "BnB4 (Recomendado - 355 MB)": {
+            "file": "model_bnb4.onnx",
+            "url": "https://huggingface.co/briaai/RMBG-2.0/tree/main/onnx",
+            "folder": "rmbg2"
+        },
+        "FP16 (Media - 514 MB)": {
+            "file": "model_fp16.onnx",
+            "url": "https://huggingface.co/briaai/RMBG-2.0/tree/main/onnx",
+            "folder": "rmbg2"
+        },
+        "Int8 (Rápido - 366 MB)": {
+            "file": "model_int8.onnx",
+            "url": "https://huggingface.co/briaai/RMBG-2.0/tree/main/onnx",
+            "folder": "rmbg2"
+        },
+        "Quantized (366 MB)": {
+            "file": "model_quantized.onnx",
+            "url": "https://huggingface.co/briaai/RMBG-2.0/tree/main/onnx",
+            "folder": "rmbg2"
+        }
+    }
+}
+
+UPSCALING_TOOLS = {
+    "Real-ESRGAN": {
+        "name": "Real-ESRGAN",
+        "folder": "realesrgan",
+        "exe": "realesrgan-ncnn-vulkan.exe",
+        "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip"
+    },
+    "Waifu2x": {
+        "name": "Waifu2x",
+        "folder": "waifu2x",
+        "exe": "waifu2x-ncnn-vulkan.exe",
+        "url": "https://github.com/nihui/waifu2x-ncnn-vulkan/releases/download/20250915/waifu2x-ncnn-vulkan-20250915-windows.zip"
+    },
+    "RealSR": {
+        "name": "RealSR",
+        "folder": "realsr",
+        "exe": "realsr-ncnn-vulkan.exe",
+        "url": "https://github.com/nihui/realsr-ncnn-vulkan/releases/download/20220728/realsr-ncnn-vulkan-20220728-windows.zip"
+    },
+    "SRMD": {
+        "name": "SRMD",
+        "folder": "srmd",
+        "exe": "srmd-ncnn-vulkan.exe",
+        "url": "https://github.com/nihui/srmd-ncnn-vulkan/releases/download/20220728/srmd-ncnn-vulkan-20220728-windows.zip"
+    }
+}
+
+# --- CONSTANTES DE REESCALADO (IA) ---
+
+# Definimos el modelo interno y las escalas permitidas para cada opción
+REALESRGAN_MODELS = {
+    "Anime Video v3 (Rápido, Multi-escala)": {
+        "model": "realesr-animevideov3",
+        "scales": ["2x", "3x", "4x"]
+    },
+    "x4 Plus (Fotos / General)": {
+        "model": "realesrgan-x4plus",
+        "scales": ["4x"]  # Solo nativo 4x
+    },
+    "x4 Plus Anime (Ilustraciones)": {
+        "model": "realesrgan-x4plus-anime",
+        "scales": ["4x"]  # Solo nativo 4x
+    },
+}
+
+WAIFU2X_MODELS = {
+    "CU-Net (Alta Calidad)": {
+        "model": "models-cunet",
+        "scales": ["1x", "2x", "4x", "8x", "16x", "32x"]
+    },
+    "Anime Style Art (Clásico)": {
+        "model": "models-upconv_7_anime_style_art_rgb",
+        "scales": ["1x", "2x", "4x", "8x", "16x", "32x"]
+    },
+    "Photo (Fotos Reales)": {
+        "model": "models-upconv_7_photo",
+        "scales": ["1x", "2x", "4x", "8x", "16x", "32x"]
+    },
+}
+
+REALSR_MODELS = {
+    "Estándar (DF2K)": {
+        "model": "models-DF2K",
+        "scales": ["4x"]
+    },
+    "Reparar JPEG (DF2K_JPEG)": {
+        "model": "models-DF2K_JPEG",
+        "scales": ["4x"]
+    }
+}
+
+SRMD_MODELS = {
+    "Estándar (General)": {
+        "model": "models-srmd",
+        "scales": ["2x", "3x", "4x"]
     }
 }

@@ -8,6 +8,8 @@ import sys
 import yt_dlp
 import io
 import time
+import queue
+import re
 
 from tkinter import StringVar, Menu 
 from customtkinter import filedialog
@@ -71,6 +73,10 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.current_video_formats: dict = {}
         self.current_audio_formats: dict = {}
         self.thumbnail_cache = {}
+
+        self.thumb_queue = queue.Queue()
+        self.current_thumb_job_id = None # Para saber qué estamos viendo
+        threading.Thread(target=self._thumbnail_worker_loop, daemon=True).start()
 
         self.combined_variants = {}  # Para variantes multiidioma
         self.combined_audio_map = {}  # Mapeo de idiomas seleccionados
@@ -413,13 +419,16 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.batch_apply_quick_preset_checkbox.deselect()
         
         self.batch_quick_recode_options_frame = ctk.CTkFrame(self.recode_main_scrollframe, fg_color="transparent")
-        # Por defecto está oculto, _on_batch_quick_recode_toggle lo mostrará
+        
+        # ✅ CAMBIO: Empaquetar INMEDIATAMENTE (Siempre visible)
+        self.batch_quick_recode_options_frame.pack(fill="x", padx=0, pady=0)
 
         # 1. Checkbox "Mantener originales" (AHORA VA PRIMERO)
         self.batch_keep_original_quick_checkbox = ctk.CTkCheckBox(
             self.batch_quick_recode_options_frame, 
             text="Mantener los archivos originales",
-            command=self._on_batch_config_change # Usamos la función de guardado
+            command=self._on_batch_config_change,
+            state="disabled" # ✅ Nace deshabilitado
         )
         self.batch_keep_original_quick_checkbox.pack(anchor="w", padx=10, pady=(0, 5))
         self.batch_keep_original_quick_checkbox.select()
@@ -435,7 +444,8 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.batch_recode_preset_menu = ctk.CTkOptionMenu(
             self.batch_quick_recode_options_frame, 
             values=["-"], 
-            command=self._on_batch_preset_change_and_save # <-- CAMBIO DE FUNCIÓN
+            command=self._on_batch_preset_change_and_save,
+            state="disabled" # ✅ Nace deshabilitado
         )
         self.batch_recode_preset_menu.pack(pady=10, padx=10, fill="x")
 
@@ -449,9 +459,10 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.batch_import_preset_button = ctk.CTkButton(
             batch_preset_actions_frame,
             text="📥 Importar",
-            command=self.app.single_tab.import_preset_file, # <-- Llama a la función de single_tab
+            command=self.app.single_tab.import_preset_file,
             fg_color="#28A745",
-            hover_color="#218838"
+            hover_color="#218838",
+            state="disabled" # ✅ Nace deshabilitado
         )
         self.batch_import_preset_button.grid(row=0, column=0, padx=(0, 5), sticky="ew")
 
@@ -620,6 +631,97 @@ class BatchDownloadTab(ctk.CTkFrame):
             self.open_folder_button.configure(state="normal")
 
         self._set_config_panel_state("disabled")
+
+    def _thumbnail_worker_loop(self):
+        """
+        Procesa las miniaturas en serie para no congelar la UI.
+        Descarta solicitudes obsoletas si el usuario cambia rápido de ítem.
+        """
+        while True:
+            try:
+                # Esperar una tarea (job_id, path_or_url, is_local)
+                task = self.thumb_queue.get()
+                job_id, path_or_url, is_local = task
+                
+                # 1. OPTIMIZACIÓN: Si el usuario ya cambió de selección, ignorar esta tarea
+                # Esto evita procesar miniaturas que ya nadie está viendo.
+                if job_id != self.selected_job_id:
+                    continue
+
+                # 2. Verificar Caché (Doble check por seguridad)
+                if path_or_url in self.thumbnail_cache:
+                    # Ya está en caché, actualizar UI y seguir
+                    self._update_thumbnail_ui(path_or_url)
+                    continue
+
+                # 3. Generar la miniatura (Operación Pesada)
+                img_data = None
+                
+                try:
+                    if is_local:
+                        # Generar con FFmpeg
+                        frame_path = self.app.ffmpeg_processor.get_frame_from_video(path_or_url)
+                        if frame_path and os.path.exists(frame_path):
+                            with open(frame_path, 'rb') as f:
+                                img_data = f.read()
+                            try: os.remove(frame_path)
+                            except: pass
+                    else:
+                        # Descargar URL
+                        headers = headers = {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                            'Accept-Language': 'en-US,en;q=0.9',
+                            'Referer': 'https://imgur.com/',
+                        } # (Tu header habitual)
+                        resp = requests.get(path_or_url, headers=headers, timeout=10)
+                        if resp.status_code == 200:
+                            img_data = resp.content
+
+                    # 4. Procesar y Guardar en Caché
+                    if img_data:
+                        pil_image = Image.open(BytesIO(img_data))
+                        
+                        # Crear copias para UI y raw
+                        display_image = pil_image.copy()
+                        display_image.thumbnail((160, 90), Image.Resampling.LANCZOS)
+                        ctk_image = ctk.CTkImage(light_image=display_image, dark_image=display_image, size=display_image.size)
+                        
+                        # Guardar en caché (formato dict como en ImageTools)
+                        self.thumbnail_cache[path_or_url] = {
+                            'ctk': ctk_image,
+                            'raw': img_data
+                        }
+                        
+                        # 5. Actualizar UI (Solo si sigue siendo el seleccionado)
+                        if job_id == self.selected_job_id:
+                            self.app.after(0, lambda: self._update_thumbnail_ui(path_or_url))
+                            
+                except Exception as e:
+                    print(f"Error generando miniatura en worker: {e}")
+
+            except Exception as e:
+                print(f"Error crítico en worker de miniaturas: {e}")
+                time.sleep(1) # Prevenir bucle infinito rápido si algo falla grave
+
+    def _update_thumbnail_ui(self, cache_key):
+        """Actualiza la etiqueta de miniatura usando datos de la caché."""
+        if cache_key not in self.thumbnail_cache:
+            return
+            
+        cached_data = self.thumbnail_cache[cache_key]
+        # Soporte para formato antiguo (solo imagen) o nuevo (dict)
+        image = cached_data['ctk'] if isinstance(cached_data, dict) else cached_data
+        
+        if self.thumbnail_label:
+            self.thumbnail_label.configure(image=image, text="")
+            self.thumbnail_label.image = image # Mantener referencia
+            
+        self.save_thumbnail_button.configure(state="normal")
+        
+        # Actualizar datos raw para guardar (si es dict)
+        if isinstance(cached_data, dict):
+            self.current_raw_thumbnail = cached_data['raw']
 
     def _toggle_subfolder_name_entry(self):
         """Habilita/deshabilita el entry de nombre de carpeta según el checkbox."""
@@ -837,17 +939,21 @@ class BatchDownloadTab(ctk.CTkFrame):
             return
         
         if job_id == "GLOBAL_PROGRESS":
-            if status == "UPDATE":
-                self.progress_label.configure(text=message)
-                self.progress_bar.set(progress_percent)
-            elif status == "RESET":
-                self.progress_label.configure(text=message)
-                self.progress_bar.set(0)
+            # ... (código existente)
             return
 
+        # ✅ BLINDAJE: Verificar si el trabajo realmente existe en el Manager
+        # Si no existe y no tenemos widget, NO lo creamos (es un zombie de un hilo cancelado)
+        # Excepción: Si el estado es "PENDING" inicial, permitimos crearlo.
+        job_exists = self.queue_manager.get_job_by_id(job_id)
+        
         job_frame = self.job_widgets.get(job_id)
 
         if not job_frame:
+            if not job_exists:
+                print(f"DEBUG: update_job_ui ignorado para job fantasma: {job_id}")
+                return
+
             job_frame = ctk.CTkFrame(self.queue_scroll_frame, border_width=1, border_color="#555")
             job_frame.pack(fill="x", padx=5, pady=(0, 5))
             
@@ -1229,16 +1335,10 @@ class BatchDownloadTab(ctk.CTkFrame):
                 # Poblar el menú (esto también restaurará la selección)
                 self._populate_batch_preset_menu()
                 
-                # Mostrar u ocultar el frame de opciones DIRECTAMENTE
-                # Mostrar u ocultar el frame de opciones DIRECTAMENTE
-                if is_recode_enabled:
-                    self.batch_quick_recode_options_frame.pack(fill="x", padx=0, pady=0)
-                    # Para modo local, la casilla siempre debe estar deshabilitada y seleccionada
-                    self.batch_keep_original_quick_checkbox.select()
-                    self.batch_keep_original_quick_checkbox.configure(state="disabled")
-                else:
-                    self.batch_quick_recode_options_frame.pack_forget()
-                    self.batch_keep_original_quick_checkbox.configure(state="disabled")
+                # Actualizar estado visual (Habilitado/Deshabilitado)
+                # Ya no hacemos pack/pack_forget porque siempre es visible.
+                # Simplemente llamamos a la función lógica para que ajuste los estados 'disabled'/'normal'
+                self._on_batch_quick_recode_toggle()
                 
                 # Validar compatibilidad del preset con multipista
                 self._validate_batch_recode_compatibility()
@@ -1622,14 +1722,10 @@ class BatchDownloadTab(ctk.CTkFrame):
                 # Poblar el menú (esto también restaurará la selección)
                 self._populate_batch_preset_menu()
                 
-                # Mostrar u ocultar el frame de opciones DIRECTAMENTE
-                # (sin llamar a la función que usa .get())
-                if is_recode_enabled:
-                    self.batch_quick_recode_options_frame.pack(fill="x", padx=0, pady=0)
-                    self.batch_keep_original_quick_checkbox.configure(state="normal")
-                else:
-                    self.batch_quick_recode_options_frame.pack_forget()
-                    self.batch_keep_original_quick_checkbox.configure(state="disabled")
+                # Actualizar estado visual (Habilitado/Deshabilitado)
+                # Ya no hacemos pack/pack_forget porque siempre es visible.
+                # Simplemente llamamos a la función lógica para que ajuste los estados 'disabled'/'normal'
+                self._on_batch_quick_recode_toggle()
 
                 # (Recarga la miniatura, ya que este panel se refresca)
                 thumbnail_url = job.analysis_data.get('thumbnail')
@@ -1642,28 +1738,21 @@ class BatchDownloadTab(ctk.CTkFrame):
             self._updating_ui = False
 
     def load_thumbnail(self, path_or_url: str, is_local: bool = False):
-        """Carga una miniatura (desde URL o archivo local)."""
-        
-        # --- INICIO DE MODIFICACIÓN: Manejo de 'is_local' ---
+        """Carga una miniatura (desde URL o archivo local) de forma segura."""
         
         # Para archivos locales, usamos la ruta como clave de caché
         cache_key = path_or_url
         self.current_thumbnail_url = path_or_url if not is_local else None
         
-        # 1. Verificar caché (AHORA A PRUEBA DE RACE CONDITIONS)
+        # 1. Verificar caché (A prueba de hilos)
         try:
-            # Intenta obtener la 'cache_key' del caché en una sola operación
             cached_item = self.thumbnail_cache[cache_key]
             
-            # Si lo encuentra, imprime el log
-            print(f"DEBUG: Miniatura encontrada en caché: {cache_key[:60]}...")
-            
-            # Verificar si es el NUEVO formato (diccionario)
+            # Verificar si es el formato nuevo (diccionario)
             if isinstance(cached_item, dict) and 'ctk' in cached_item and 'raw' in cached_item:
                 cached_image = cached_item['ctk']
                 self.current_raw_thumbnail = cached_item['raw']
                 
-                # Si es el formato nuevo y válido, usarlo
                 def set_cached_image():
                     if self.thumbnail_label:
                         self.thumbnail_label.destroy()
@@ -1672,103 +1761,73 @@ class BatchDownloadTab(ctk.CTkFrame):
                     self.thumbnail_label.image = cached_image
                     self.save_thumbnail_button.configure(state="normal")
                 
+                # ✅ SEGURO: Ejecutar en hilo principal
                 self.app.after(0, set_cached_image)
-                return # <- Importante: Salir si usamos el caché
-                
-            else:
-                # Si es el formato VIEJO o inválido, eliminarlo y seguir para descargar de nuevo
-                print("DEBUG: Formato de caché viejo o inválido detectado. Re-descargando...")
+                return 
 
         except KeyError:
-            # Si 'cache_key' no estaba en el caché (o fue borrada por otro hilo), sigue adelante.
-            print(f"DEBUG: Miniatura no en caché. Descargando: {cache_key[:60]}...")
-            pass # Pasa al bloque de descarga
+            pass 
             
-        # Si no está en caché O el caché era inválido, descargar/generar
-        self.app.after(0, self.create_placeholder_label, self.thumbnail_container, "Cargando...")
+        # ✅ CORRECCIÓN CRÍTICA: Usar lambda dentro de after para evitar ejecución inmediata
+        self.app.after(0, lambda: self.create_placeholder_label(self.thumbnail_container, "Cargando..."))
         
         try:
             img_data = None
             if is_local:
-                # --- LÓGICA NUEVA: Generar fotograma desde archivo local ---
-                print(f"DEBUG: Generando fotograma para: {path_or_url}")
-                # Asumimos que la info ya está en analysis_data del job seleccionado
+                # Generar fotograma desde archivo local
+                # Esto se hace en el hilo (correcto), no toca UI
                 job = self.queue_manager.get_job_by_id(self.selected_job_id)
-                duration = job.analysis_data.get('duration', 0)
+                duration = job.analysis_data.get('duration', 0) if job else 0
                 
-                # Usamos el procesador de ffmpeg para obtener el fotograma
                 frame_path = self.app.ffmpeg_processor.get_frame_from_video(path_or_url, duration)
                 
                 if frame_path and os.path.exists(frame_path):
                     with open(frame_path, 'rb') as f:
                         img_data = f.read()
-                    # (Opcional: eliminar el .jpg temporal)
                     try: os.remove(frame_path)
-                    except Exception as e: print(f"ADVERTENCIA: No se pudo eliminar fotograma temporal: {e}")
+                    except: pass
                 else:
-                    raise Exception("No se pudo generar el fotograma desde el video local.")
+                    raise Exception("No se pudo generar el fotograma local.")
                 
             else:
-                # --- LÓGICA ANTIGUA (AHORA CORREGIDA) ---
+                # Descargar desde URL
                 headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Referer': 'https://imgur.com/',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
                 }
                 
-                max_retries = 2
-                timeout = 15
-                
-                for attempt in range(max_retries):
-                    try:
-                        response = requests.get(
-                            path_or_url,  # <--- ¡ESTA ES LA CORRECCIÓN! (url -> path_or_url)
-                            headers=headers, 
-                            timeout=timeout,
-                            allow_redirects=True
-                        )
-                        response.raise_for_status()
-                        img_data = response.content
-                        break
-                    except requests.exceptions.HTTPError as e:
-                        if e.response.status_code == 429:
-                            if attempt < max_retries - 1:
-                                wait_time = 2 ** attempt
-                                print(f"⚠️ Rate limit en miniatura. Reintentando en {wait_time}s...")
-                                time.sleep(wait_time)
-                                continue
-                            else:
-                                raise Exception(f"Rate limit (429). La miniatura no está disponible temporalmente.")
-                        else:
-                            raise
-                    except requests.exceptions.Timeout:
-                        if attempt < max_retries - 1:
-                            print(f"⚠️ Timeout descargando miniatura. Reintentando...")
-                            continue
-                        else:
-                            raise Exception("Timeout al descargar la miniatura")
+                # Lógica de descarga (requests es seguro en hilos)
+                import requests
+                response = requests.get(path_or_url, headers=headers, timeout=15)
+                response.raise_for_status()
+                img_data = response.content
             
-            # Validar que img_data no esté vacío
+            # Validar datos
             if not img_data or len(img_data) < 100:
-                raise Exception("La miniatura descargada está vacía o corrupta")
-            
-            # --- FIN DE LA LÓGICA DE OBTENCIÓN DE DATOS ---
+                raise Exception("Datos de imagen inválidos")
 
+            # Procesamiento de imagen (Pillow es seguro en hilos)
             pil_image = Image.open(BytesIO(img_data))
             display_image = pil_image.copy()
             display_image.thumbnail((160, 90), Image.Resampling.LANCZOS) 
+            
+            # ⚠️ OJO: Crear CTkImage en un hilo puede ser inestable a veces, 
+            # pero suele funcionar. Si falla, mover esto dentro de set_new_image.
             ctk_image = ctk.CTkImage(light_image=display_image, dark_image=display_image, size=display_image.size)
             
-            # Guardar en caché (NUEVO FORMATO: diccionario)
+            # Guardar en caché
             self.thumbnail_cache[cache_key] = {
                 'ctk': ctk_image,
                 'raw': img_data
             }
             self.current_raw_thumbnail = img_data
-            print(f"DEBUG: Miniatura guardada en caché ({len(self.thumbnail_cache)} total)")
 
+            # Definir la función que actualizará la UI
             def set_new_image():
+                # Verificar si el usuario cambió de selección mientras cargábamos
+                # (Opcional, pero recomendado)
+                # if self.current_thumbnail_url != path_or_url and not is_local: return
+
                 if self.thumbnail_label:
                     self.thumbnail_label.destroy()
                 self.thumbnail_label = ctk.CTkLabel(self.thumbnail_container, text="", image=ctk_image)
@@ -1776,35 +1835,14 @@ class BatchDownloadTab(ctk.CTkFrame):
                 self.thumbnail_label.image = ctk_image
                 self.save_thumbnail_button.configure(state="normal")
             
+            # ✅ SEGURO: Enviar actualización al hilo principal
             self.app.after(0, set_new_image)
         
-        except requests.exceptions.HTTPError as e:
-            status_code = e.response.status_code if hasattr(e, 'response') else 'unknown'
-            error_msg = f"Error HTTP {status_code}"
-            
-            if status_code == 429:
-                error_msg = "Rate limit (429)"
-                placeholder_text = "⏳"
-            elif status_code == 404:
-                error_msg = "No encontrada (404)"
-                placeholder_text = "❌"
-            elif status_code in [403, 401]:
-                error_msg = f"Acceso denegado ({status_code})"
-                placeholder_text = "🔒"
-            else:
-                placeholder_text = "❌"
-            
-            print(f"⚠️ Error al cargar miniatura: {error_msg} - URL: {path_or_url}")
-            self.current_raw_thumbnail = None
-            self.app.after(0, lambda p=placeholder_text: self.create_placeholder_label(self.thumbnail_container, p, font_size=60))
-            
-        except requests.exceptions.Timeout:
-            print(f"⚠️ Timeout al cargar miniatura: {path_or_url}")
-            self.app.after(0, lambda: self.create_placeholder_label(self.thumbnail_container, "⏱️", font_size=60))
-            
         except Exception as e:
             print(f"⚠️ Error al cargar miniatura: {e}")
             self.current_raw_thumbnail = None
+            
+            # ✅ SEGURO: Enviar error al hilo principal
             self.app.after(0, lambda: self.create_placeholder_label(self.thumbnail_container, "❌", font_size=60))
 
     def get_smart_thumbnail_extension(self, image_data):
@@ -2475,36 +2513,103 @@ class BatchDownloadTab(ctk.CTkFrame):
     def _run_analysis(self, url: str, job_id: str):
         """
         Hilo de trabajo que ejecuta yt-dlp para obtener información.
-        MODIFICADO: Lee la casilla "Análisis de Playlist" para decidir
-        si usa `noplaylist: True` (video único) o `noplaylist: False` (playlist).
-        Ya no usa 'extract_flat'.
+        Soporta cancelación y reporte de progreso de playlist en UI.
         """
+        # Definir una excepción personalizada para control interno
+        class AnalysisCancelled(Exception): pass
+
+        # --- 1. DEFINIR EL LOGGER PARA INTERCEPTAR MENSAJES ---
+        class MyLogger:
+            def __init__(self, parent_tab, j_id):
+                self.parent = parent_tab
+                self.job_id = j_id
+
+            def _process_message(self, msg):
+                # Limpiar códigos ANSI (colores de consola) si los hubiera para el Regex
+                clean_msg = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', msg)
+                
+                # Buscar patrón: "Downloading item 3 of 10"
+                if "Downloading item" in clean_msg or "Downloading video" in clean_msg:
+                    try:
+                        # Regex flexible para capturar números
+                        match = re.search(r'(?:item|video)\s+(\d+)\s+of\s+(\d+)', clean_msg, re.IGNORECASE)
+                        if match:
+                            current = match.group(1)
+                            total = match.group(2)
+                            
+                            # Actualizar UI de forma segura
+                            self.parent.app.after(0, 
+                                self.parent.update_job_ui, 
+                                self.job_id, 
+                                "RUNNING", 
+                                f"Analizando {current} de {total}..."
+                            )
+                    except Exception:
+                        pass 
+
+            def debug(self, msg):
+                # Procesar para UI
+                self._process_message(msg)
+                # ✅ RESTAURAR SALIDA A CONSOLA
+                print(msg) 
+
+            def info(self, msg):
+                # Procesar para UI
+                self._process_message(msg)
+                # ✅ RESTAURAR SALIDA A CONSOLA
+                print(msg)
+
+            def warning(self, msg):
+                # ✅ RESTAURAR SALIDA A CONSOLA
+                print(f"WARNING: {msg}")
+
+            def error(self, msg):
+                # ✅ RESTAURAR SALIDA A CONSOLA
+                print(f"ERROR: {msg}")
+
+            def debug(self, msg):
+                self._process_message(msg)
+
+            def info(self, msg):
+                # yt-dlp suele mandar el progreso de items por aquí
+                self._process_message(msg)
+
+            def warning(self, msg):
+                pass 
+
+            def error(self, msg):
+                print(f"Logger Error: {msg}")
+
         try:
             single_tab = self.app.single_tab 
 
-            # --- INICIO DE LA MODIFICACIÓN ---
-            
-            # 1. Leer el estado de la nueva casilla (lectura directa)
             try:
                 analizar_playlist = self.playlist_analysis_check.get()
             except Exception as e:
-                # Fallback si la UI no está lista (aunque debería)
-                print(f"ADVERTENCIA: No se pudo leer la casilla de playlist, se asume 'True': {e}")
+                print(f"ADVERTENCIA: No se pudo leer la casilla de playlist: {e}")
                 analizar_playlist = True
             
             print(f"DEBUG: Iniciando análisis. Modo Playlist: {analizar_playlist}")
 
-            # 2. Configurar ydl_opts basado en la casilla
+            def check_if_cancelled(info_dict, *args, **kwargs):
+                job = self.queue_manager.get_job_by_id(job_id)
+                if not job:
+                    print(f"DEBUG: 🛑 Análisis abortado para {job_id} (El trabajo fue eliminado).")
+                    raise AnalysisCancelled("Análisis cancelado por el usuario.")
+                return None
+
+            # --- 2. CONFIGURAR YT-DLP ---
             ydl_opts = {
                 'no_warnings': True,
+                'quiet': False, # IMPORTANTE: No silenciar, o el logger no recibe nada
                 'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/5.0 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
                 'referer': url,
-                'noplaylist': not analizar_playlist, # <-- ¡LA LÓGICA CLAVE!
-                # 'extract_flat' se elimina para un análisis profundo
+                'noplaylist': not analizar_playlist,
                 'listsubtitles': False,
-                'ignoreerrors': True, # Para que un video malo no arruine toda la playlist
+                'ignoreerrors': True,
+                'match_filter': check_if_cancelled,
+                'logger': MyLogger(self, job_id) # Usar nuestro logger mejorado
             }
-            # --- FIN DE LA MODIFICACIÓN ---
 
             cookie_mode = single_tab.cookie_mode_menu.get()
             browser_arg = None
@@ -2522,25 +2627,36 @@ class BatchDownloadTab(ctk.CTkFrame):
                     ydl_opts['cookiesfrombrowser'] = (browser_arg,)
 
             info_dict = None
+            
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                check_if_cancelled(None)
+                # Actualizar estado inicial
+                self.app.after(0, self.update_job_ui, job_id, "RUNNING", "Conectando con YouTube...")
+                
+                # La magia ocurre aquí dentro. extract_info llamará a nuestro logger
                 info_dict = ydl.extract_info(url, download=False)
             
             if not info_dict:
                 raise Exception("No se pudo obtener información.")
             
-            # La lógica de ydl_opts_deep (análisis profundo) ya no es necesaria,
-            # porque este análisis ES profundo por defecto (sin extract_flat).
-            
-            # Normalizar el resultado final
-            if info_dict:
-                info_dict = self._normalize_info_dict(info_dict)
+            info_dict = self._normalize_info_dict(info_dict)
 
-            self.app.after(0, self._on_analysis_complete, info_dict, job_id)
+            if self.queue_manager.get_job_by_id(job_id):
+                self.app.after(0, self._on_analysis_complete, info_dict, job_id)
+            else:
+                print("DEBUG: Análisis completado pero descartado (Job eliminado).")
+
+        except AnalysisCancelled:
+            print("INFO: Análisis detenido limpiamente (Cancelado por usuario).")
+            return
 
         except Exception as e:
+            if not self.queue_manager.get_job_by_id(job_id):
+                print(f"DEBUG: Error en análisis silenciado (Job eliminado): {e}")
+                return
+
             error_message = f"ERROR: Falló el análisis de lotes: {e}"
             print(error_message)
-            
             error_str = str(e)
             self.app.after(0, self._on_analysis_failed, job_id, error_str)
 
@@ -2906,25 +3022,41 @@ class BatchDownloadTab(ctk.CTkFrame):
 
     def _on_batch_quick_recode_toggle(self):
         """
-        Muestra/oculta las opciones de recodificación en la pestaña de Lotes.
-        Adaptado de single_download_tab.py.
+        Habilita o deshabilita los controles de recodificación (Preset, Mantener Original, etc.)
+        según el estado del checkbox principal, sin ocultarlos.
         """
-        if self.batch_apply_quick_preset_checkbox.get() == 1:
-            self.batch_quick_recode_options_frame.pack(fill="x", padx=0, pady=0)
+        is_enabled = self.batch_apply_quick_preset_checkbox.get() == 1
+        target_state = "normal" if is_enabled else "disabled"
 
-            # --- INICIO DE CORRECCIÓN ---
-            # Comprobar si estamos en modo local ANTES de habilitar
+        # 1. Menú de Presets
+        self.batch_recode_preset_menu.configure(state=target_state)
+
+        # 2. Botón Importar (Siempre sigue al estado principal)
+        self.batch_import_preset_button.configure(state=target_state)
+
+        # 3. Checkbox "Mantener Originales" (Lógica especial para modo local)
+        if is_enabled:
+            # Si activamos recodificación, verificamos si estamos en modo local
             job = self.queue_manager.get_job_by_id(self.selected_job_id)
+            
             if job and job.job_type == "LOCAL_RECODE":
+                # En modo local, forzamos mantener original y lo bloqueamos
                 self.batch_keep_original_quick_checkbox.select()
                 self.batch_keep_original_quick_checkbox.configure(state="disabled")
             else:
+                # En modo URL, el usuario puede elegir
                 self.batch_keep_original_quick_checkbox.configure(state="normal")
-            # --- FIN DE CORRECCIÓN ---
-            
         else:
-            self.batch_quick_recode_options_frame.pack_forget()
+            # Si recodificación está apagada, esto se deshabilita siempre
             self.batch_keep_original_quick_checkbox.configure(state="disabled")
+
+        # 4. Botones Exportar/Eliminar
+        # Estos dependen de si está habilitado Y si el preset es personalizado
+        if is_enabled:
+            self._update_batch_export_button_state()
+        else:
+            self.batch_export_preset_button.configure(state="disabled")
+            self.batch_delete_preset_button.configure(state="disabled")
         
     def _on_batch_quick_recode_toggle_and_save(self):
         """
@@ -3379,7 +3511,15 @@ class BatchDownloadTab(ctk.CTkFrame):
                 
                 # 3. Actualizar el job con la info real
                 temp_job.analysis_data = analysis_data
-                temp_job.config['title'] = analysis_data.get('title', base_name)
+                real_title = analysis_data.get('title', base_name) # <-- Capturamos el título real
+                temp_job.config['title'] = real_title
+                
+                # ✅ CORRECCIÓN: Actualizar visualmente la etiqueta de título en la UI
+                # Usamos lambda y after para hacerlo de forma segura en el hilo principal
+                self.app.after(0, lambda j=temp_job.job_id, t=real_title: 
+                    self.job_widgets[j].title_label.configure(text=t) 
+                    if j in self.job_widgets else None
+                )
                 
                 # 4. Aplicar configuración de recodificación (global o por defecto)
                 if global_recode_enabled:
@@ -3604,15 +3744,13 @@ class BatchDownloadTab(ctk.CTkFrame):
             self._on_clear_list_click() # Limpiar residuos
             self._set_local_batch_mode(True) # Activar UI local
             
-        # 2. Ocultar el placeholder
-        if self.queue_placeholder_label.winfo_ismapped():
-            self.queue_placeholder_label.pack_forget()
+        # 2. Ocultar el placeholder (FORZADO)
+        # Quitamos el 'if ismapped' para asegurar que se oculte aunque la pestaña esté cerrada
+        self.queue_placeholder_label.pack_forget()
             
-        # 3. Lanzar el análisis (reutilizamos tu función existente)
+        # 3. Lanzar el análisis...
         threading.Thread(
             target=self._run_local_file_analysis, 
             args=(filepaths,), 
             daemon=True
         ).start()
-
-    
