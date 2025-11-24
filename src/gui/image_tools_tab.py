@@ -4420,7 +4420,7 @@ class ImageToolsTab(ctk.CTkFrame):
     def _on_rembg_model_change(self, selected_model, silent=False):
         """
         Verifica si el modelo está descargado.
-        CORRECCIÓN: Si la herramienta (checkbox) está apagada, no hace nada.
+        CORREGIDO: Si la herramienta (checkbox) está apagada, no hace nada.
         """
         # --- NUEVA GUARDIA DE SEGURIDAD ---
         if self.rembg_checkbox.get() != 1:
@@ -4471,6 +4471,14 @@ class ImageToolsTab(ctk.CTkFrame):
                 return
             # ---------------------------------------------------------------------
 
+            # ✅ CORRECCIÓN: Si no es manual, ¡descárgalo automáticamente!
+            print(f"INFO: Iniciando descarga automática de modelo: {selected_model}")
+            threading.Thread(
+                target=self._download_rembg_model_thread,
+                args=(model_info, file_path),
+                daemon=True
+            ).start()
+
     def _download_rembg_model_thread(self, model_info, file_path):
         """
         Descarga optimizada para velocidad (Buffer grande).
@@ -4490,7 +4498,11 @@ class ImageToolsTab(ctk.CTkFrame):
         temp_path = file_path + ".part"
 
         try:
-            self.app.after(0, lambda: self.rembg_status_label.configure(text="🚀 Conectando...", text_color="#52a2f2"))
+            # CORRECCIÓN: Usar la cola de la app principal para actualizar la UI
+            self.app.ui_update_queue.put((
+                lambda: self.rembg_status_label.configure(text="🚀 Conectando...", text_color="#52a2f2"),
+                ()
+            ))
             
             # Stream=True es vital
             response = session.get(url, stream=True, timeout=(10, 120))
@@ -4499,8 +4511,6 @@ class ImageToolsTab(ctk.CTkFrame):
             total_length = int(response.headers.get('content-length', 0))
             
             # --- OPTIMIZACIÓN DE VELOCIDAD ---
-            # 1. Buffer grande: 1MB a 4MB es ideal para archivos grandes en Python.
-            # 16KB es demasiado pequeño y causa cuello de botella en la CPU.
             chunk_size = 4 * 1024 * 1024  # 4 MB
             
             dl = 0
@@ -4520,9 +4530,14 @@ class ImageToolsTab(ctk.CTkFrame):
                                 downloaded_mb = dl / (1024 * 1024)
                                 total_mb = total_length / (1024 * 1024)
                                 status_text = f"⬇️ {percent}% ({downloaded_mb:.1f}/{total_mb:.1f} MB)"
-                                self.app.after(0, lambda t=status_text: self.rembg_status_label.configure(text=t))
+                                
+                                # CORRECCIÓN: Usar la cola para actualizar el texto de progreso
+                                self.app.ui_update_queue.put((
+                                    lambda t=status_text: self.rembg_status_label.configure(text=t),
+                                    ()
+                                ))
 
-            # Renombrar al finalizar (Atomicidad: evita archivos corruptos si se cancela a medias)
+            # Renombrar al finalizar
             if os.path.exists(file_path):
                 os.remove(file_path)
             os.rename(temp_path, file_path)
@@ -4531,8 +4546,15 @@ class ImageToolsTab(ctk.CTkFrame):
             if total_length > 0 and os.path.getsize(file_path) != total_length:
                 raise Exception("Tamaño de archivo incorrecto tras descarga.")
 
-            self.app.after(0, lambda: self.rembg_status_label.configure(text="✅ Instalado", text_color="green"))
-            self.app.after(0, lambda: self.start_process_button.configure(state="normal"))
+            # CORRECCIÓN: Usar la cola para éxito
+            self.app.ui_update_queue.put((
+                lambda: self.rembg_status_label.configure(text="✅ Instalado", text_color="green"),
+                ()
+            ))
+            self.app.ui_update_queue.put((
+                lambda: self.start_process_button.configure(state="normal"),
+                ()
+            ))
             
         except Exception as e:
             print(f"ERROR descarga: {e}")
@@ -4540,15 +4562,27 @@ class ImageToolsTab(ctk.CTkFrame):
                 try: os.remove(temp_path)
                 except: pass
                 
-            self.app.after(0, lambda: self.rembg_status_label.configure(text="❌ Error descarga", text_color="red"))
-            self.app.after(0, lambda: messagebox.showerror("Error", f"Fallo al descargar:\n{e}"))
+            # CORRECCIÓN: Usar la cola para error
+            self.app.ui_update_queue.put((
+                lambda: self.rembg_status_label.configure(text="❌ Error descarga", text_color="red"),
+                ()
+            ))
+            self.app.ui_update_queue.put((
+                lambda: messagebox.showerror("Error", f"Fallo al descargar:\n{e}"),
+                ()
+            ))
         
         finally:
             session.close()
-            self.app.after(0, lambda: self.rembg_model_menu.configure(state="normal"))
-            self.app.after(0, lambda: self.rembg_family_menu.configure(state="normal"))
-
-    # --- NUEVOS MÉTODOS PARA EL SLIDER ANTES/DESPUÉS ---
+            # CORRECCIÓN: Usar la cola para cleanup
+            self.app.ui_update_queue.put((
+                lambda: self.rembg_model_menu.configure(state="normal"),
+                ()
+            ))
+            self.app.ui_update_queue.put((
+                lambda: self.rembg_family_menu.configure(state="normal"),
+                ()
+            ))
 
     def _create_checkerboard(self, w, h, size=10):
         """Crea una imagen de fondo tipo ajedrez para transparencia."""
@@ -4747,4 +4781,5 @@ class ImageToolsTab(ctk.CTkFrame):
             return False
 
     # Llamar al inicio de tu app
+
     test_raw_support()
