@@ -12,7 +12,7 @@ from tkinter import messagebox
 from PIL import Image, ImageTk
 
 
-APP_VERSION = "1.2.8"
+APP_VERSION = "1.2.9"
 
 if getattr(sys, 'frozen', False):
     PROJECT_ROOT = os.path.dirname(sys.executable)
@@ -244,6 +244,6 @@ if __name__ == "__main__":
                      poppler_path=POPPLER_BIN_DIR,
                      inkscape_path=INKSCAPE_BIN_DIR,
                      splash_screen=splash,
-                     app_version=APP_VERSION) # <--- ¡IMPORTANTE: Pasamos el objeto!
+                     app_version=APP_VERSION)
     
     app.mainloop()

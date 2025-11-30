@@ -120,10 +120,22 @@ def download_and_install_ffmpeg(tag, url, progress_callback):
 
         os.makedirs(FFMPEG_BIN_DIR, exist_ok=True)
         bin_content_path = os.path.join(temp_extract_path, os.listdir(temp_extract_path)[0], 'bin')
+
+        # Mover archivos a FFMPEG_BIN_DIR
         for item in os.listdir(bin_content_path):
             dest_path = os.path.join(FFMPEG_BIN_DIR, item) 
             if os.path.exists(dest_path): os.remove(dest_path)
             shutil.move(os.path.join(bin_content_path, item), dest_path)
+
+        # --- NUEVO: LIMPIEZA DE FFMPEG (LA DIETA) ---
+        # 1. Eliminar ffplay.exe (No se usa)
+        ffplay_path = os.path.join(FFMPEG_BIN_DIR, "ffplay.exe")
+        if os.path.exists(ffplay_path):
+            try:
+                os.remove(ffplay_path)
+                print("INFO: ffplay.exe eliminado para ahorrar espacio.")
+            except Exception as e:
+                print(f"ADVERTENCIA: No se pudo borrar ffplay.exe: {e}")
 
         shutil.rmtree(temp_extract_path)
         os.remove(archive_name)
@@ -516,11 +528,10 @@ def check_deno_status(progress_callback):
         return {"status": "error", "message": f"Error en la verificación de Deno: {e}"}
     
 def check_app_update(current_version_str):
-    """Consulta GitHub para ver si hay una nueva versión de la app y obtiene la URL del instalador .exe."""
+    """Consulta GitHub para ver si hay una nueva versión y busca el instalador LIGHT en ZIP."""
     print(f"INFO: Verificando actualizaciones para la versión actual: {current_version_str}")
     try:
-        # --- CAMBIO 1: URL del nuevo repositorio ---
-        api_url = "https://api.github.com/repos/MarckDP/DowP_App_y_Extension/releases"
+        api_url = "https://api.github.com/repos/MarckDP/DowP/releases"
 
         response = requests.get(api_url, timeout=10)
         response.raise_for_status()
@@ -529,49 +540,57 @@ def check_app_update(current_version_str):
         if not releases:
             return {"update_available": False}
 
-        # Encontrar la release más reciente (no pre-release a menos que no haya otra)
+        # Encontrar la release más reciente
         latest_release = None
         for r in releases:
             if not r.get("prerelease", False):
                 latest_release = r
                 break
-        if not latest_release: # Si solo hay pre-releases, toma la primera
+        if not latest_release: 
             latest_release = releases[0]
 
         latest_version_str = latest_release.get("tag_name", "0.0.0").lstrip('v')
-        release_url = latest_release.get("html_url") # Mantenemos la URL de la página por si acaso
+        release_url = latest_release.get("html_url")
 
-        # --- CAMBIO 2: Buscar la URL de descarga del .exe ---
         installer_url = None
-        expected_filename_prefix = f"DowP_v{latest_version_str}_setup"
+        
+        # --- CAMBIO: Buscamos el ZIP ---
+        expected_suffix = "Light_setup.zip" 
+        
         for asset in latest_release.get("assets", []):
-            if asset.get("name", "").startswith(expected_filename_prefix) and asset.get("name", "").endswith(".exe"):
+            asset_name = asset.get("name", "")
+            
+            # Verificamos versión y sufijo
+            if f"v{latest_version_str}" in asset_name and asset_name.endswith(expected_suffix):
                 installer_url = asset.get("browser_download_url")
-                break # Encontramos el .exe, salimos del bucle
+                print(f"INFO: Instalador Light (ZIP) encontrado: {asset_name}")
+                break 
+        
+        # Fallback: Si no encuentra el Light ZIP, buscar cualquier .zip (Full o normal)
+        if not installer_url:
+             print("ADVERTENCIA: No se encontró ZIP 'Light', buscando ZIP genérico...")
+             for asset in latest_release.get("assets", []):
+                if asset.get("name", "").endswith(".zip") and "setup" in asset.get("name", "").lower():
+                    installer_url = asset.get("browser_download_url")
+                    break
 
         current_v = version.parse(current_version_str)
         latest_v = version.parse(latest_version_str)
 
         if latest_v > current_v:
-            print(f"INFO: ¡Actualización encontrada! Nueva versión: {latest_version_str}")
             return {
                 "update_available": True,
                 "latest_version": latest_version_str,
-                "release_url": release_url, # URL de la página
-                # --- CAMBIO 3: Devolver la URL del instalador ---
-                "installer_url": installer_url, # URL directa al .exe (puede ser None si no se encontró)
+                "release_url": release_url,
+                "installer_url": installer_url, # URL del .zip
                 "is_prerelease": latest_release.get("prerelease", False)
             }
         else:
-            print("INFO: La aplicación está actualizada.")
             return {"update_available": False}
 
-    except requests.RequestException as e:
-        print(f"ERROR: No se pudo verificar la actualización de la app (error de red): {e}")
-        return {"error": "No se pudo conectar para verificar."}
     except Exception as e:
-        print(f"ERROR: Ocurrió un error inesperado al verificar la actualización: {e}")
-        return {"error": "Ocurrió un error inesperado."}
+        print(f"ERROR verificando actualización: {e}")
+        return {"error": "Error al verificar."}
     
 # --- FUNCIONES DE INKSCAPE (NUEVO) ---
 
@@ -753,18 +772,30 @@ def check_ghostscript_status(progress_callback):
     except Exception as e:
         return {"status": "error", "message": f"Error verificando Ghostscript: {e}"}
     
-def check_and_download_upscaling_tools(progress_callback):
+def check_and_download_upscaling_tools(progress_callback, target_tool=None):
     """
-    Verifica y descarga las herramientas de reescalado (Real-ESRGAN y Waifu2x).
-    Se instalan en bin/models/upscaling/{herramienta}.
+    Verifica y descarga las herramientas de reescalado con reporte de porcentaje real.
+    Si target_tool se especifica (ej: "Real-ESRGAN"), solo descarga esa.
     """
     os.makedirs(UPSCALING_DIR, exist_ok=True)
     
-    total_tools = len(UPSCALING_TOOLS)
+    # Filtrar herramientas si se especifica una
+    tools_to_process = UPSCALING_TOOLS
+    if target_tool:
+        # Manejar coincidencia parcial (ej: "RealSR" coincide con la key "RealSR")
+        # o búsqueda inversa si el nombre varía.
+        if target_tool in UPSCALING_TOOLS:
+            tools_to_process = {target_tool: UPSCALING_TOOLS[target_tool]}
+        else:
+            print(f"ERROR: Herramienta '{target_tool}' no encontrada en constantes.")
+            return False
+
+    total_tools = len(tools_to_process)
     processed_count = 0
     
     try:
-        for key, info in UPSCALING_TOOLS.items():
+        # Iteramos sobre el diccionario filtrado
+        for key, info in tools_to_process.items():
             tool_name = info["name"]
             folder_name = info["folder"]
             exe_name = info["exe"]
@@ -779,11 +810,8 @@ def check_and_download_upscaling_tools(progress_callback):
                 processed_count += 1
                 continue
                 
-            # Si no existe, descargar
-            progress_msg = f"Descargando IA Upscaling ({processed_count+1}/{total_tools}): {tool_name}..."
-            print(f"INFO: {progress_msg}")
-            # Usamos un rango de progreso visual del 60% al 90%
-            progress_callback(progress_msg, 60 + (processed_count * 15))
+            # --- INICIO DESCARGA CON PROGRESO DETALLADO ---
+            print(f"INFO: Iniciando descarga de {tool_name}...")
             
             # Descargar ZIP
             zip_filename = f"{folder_name}_temp.zip"
@@ -792,19 +820,46 @@ def check_and_download_upscaling_tools(progress_callback):
             try:
                 with requests.get(url, stream=True, timeout=120) as r:
                     r.raise_for_status()
+                    total_size = int(r.headers.get('content-length', 0))
+                    downloaded_size = 0
+                    last_reported_pct = -1
+                    
                     with open(zip_path, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=8192):
-                            if chunk: f.write(chunk)
+                        # Chunk de 64KB para velocidad
+                        for chunk in r.iter_content(chunk_size=65536):
+                            if chunk: 
+                                f.write(chunk)
+                                downloaded_size += len(chunk)
+                                
+                                # Calcular porcentaje
+                                if total_size > 0:
+                                    percent = int(downloaded_size * 100 / total_size)
+                                    
+                                    # Actualizar UI solo si cambió el porcentaje (para no saturar)
+                                    if percent > last_reported_pct:
+                                        last_reported_pct = percent
+                                        
+                                        dl_mb = downloaded_size / (1024 * 1024)
+                                        tot_mb = total_size / (1024 * 1024)
+                                        
+                                        # Mensaje estilo: "⬇️ Real-ESRGAN: 45% (15.2/30.5 MB)"
+                                        status_text = f"⬇️ {tool_name}: {percent}% ({dl_mb:.1f}/{tot_mb:.1f} MB)"
+                                        
+                                        # Valor numérico para barra de progreso global (opcional)
+                                        progress_callback(status_text, percent)
                 
-                progress_callback(f"Extrayendo {tool_name}...", 70 + (processed_count * 15))
+                # --- EXTRACCIÓN ---
+                progress_callback(f"Extrayendo {tool_name}...", 100)
                 
                 # Descomprimir
                 temp_extract_dir = os.path.join(UPSCALING_DIR, f"{folder_name}_temp_extract")
+                if os.path.exists(temp_extract_dir):
+                    shutil.rmtree(temp_extract_dir) # Limpiar residuos anteriores
+                    
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     zip_ref.extractall(temp_extract_dir)
                 
-                # Mover contenido: Los zips suelen tener una carpeta dentro (ej: realesrgan-windows-v...)
-                # Buscamos esa carpeta interna y movemos su contenido a la carpeta destino limpia
+                # Mover contenido: Buscar la carpeta interna
                 extracted_items = os.listdir(temp_extract_dir)
                 source_path = temp_extract_dir
                 
@@ -819,7 +874,7 @@ def check_and_download_upscaling_tools(progress_callback):
                 
                 print(f"INFO: ✅ {tool_name} instalado correctamente.")
                 
-                # Limpieza
+                # Limpieza final
                 os.remove(zip_path)
                 if os.path.exists(temp_extract_dir):
                     shutil.rmtree(temp_extract_dir)
@@ -827,7 +882,9 @@ def check_and_download_upscaling_tools(progress_callback):
             except Exception as e:
                 print(f"ERROR descargando {tool_name}: {e}")
                 # Limpiar en caso de error
-                if os.path.exists(zip_path): os.remove(zip_path)
+                if os.path.exists(zip_path): 
+                    try: os.remove(zip_path)
+                    except: pass
                 return False
             
             processed_count += 1
@@ -838,3 +895,23 @@ def check_and_download_upscaling_tools(progress_callback):
         print(f"ERROR CRÍTICO gestionando herramientas de reescalado: {e}")
         progress_callback(f"Error en Upscaling: {e}", -1)
         return False
+    
+def get_remote_file_size(url):
+    """Obtiene el tamaño de un archivo remoto en bytes sin descargarlo."""
+    try:
+        response = requests.head(url, allow_redirects=True, timeout=5)
+        if response.status_code == 200:
+            return int(response.headers.get('content-length', 0))
+        return 0
+    except Exception:
+        return 0
+
+def format_size(size_bytes):
+    """Formatea bytes a MB/GB."""
+    if size_bytes == 0:
+        return "Desconocido"
+    
+    size_mb = size_bytes / (1024 * 1024)
+    if size_mb >= 1024:
+        return f"{size_mb / 1024:.2f} GB"
+    return f"{size_mb:.1f} MB"

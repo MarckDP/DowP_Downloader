@@ -18,7 +18,7 @@ from contextlib import redirect_stdout
 from src.core.exceptions import UserCancelledError 
 from src.core.downloader import get_video_info
 from src.core.batch_processor import Job
-from .dialogs import Tooltip, messagebox 
+from .dialogs import Tooltip, messagebox, PlaylistSelectionDialog
 
 import requests
 from PIL import Image
@@ -69,6 +69,9 @@ class BatchDownloadTab(ctk.CTkFrame):
 
         self.job_widgets = {}
 
+        # 🆕 NUEVO: Caché de datos de playlist (job_id -> info_dict completo)
+        self.playlist_cache = {}
+
         self.selected_job_id: str | None = None
         self.current_video_formats: dict = {}
         self.current_audio_formats: dict = {}
@@ -90,8 +93,10 @@ class BatchDownloadTab(ctk.CTkFrame):
         self._updating_ui = False
 
         # Configuración de la Rejilla Principal (Layout)
-        self.grid_columnconfigure(0, weight=35, minsize=350)
-        self.grid_columnconfigure(1, weight=65, minsize=450)
+        # ✅ CORRECCIÓN: Usamos 'uniform' para FIJAR PROPORCIONES (35% - 65%)
+        # Esto elimina el parpadeo (flicker) cuando el contenido cambia dinámicamente.
+        self.grid_columnconfigure(0, weight=40, uniform="batch_cols") # Panel Izquierdo (35%)
+        self.grid_columnconfigure(1, weight=60, uniform="batch_cols") # Panel Derecho (65%)
         
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=0)
@@ -106,6 +111,10 @@ class BatchDownloadTab(ctk.CTkFrame):
         # Iniciar el hilo de trabajo
         self.queue_manager.start_worker_thread()
         
+        # --- NUEVO: Variable para el temporizador de selección (Debounce) ---
+        self._selection_timer_id = None 
+        # -------------------------------------------------------------------
+
         # Dibujar los widgets
         self._create_widgets()
         self._initialize_ui_settings()
@@ -144,22 +153,7 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.global_options_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
         self.global_options_frame.grid_columnconfigure(0, weight=1)
 
-        # --- NUEVO: Panel de Advertencia ---
-        # (Este frame ocupa la fila 0)
-        warning_frame = ctk.CTkFrame(self.global_options_frame, fg_color="#332222", corner_radius=5)
-        warning_frame.grid(row=0, column=0, sticky="ew", padx=5, pady=(5, 5))
-        warning_frame.grid_columnconfigure(0, weight=1)
-
-        warning_label = ctk.CTkLabel(
-            warning_frame, 
-            text="ADVERTENCIA: La pestaña 'Descarga por Lotes' está en desarrollo activo.\n"
-                 "Aún no es estable y puede fallar de múltiples formas, quiero decir, ni la de descarga única es estable pero XD.\nÚsala con precaución.",
-            text_color="#F08080", # Un rojo claro para el texto
-            font=ctk.CTkFont(size=12, weight="bold"),
-            justify="center"
-        )
-        warning_label.pack(pady=8, padx=10, fill="x", expand=True)
-        # --- FIN Panel de Advertencia ---
+        
 
         # LÍNEA 1: Opciones Globales Fila 1 (Usada)
         global_line1_frame = ctk.CTkFrame(self.global_options_frame, fg_color="transparent")
@@ -170,16 +164,30 @@ class BatchDownloadTab(ctk.CTkFrame):
             text="Análisis de Playlist",
             onvalue=True,
             offvalue=False,
-            command=self.save_settings
+            command=self._on_playlist_analysis_toggle # <--- CAMBIO AQUÍ (Nueva función)
         )
         self.playlist_analysis_check.pack(side="left", padx=5) 
-        self.playlist_analysis_check.select() # Marcada por defecto
+        self.playlist_analysis_check.select() 
 
         playlist_tooltip_text = "Activado: Analiza la playlist/colección completa.\nDesactivado: Analiza solo el video individual de la URL."
         Tooltip(self.playlist_analysis_check, playlist_tooltip_text, delay_ms=1000)
 
-        # Dejamos un espacio de 15px a la izq. (15 + 5 del anterior = 20px de separación)
-        ctk.CTkLabel(global_line1_frame, text="Aplicar Modo Global:").pack(side="left", padx=(15, 5)) 
+        # --- NUEVO CHECKBOX ---
+        self.fast_mode_check = ctk.CTkCheckBox(
+            global_line1_frame,
+            text="Modo Rápido",
+            command=self.save_settings,
+            width=100
+        )
+        self.fast_mode_check.pack(side="left", padx=5)
+        self.fast_mode_check.select() # Por defecto activado (para mantener el comportamiento actual)
+
+        fast_tooltip = "Activado: Análisis instantáneo (Flat). Abre el selector de videos.\nDesactivado: Análisis profundo (Lento). Añade todos los videos a la cola uno por uno."
+        Tooltip(self.fast_mode_check, fast_tooltip, delay_ms=1000)
+        # ----------------------
+
+        # Dejamos un espacio de 15px a la izq.
+        ctk.CTkLabel(global_line1_frame, text="Aplicar Modo Global:").pack(side="left", padx=(15, 5))
         
         self.global_mode_var = StringVar(value="Video+Audio")
         
@@ -188,9 +196,26 @@ class BatchDownloadTab(ctk.CTkFrame):
             values=["Video+Audio", "Solo Audio"],
             width=140,
             variable=self.global_mode_var,
-            command=self._on_apply_global_mode # <--- Nueva función
+            command=self._on_apply_global_mode 
         )
         self.global_mode_menu.pack(side="left", padx=5)
+
+        # --- NUEVO: Selector de Calidad Global ---
+        self.global_quality_var = StringVar(value="-")
+        
+        self.global_quality_menu = ctk.CTkOptionMenu(
+            global_line1_frame,
+            values=["-"],
+            width=160,
+            variable=self.global_quality_var,
+            command=self._on_apply_global_quality # <--- Función que crearemos abajo
+        )
+        self.global_quality_menu.pack(side="left", padx=5)
+        
+        Tooltip(self.global_quality_menu, "Aplica un criterio de calidad (ej: 1080p) a todos los videos individuales de la lista.\nNO afecta a las Playlists (Modo Rápido).", delay_ms=1000)
+        
+        # Inicializar opciones
+        self._update_global_quality_options("Video+Audio")
 
         # LÍNEA 2: Opciones Globales Fila 2 (Espacio futuro)
         global_line2_frame_placeholder = ctk.CTkFrame(self.global_options_frame, fg_color="transparent", height=10)
@@ -235,6 +260,17 @@ class BatchDownloadTab(ctk.CTkFrame):
             command=self._on_thumbnail_mode_change
         )
         self.radio_only_thumbnail.pack(side="left", padx=5)
+
+        # ✅ NUEVO: Checkbox para enviar a Herramientas de Imagen
+        self.auto_send_to_it_checkbox = ctk.CTkCheckBox(
+            global_line3_frame,
+            text="Auto-enviar a H.I.",
+            width=120,
+            state="disabled" # Nace deshabilitado (porque el default es Modo Manual)
+        )
+        self.auto_send_to_it_checkbox.pack(side="left", padx=(15, 5))
+        
+        Tooltip(self.auto_send_to_it_checkbox, "Al terminar la descarga, envía automáticamente la miniatura a la pestaña 'Herramientas de Imagen' para editarla, escalar o quitar fondo.", delay_ms=1000)
         
         # DESPUÉS (El bloque de código corregido y completo)
 
@@ -338,8 +374,7 @@ class BatchDownloadTab(ctk.CTkFrame):
 
         # --- 5a. Panel Superior (Miniatura, Info, Calidad) ---
         self.top_config_frame = ctk.CTkFrame(self.config_panel)
-        self.top_config_frame.configure(height=250)
-        self.top_config_frame.pack_propagate(False)
+        # (Eliminadas las restricciones de altura fija)
         self.top_config_frame.grid(row=0, column=0, sticky="new", padx=5, pady=5)
         self.top_config_frame.grid_columnconfigure(0, weight=0)
         self.top_config_frame.grid_columnconfigure(1, weight=1)
@@ -373,7 +408,11 @@ class BatchDownloadTab(ctk.CTkFrame):
 
         ctk.CTkLabel(self.info_frame, text="Título:", anchor="w").pack(fill="x", padx=5, pady=(0,0))
         self.title_entry = ctk.CTkEntry(self.info_frame, font=("", 14), placeholder_text="Título del archivo...")
-        self.title_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.title_entry)) # <-- AÑADIR ESTA LÍNEA
+        self.title_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.title_entry))
+        
+        # NUEVO: Guardar cambios en tiempo real al escribir
+        self.title_entry.bind("<KeyRelease>", self._on_batch_config_change)
+        
         self.title_entry.pack(fill="x", padx=5, pady=(0,5))
 
         self.mode_selector = ctk.CTkSegmentedButton(self.info_frame, values=["Video+Audio", "Solo Audio"], command=self._on_item_mode_change_and_save)
@@ -631,6 +670,20 @@ class BatchDownloadTab(ctk.CTkFrame):
             self.open_folder_button.configure(state="normal")
 
         self._set_config_panel_state("disabled")
+
+    def _on_playlist_analysis_toggle(self):
+        """
+        Activa/Desactiva el checkbox de Modo Rápido según el estado de Análisis de Playlist.
+        Se activa automáticamente por defecto al habilitar playlist.
+        """
+        if self.playlist_analysis_check.get():
+            self.fast_mode_check.configure(state="normal")
+            self.fast_mode_check.select() 
+        else:
+            self.fast_mode_check.deselect()
+            self.fast_mode_check.configure(state="disabled")
+        
+        self.save_settings()
 
     def _thumbnail_worker_loop(self):
         """
@@ -939,32 +992,39 @@ class BatchDownloadTab(ctk.CTkFrame):
             return
         
         if job_id == "GLOBAL_PROGRESS":
-            # ... (código existente)
+            if status == "UPDATE":
+                # Actualizar texto y barra
+                # progress_percent viene del procesador como 0.0 a 1.0
+                self.progress_label.configure(text=message)
+                self.progress_bar.set(progress_percent)
+            
+            elif status == "RESET":
+                # Resetear a cero
+                self.progress_label.configure(text=message)
+                self.progress_bar.set(0)
             return
 
-        # ✅ BLINDAJE: Verificar si el trabajo realmente existe en el Manager
-        # Si no existe y no tenemos widget, NO lo creamos (es un zombie de un hilo cancelado)
-        # Excepción: Si el estado es "PENDING" inicial, permitimos crearlo.
+        # Verificar si el trabajo existe
         job_exists = self.queue_manager.get_job_by_id(job_id)
-        
         job_frame = self.job_widgets.get(job_id)
 
+        # --- CREACIÓN DEL WIDGET (Si no existe) ---
         if not job_frame:
             if not job_exists:
-                print(f"DEBUG: update_job_ui ignorado para job fantasma: {job_id}")
                 return
 
             job_frame = ctk.CTkFrame(self.queue_scroll_frame, border_width=1, border_color="#555")
             job_frame.pack(fill="x", padx=5, pady=(0, 5))
             
-            job_frame.grid_columnconfigure(0, weight=1)
-            job_frame.grid_columnconfigure(1, weight=0)  # Carpeta
-            job_frame.grid_columnconfigure(2, weight=0)  # Reset
-            job_frame.grid_columnconfigure(3, weight=0)  # Cerrar
+            # 1. Definir Columnas (Estructura Fija)
+            job_frame.grid_columnconfigure(0, weight=1) # Título (Se estira)
+            job_frame.grid_columnconfigure(1, weight=0) # Config (⚙️)
+            job_frame.grid_columnconfigure(2, weight=0) # Carpeta (📂)
+            job_frame.grid_columnconfigure(3, weight=0) # Restaurar (◁)
+            job_frame.grid_columnconfigure(4, weight=0) # Cerrar (⨉)
             
+            # 2. Labels
             job_frame.title_label = ctk.CTkLabel(job_frame, text=message, anchor="w", wraplength=400)
-
-
             job_frame.title_label.grid(row=0, column=0, padx=10, pady=(5,0), sticky="ew")
             
             job_frame.status_label = ctk.CTkLabel(job_frame, text="Pendiente...", anchor="w", text_color="gray", font=ctk.CTkFont(size=11))
@@ -972,102 +1032,135 @@ class BatchDownloadTab(ctk.CTkFrame):
 
             job_frame.progress_bar = ctk.CTkProgressBar(job_frame, height=4)
             job_frame.progress_bar.set(0)
-            job_frame.progress_bar.grid(row=2, column=0, columnspan=4, padx=10, pady=(0, 2), sticky="ew")  # ✅ columnspan=4
+            job_frame.progress_bar.grid(row=2, column=0, columnspan=5, padx=10, pady=(0, 2), sticky="ew")
             job_frame.progress_bar.grid_remove()
 
-            # ✅ NUEVO: Botón de carpeta (oculto por defecto)
+            # 3. Botones (Una sola vez cada uno)
+            
+            # Columna 1: Configurar (Solo Playlist)
+            job_frame.config_button = ctk.CTkButton(
+                job_frame, text="⚙️", width=28, height=28,
+                font=ctk.CTkFont(size=14),
+                fg_color="transparent", hover_color="#555",
+                command=lambda jid=job_id: self._reconfigure_playlist_job(jid)
+            )
+            job_frame.config_button.grid(row=0, column=1, rowspan=2, padx=(0, 0), pady=5)
+            
+            # Columna 2: Carpeta
             job_frame.folder_button = ctk.CTkButton(
                 job_frame, text="📂", width=28, height=28,
                 font=ctk.CTkFont(size=14),
                 fg_color="transparent", hover_color="#555",
                 command=lambda jid=job_id: self._open_job_folder(jid)
             )
-            job_frame.folder_button.grid(row=0, column=1, rowspan=2, padx=(0, 0), pady=5)
-            job_frame.folder_button.grid_remove()
+            job_frame.folder_button.grid(row=0, column=2, rowspan=2, padx=(0, 0), pady=5)
 
+            # Columna 3: Restaurar
             job_frame.restore_button = ctk.CTkButton(
                 job_frame, text="◁", width=28, height=28,
                 font=ctk.CTkFont(size=16),
                 fg_color="transparent", hover_color="#555",
                 command=lambda jid=job_id: self._on_reset_single_job(jid)
             )
-            job_frame.restore_button.grid(row=0, column=2, rowspan=2, padx=(0, 0), pady=5)
-            job_frame.restore_button.grid_remove()
+            job_frame.restore_button.grid(row=0, column=3, rowspan=2, padx=(0, 0), pady=5)
 
+            # Columna 4: Cerrar
             job_frame.close_button = ctk.CTkButton(
                 job_frame, text="⨉", width=28, height=28, 
                 fg_color="transparent", hover_color="#555",
                 command=lambda jid=job_id: self._remove_job(jid)
             )
-            job_frame.close_button.grid(row=0, column=3, rowspan=2, padx=(0, 5), pady=5)
+            job_frame.close_button.grid(row=0, column=4, rowspan=2, padx=(0, 5), pady=5)
             
-            job_frame.bind("<Button-1>", lambda e, jid=job_id: self._on_job_select(jid))
+            # 4. Lógica de Visibilidad Inicial
+            job_frame.folder_button.grid_remove()
+            job_frame.restore_button.grid_remove()
+            
+            # Mostrar engranaje SOLO si es Playlist
+            if job_exists and job_exists.job_type == "PLAYLIST":
+                job_frame.config_button.grid()
+            else:
+                job_frame.config_button.grid_remove()
 
-            
+            # Eventos de clic
+            job_frame.bind("<Button-1>", lambda e, jid=job_id: self._on_job_select(jid))
             job_frame.title_label.bind("<Button-1>", lambda e, jid=job_id: self._on_job_select(jid))
             job_frame.status_label.bind("<Button-1>", lambda e, jid=job_id: self._on_job_select(jid))
 
             self.job_widgets[job_id] = job_frame
             return
 
+        # --- ACTUALIZACIÓN DE ESTADO ---
+
         if status == "RUNNING":
             job_frame.title_label.configure(text_color="white")
             job_frame.status_label.configure(text=message, text_color="#52a2f2") 
             job_frame.progress_bar.grid() 
-            if "..." in message and "%" in message:
+            
+            # Usar valor numérico directo si es válido
+            if progress_percent > 0:
+                job_frame.progress_bar.set(progress_percent / 100.0)
+            # Fallback texto
+            elif "..." in message and "%" in message:
                 try:
-                    # Extraer el "XX.X" (funciona para "Descargando..." y "Recodificando...")
                     percent_str = message.split("...")[1].split("%")[0].strip()
                     percent_float = float(percent_str) / 100.0
                     job_frame.progress_bar.set(percent_float)
-                except (ValueError, IndexError):
-                    # Falló el parseo, pero es un mensaje de progreso
-                    job_frame.progress_bar.set(0)
-            else:
-                 # El mensaje no es de progreso (ej: "Iniciando...", "Fusionando...")
-                 job_frame.progress_bar.set(0)
+                except:
+                    pass
 
         elif status == "COMPLETED":
             job_frame.title_label.configure(text_color="#90EE90")
             job_frame.status_label.configure(text=message, text_color="#28A745") 
             job_frame.progress_bar.set(1)
             job_frame.progress_bar.grid()
-            job_frame.folder_button.grid()  # ✅ Mostrar botón de carpeta
-            job_frame.restore_button.grid()
+            
+            job_frame.folder_button.grid()   # Mostrar carpeta
+            job_frame.restore_button.grid()  # Mostrar restaurar
+            job_frame.config_button.grid_remove() # Ocultar config al terminar
 
-        elif status == "SKIPPED": # <-- BLOQUE NUEVO
-            job_frame.title_label.configure(text_color="#FFA500") # Naranja
-            job_frame.status_label.configure(text=message, text_color="#FF8C00") # Naranja oscuro
-            job_frame.progress_bar.set(0)
+            # ✅ NUEVO: Lógica de Auto-Envío a Herramientas de Imagen
+            if self.auto_send_to_it_checkbox.get() == 1:
+                # Accedemos al job para ver si tiene miniatura
+                job_obj = self.queue_manager.get_job_by_id(job_id)
+                if job_obj and hasattr(job_obj, 'thumbnail_path') and job_obj.thumbnail_path:
+                    if os.path.exists(job_obj.thumbnail_path):
+                        print(f"INFO: Auto-enviando miniatura a H.I.: {job_obj.thumbnail_path}")
+                        # Enviamos como lista de 1 elemento
+                        self.app.image_tab._process_imported_files([job_obj.thumbnail_path])
+
+        elif status == "SKIPPED":
+            job_frame.title_label.configure(text_color="#FFA500")
+            job_frame.status_label.configure(text=message, text_color="#FF8C00")
             job_frame.progress_bar.grid_remove()
             job_frame.restore_button.grid()
 
         elif status == "NO_AUDIO":
-            job_frame.title_label.configure(text_color="#FFA500") # Naranja
-            job_frame.status_label.configure(text=message, text_color="#FF8C00") # Naranja oscuro
-            job_frame.progress_bar.set(0)
+            job_frame.title_label.configure(text_color="#FFA500")
+            job_frame.status_label.configure(text=message, text_color="#FF8C00")
             job_frame.progress_bar.grid_remove()
             job_frame.restore_button.grid()   
 
         elif status == "FAILED":
-            # Si el título actual es 'Analizando...', cámbialo.
             if job_frame.title_label.cget("text") == "Analizando...":
                 job_frame.title_label.configure(text="Error de Análisis", text_color="#F08080")
             else:
-                # Si ya tenía un título (p.ej. un reintento fallido), solo cambia el color
                 job_frame.title_label.configure(text_color="#F08080")
 
             job_frame.status_label.configure(text=message, text_color="#DC3545", wraplength=400)
-            job_frame.progress_bar.set(0)
             job_frame.progress_bar.grid_remove()
             job_frame.restore_button.grid()
 
         elif status == "PENDING":
             job_frame.title_label.configure(text_color="white")
             job_frame.status_label.configure(text=message, text_color="gray")
-            job_frame.progress_bar.set(0)
             job_frame.progress_bar.grid_remove()
             job_frame.restore_button.grid_remove()
+            job_frame.folder_button.grid_remove()
+            
+            # Asegurar que config se vea si es playlist y vuelve a pendiente
+            if job_exists and job_exists.job_type == "PLAYLIST":
+                job_frame.config_button.grid()
 
     def _open_job_folder(self, job_id: str):
         """Abre la carpeta y selecciona el archivo de un job específico."""
@@ -1101,6 +1194,11 @@ class BatchDownloadTab(ctk.CTkFrame):
             self.job_widgets[job_id].destroy()
             del self.job_widgets[job_id]
         
+        # 🆕 LIMPIAR CACHÉ DE PLAYLIST
+        if job_id in self.playlist_cache:
+            del self.playlist_cache[job_id]
+            print(f"DEBUG: 🗑️ Caché de playlist eliminada para {job_id[:6]}")
+        
         self.queue_manager.remove_job(job_id)
         
         if self.selected_job_id == job_id:
@@ -1109,7 +1207,6 @@ class BatchDownloadTab(ctk.CTkFrame):
             self.create_placeholder_label(self.thumbnail_container, "Miniatura")
         
         if not self.job_widgets:
-            # ✅ RESTAURAR TEXTO ORIGINAL
             self.queue_placeholder_label.configure(
                 text="Arrastra videos/carpetas aquí\no pega una URL arriba"
             )
@@ -1123,64 +1220,82 @@ class BatchDownloadTab(ctk.CTkFrame):
             self.global_recode_checkbox.deselect()
 
     def _on_job_select(self, job_id: str):
-        """MODIFICADO: Previene actualizaciones recursivas y CARGA LA MINIATURA."""
+        """
+        MODIFICADO: Usa DEBOUNCE para evitar lag al cambiar rápido de ítems.
+        Solo procesa la selección si el usuario se detiene por 150ms.
+        """
+        # 1. Selección visual inmediata (para que se sienta responsivo)
+        if self.selected_job_id and self.selected_job_id in self.job_widgets:
+            try:
+                self.job_widgets[self.selected_job_id].configure(border_color="#555")
+            except: pass
+
+        new_frame = self.job_widgets.get(job_id)
+        if new_frame:
+            new_frame.configure(border_color="#007BFF")
+        
+        # Si es el mismo, no hacer nada más
         if job_id == self.selected_job_id:
             return
 
-        # Guardar el job anterior usando la función de guardado correcta
+        # 2. Guardar el anterior INMEDIATAMENTE (antes de cambiar el ID)
         if self.selected_job_id and not self._updating_ui:
-            print(f"DEBUG: Guardando config del job anterior ({self.selected_job_id[:6]}) al deseleccionar...")
             self._on_batch_config_change()
 
-        # Deseleccionar el job anterior
-        if self.selected_job_id and self.selected_job_id in self.job_widgets:
-            old_frame = self.job_widgets[self.selected_job_id]
-            old_frame.configure(border_color="#555")
-
-        # Seleccionar el nuevo job
-        new_frame = self.job_widgets.get(job_id)
-        if not new_frame:
-            return
-            
-        new_frame.configure(border_color="#007BFF")
+        # 3. Actualizar el ID seleccionado
         self.selected_job_id = job_id
+
+        # 4. --- LÓGICA DE DEBOUNCE (ANTIRREBOTE) ---
+        # Si había una tarea de carga pendiente, CANCELARLA
+        if self._selection_timer_id:
+            self.after_cancel(self._selection_timer_id)
+        
+        # Programar la carga pesada para dentro de 150ms
+        # Si el usuario hace clic otra vez antes de 150ms, esto se cancelará arriba.
+        self._selection_timer_id = self.after(150, lambda: self._process_job_selection_delayed(job_id))
+
+    def _process_job_selection_delayed(self, job_id: str):
+        """
+        (NUEVO MÉTODO) Ejecuta la carga pesada de la UI y miniaturas.
+        Solo se llama si el usuario deja de hacer clic frenéticamente.
+        """
+        self._selection_timer_id = None # Limpiar referencia
         
         job = self.queue_manager.get_job_by_id(job_id)
-        if not job or not job.analysis_data:
-            print(f"ERROR: No se encontraron datos de análisis para el job {job_id}")
+        if not job:
+            return
+
+        # Si no hay datos, deshabilitar y salir
+        if not job.analysis_data:
             self._set_config_panel_state("disabled")
             return
             
+        # Carga pesada de la UI (Esto es lo que causaba el lag)
         self._set_config_panel_state("normal")
         self._populate_config_panel(job)
         
-        # 🆕 CRÍTICO: Cargar la miniatura del job seleccionado
+        # Carga de miniatura (Copiado de tu lógica anterior)
         if job.job_type == "LOCAL_RECODE":
             local_path = job.config.get('local_file_path')
-            # Solo cargar si tiene stream de video
             if job.analysis_data.get('local_info', {}).get('video_stream'):
-                print(f"DEBUG: Cargando fotograma local para job {job_id}...")
-                # Llamamos a load_thumbnail con la ruta local
-                threading.Thread(target=self.load_thumbnail, args=(local_path, True), daemon=True).start()
+                self.thumb_queue.put((job_id, local_path, True)) 
             else:
-                # Es un archivo de solo audio
                 self.create_placeholder_label(self.thumbnail_container, "🎵", font_size=60)
                 
-        else: # Es un trabajo de DESCARGA (lógica original)
+        elif job.job_type == "PLAYLIST":
+             pass # Ya se maneja en populate
+
+        else: # DOWNLOAD normal
             thumbnail_url = job.analysis_data.get('thumbnail')
             if thumbnail_url:
-                print(f"DEBUG: Cargando miniatura para job {job_id}: {thumbnail_url[:60]}...")
-                # Llamamos a load_thumbnail con la URL
-                threading.Thread(target=self.load_thumbnail, args=(thumbnail_url, False), daemon=True).start()
+                self.thumb_queue.put((job_id, thumbnail_url, False))
             else:
-                # Si no hay miniatura, mostrar placeholder apropiado
                 formats = job.analysis_data.get('formats', [])
                 has_audio_only = any(
                     self._classify_format(f) == 'AUDIO' for f in formats
                 ) and not any(
                     self._classify_format(f) in ['VIDEO', 'VIDEO_ONLY'] for f in formats
                 )
-                
                 if has_audio_only:
                     self.create_placeholder_label(self.thumbnail_container, "🎵", font_size=60)
                 else:
@@ -1194,7 +1309,100 @@ class BatchDownloadTab(ctk.CTkFrame):
         self._updating_ui = True
         
         try:
-            
+            # --- NUEVO BLOQUE PARA PLAYLIST (EVITA EL CRASHEO) ---
+            if job.job_type == "PLAYLIST":
+                print("DEBUG: Llenando panel para trabajo PLAYLIST.")
+                
+                # 1. Título
+                self.title_entry.delete(0, 'end')
+                self.title_entry.insert(0, job.config.get('title', 'Playlist'))
+                
+                # 2. Lógica de Miniatura de Playlist (CORREGIDA)
+                thumb_url = None
+                info = job.analysis_data
+
+                # 🔧 PASO 1: Intentar obtener miniatura de alta calidad
+                if info.get('thumbnails'):
+                    # Buscar la mejor miniatura (máxima resolución)
+                    thumbnails = info['thumbnails']
+                    valid_thumbs = [t for t in thumbnails if t.get('url')]
+                    if valid_thumbs:
+                        # Ordenar por ancho (mayor primero)
+                        sorted_thumbs = sorted(valid_thumbs, key=lambda x: x.get('width', 0) or 0, reverse=True)
+                        thumb_url = sorted_thumbs[0].get('url')
+                        print(f"DEBUG: Miniatura de playlist encontrada (mejor calidad): {thumb_url[:80]}")
+
+                # 🔧 PASO 2: Fallback a campo 'thumbnail' simple
+                if not thumb_url and info.get('thumbnail'):
+                    thumb_url = info['thumbnail']
+                    print(f"DEBUG: Usando miniatura simple de playlist: {thumb_url[:80]}")
+
+                # 🔧 PASO 3: Último fallback - primer video de la playlist
+                if not thumb_url:
+                    entries = info.get('entries', [])
+                    if entries and len(entries) > 0:
+                        first_video = entries[0]
+                        if first_video.get('thumbnails'):
+                            best = max(first_video['thumbnails'], key=lambda x: x.get('width', 0) or 0)
+                            thumb_url = best.get('url')
+                            print(f"DEBUG: Usando miniatura del primer video: {thumb_url[:80] if thumb_url else 'N/A'}")
+                        elif first_video.get('thumbnail'):
+                            thumb_url = first_video['thumbnail']
+
+                # 🔧 PASO 4: Cargar la miniatura (Vía Cola)
+                if thumb_url:
+                    # Usamos la cola para evitar conflictos
+                    self.thumb_queue.put((job.job_id, thumb_url, False))
+                else:
+                    # Si realmente no hay miniatura disponible
+                    print("DEBUG: ⚠️ No se encontró miniatura para esta playlist")
+                    self.create_placeholder_label(self.thumbnail_container, "Playlist\n(Sin miniatura)", font_size=16)
+                
+                # 3. Deshabilitar controles específicos...
+                self.mode_selector.configure(state="disabled")
+                self.video_quality_menu.configure(state="disabled", values=["Configurado en Playlist"])
+                self.video_quality_menu.set("Configurado en Playlist")
+                self.audio_quality_menu.configure(state="disabled", values=["Configurado en Playlist"])
+                self.audio_quality_menu.set("Configurado en Playlist")
+                
+                # 4. ✅ HABILITAR RECODIFICACIÓN (LA NOVEDAD)
+                # Restaurar estado de Recodificación Rápida del JOB PADRE
+                is_recode_enabled = job.config.get('recode_enabled', False)
+                is_keep_original = job.config.get('recode_keep_original', True)
+    
+                if is_recode_enabled:
+                    self.batch_apply_quick_preset_checkbox.select()
+                else:
+                    self.batch_apply_quick_preset_checkbox.deselect()
+    
+                if is_keep_original:
+                    self.batch_keep_original_quick_checkbox.select()
+                else:
+                    self.batch_keep_original_quick_checkbox.deselect()
+                
+                # Habilitar el checkbox principal
+                self.batch_apply_quick_preset_checkbox.configure(state="normal")
+
+                # Poblar el menú de presets (necesitamos saber el modo para filtrar)
+                # Como la playlist tiene un modo guardado, usamos ese.
+                playlist_mode = job.config.get('playlist_mode', 'Video+Audio')
+                
+                # Truco: Ajustamos el selector visualmente (aunque esté deshabilitado)
+                # para que _populate_batch_preset_menu filtre correctamente
+                self.mode_selector.set(playlist_mode) 
+                
+                self._populate_batch_preset_menu()
+                
+                # Restaurar preset guardado
+                saved_preset = job.config.get('recode_preset_name')
+                if saved_preset:
+                    self.batch_recode_preset_menu.set(saved_preset)
+
+                # Actualizar visibilidad de los controles dependientes
+                self._on_batch_quick_recode_toggle()
+                
+                return # Salimos aquí
+
             if job.job_type == "LOCAL_RECODE":
                 print("DEBUG: Llenando panel para trabajo LOCAL_RECODE.")
                 
@@ -1209,13 +1417,16 @@ class BatchDownloadTab(ctk.CTkFrame):
                 self.title_entry.insert(0, info.get('title', 'archivo_local'))
                 
                 # --- 2. Thumbnail (CORREGIDO) ---
-                # (Esta lógica faltaba y solo se ejecutaba en _on_job_select)
-                local_path = job.config.get('local_file_path')
-                if video_stream:
-                    # Usamos print para ver el refresco en el log
-                    print(f"DEBUG: (Re)cargando fotograma local para job {job.job_id[:6]}...")
-                    # Volver a lanzar el hilo de carga de miniatura
-                    threading.Thread(target=self.load_thumbnail, args=(local_path, True), daemon=True).start()
+                # Recuperamos la ruta local del config
+                local_path = job.config.get('local_file_path')  # <--- ESTA LÍNEA ES LA QUE FALTABA
+
+                # Ya se maneja en _on_job_select para evitar doble carga al seleccionar.
+                # Solo cargamos aquí si el panel se refresca por otra razón (ej: cambio global).
+                if not self.selected_job_id or self.selected_job_id != job.job_id:
+                     pass # No cargar si no es el seleccionado activo
+                elif video_stream:
+                     # Si realmente necesitamos refrescar, usamos la cola
+                     self.thumb_queue.put((job.job_id, local_path, True))
                 else:
                     # Si no hay video, mostrar el ícono de música
                     self.create_placeholder_label(self.thumbnail_container, "🎵", font_size=60)
@@ -1582,7 +1793,7 @@ class BatchDownloadTab(ctk.CTkFrame):
                             'sort_priority': size_sort_priority
                         })
                 
-                # 🔧 Ordenamiento mejorado (igual que single_download_tab.py)
+                # 🔧 Ordenamiento mejorado (POR IDIOMA)
                 video_entries.sort(key=lambda e: (
                     -(e['format'].get('height') or 0),
                     1 if "[Combinado]" in e['label'] else 0,
@@ -1590,112 +1801,187 @@ class BatchDownloadTab(ctk.CTkFrame):
                     -(e['format'].get('tbr') or 0)
                 ))
                 
+                # ✅ CORRECCIÓN: Ordenar por IDIOMA (Español primero), no por "Original"
                 def custom_audio_sort_key(entry):
                     f = entry['format']
                     lang_code_raw = f.get('language') or ''
                     norm_code = lang_code_raw.replace('_', '-')
+                    
+                    # Prioridad 1: Tu lista de idiomas (Español arriba)
                     lang_priority = self.app.LANGUAGE_ORDER.get(
-                        norm_code,
+                        norm_code, 
                         self.app.LANGUAGE_ORDER.get(norm_code.split('-')[0], self.app.DEFAULT_PRIORITY)
                     )
+                    
+                    # Prioridad 2: Calidad
                     quality = f.get('abr') or f.get('tbr') or 0
                     return (lang_priority, -quality)
                 
                 audio_entries.sort(key=custom_audio_sort_key)
                 
-                # 🔧 MODIFICADO: Guardar también quality_key en video_formats
+                # Reconstruir diccionarios
                 self.current_video_formats = {
                     e['label']: {
                         k: e['format'].get(k) for k in ['format_id', 'vcodec', 'acodec', 'ext', 'width', 'height']
                     } | {
                         'is_combined': e.get('is_combined', False),
                         'quality_key': e.get('quality_key')
-                    }
+                    } 
                     for e in video_entries
                 }
                 
                 self.current_audio_formats = {
                     e['label']: {
-                        k: e['format'].get(k) for k in ['format_id', 'acodec', 'ext']
+                        k: e['format'].get(k) for k in ['format_id', 'acodec', 'ext', 'format_note'] # ✅ Añadido format_note
                     }
                     for e in audio_entries
                 }
                 
-                # 🔧 Verificar disponibilidad de audio (DESPUÉS de llenar los diccionarios)
+                # Verificación de audio
                 has_any_audio = bool(audio_entries) or any(
                     v.get('is_combined', False) for v in self.current_video_formats.values()
                 )
                 
-                print(f"DEBUG: audio_entries={len(audio_entries)}, has_any_audio={has_any_audio}")
-                
-                # 🆕 Deshabilitar modo "Solo Audio" si no hay audio
+                # Configuración de Modo
                 if not has_any_audio:
                     self.mode_selector.set("Video+Audio")
                     self.mode_selector.configure(state="disabled", values=["Video+Audio"])
-                    print("⚠️ ADVERTENCIA: No hay pistas de audio disponibles. Modo Solo Audio deshabilitado.")
                 elif not video_entries and audio_entries:
                     self.mode_selector.set("Solo Audio")
                     self.mode_selector.configure(state="disabled", values=["Solo Audio"])
-                    print("✅ Solo hay audio. Modo Solo Audio activado.")
                 else:
                     saved_mode = job.config.get('mode', 'Video+Audio')
                     self.mode_selector.configure(state="normal", values=["Video+Audio", "Solo Audio"])
-                    if saved_mode in ["Video+Audio", "Solo Audio"]:
-                        self.mode_selector.set(saved_mode)
-                    else:
-                        self.mode_selector.set("Video+Audio")
-                    print(f"✅ Ambos modos disponibles. Modo actual: {self.mode_selector.get()}")
+                    self.mode_selector.set(saved_mode)
                 
                 self._on_item_mode_change(self.mode_selector.get())
 
                 v_opts = list(self.current_video_formats.keys()) or ["-"]
                 a_opts = list(self.current_audio_formats.keys()) or ["-"]
 
+                # Selección de Video por defecto
                 default_video_selection = v_opts[0]
                 for option in v_opts:
                     if "✨" in option:
                         default_video_selection = option
                         break 
                 
-                default_audio_selection = a_opts[0]
-                for option in a_opts:
-                    if "✨" in option:
-                        default_audio_selection = option
-                        break
+                # --- SELECCIÓN INTELIGENTE DE AUDIO (JERARQUÍA COMPLETA) ---
+                # Regla: Original+Compatible > Original(Cualquiera) > Compatible(Idioma Pref) > Primero
+                
+                target_audio = None
+                candidate_original_incompatible = None
+                candidate_preferred_compatible = None
+                
+                # Usamos 'audio_entries' porque es la lista que YA está ordenada por idioma
+                for entry in audio_entries:
+                    f = entry['format']
+                    label = entry['label']
+                    note = (f.get('format_note') or '').lower()
+                    acodec = str(f.get('acodec', '')).split('.')[0]
+                    
+                    is_original = 'original' in note
+                    is_compatible = acodec in self.app.EDITOR_FRIENDLY_CRITERIA["compatible_acodecs"]
+                    
+                    # 1. EL GANADOR: Original Y Compatible
+                    if is_original and is_compatible:
+                        target_audio = label
+                        break 
+                    
+                    # 2. Reserva A: Original (cualquier codec)
+                    if is_original and candidate_original_incompatible is None:
+                        candidate_original_incompatible = label
+                        
+                    # 3. Reserva B: Compatible en tu idioma preferido (el primero que aparezca)
+                    if is_compatible and candidate_preferred_compatible is None:
+                        candidate_preferred_compatible = label
 
+                # Decisión final
+                if target_audio:
+                    default_audio_selection = target_audio
+                elif candidate_original_incompatible:
+                    default_audio_selection = candidate_original_incompatible
+                elif candidate_preferred_compatible:
+                    default_audio_selection = candidate_preferred_compatible
+                else:
+                    # Fallback total: el primero de la lista (probablemente Español Opus)
+                    default_audio_selection = a_opts[0]
+
+                # Configurar menús
                 self.video_quality_menu.configure(state="normal" if v_opts[0] != "-" else "disabled", values=v_opts)
                 self.audio_quality_menu.configure(state="normal" if a_opts[0] != "-" else "disabled", values=a_opts)
                 
+                # Recuperar selección guardada
                 saved_video = job.config.get('video_format_label', '-')
                 saved_audio = job.config.get('audio_format_label', '-')
                 
-                # 1. Determinar y establecer la SELECCIÓN DE VIDEO (guardada o default)
+                # 🆕 Lógica de recuperación por ID (Para selección global)
+                resolved_v_id = job.config.get('resolved_video_format_id')
+                
                 video_selection_to_set = default_video_selection
-                if saved_video in v_opts:
+                
+                if resolved_v_id:
+                    # Buscar qué etiqueta corresponde a este ID
+                    for label, info in self.current_video_formats.items():
+                        if info.get('format_id') == resolved_v_id:
+                            video_selection_to_set = label
+                            break
+                elif saved_video in v_opts:
                     video_selection_to_set = saved_video
+                
                 self.video_quality_menu.set(video_selection_to_set)
 
-                # 2. LLAMAR A LA FUNCIÓN DE VIDEO AHORA
-                # Esto actualiza la lista de audios (corrigiendo el mapa de idiomas)
-                # y resetea temporalmente el audio al valor por defecto (lo cual está bien).
+                # Llamar al cambio de video (esto puede filtrar el menú de audio si es multiidioma)
                 self._on_batch_video_quality_change(video_selection_to_set)
                 
-                # 3. AHORA SÍ, establecer la SELECCIÓN DE AUDIO (guardada o default)
-                
-                # (Volvemos a leer la lista de opciones de audio, por si cambió en el paso 2)
+                # Aplicar Audio (después del filtrado de video)
+                # Volver a leer opciones por si cambiaron (caso multiidioma)
                 current_audio_opts = self.audio_quality_menu.cget("values")
 
-                audio_selection_to_set = default_audio_selection # Fallback
+                audio_selection_to_set = default_audio_selection # Usar el inteligente calculado antes
                 
-                # Comprobar si la selección guardada sigue siendo válida en la lista actual
-                if saved_audio in current_audio_opts:
-                    audio_selection_to_set = saved_audio
-                elif saved_audio in a_opts: # Fallback por si la lista no se actualizó
-                    audio_selection_to_set = saved_audio
+                # --- NUEVO: Recuperación por ID para Audio (Fix menú global) ---
+                resolved_a_id = job.config.get('resolved_audio_format_id')
+                id_match_found = False
+
+                if resolved_a_id:
+                    # Buscar qué etiqueta corresponde a este ID en los formatos de audio actuales
+                    for label, info in self.current_audio_formats.items():
+                        if info.get('format_id') == resolved_a_id:
+                            # Verificar que esta etiqueta esté disponible en el menú actual
+                            if label in current_audio_opts:
+                                audio_selection_to_set = label
+                                id_match_found = True
+                            break
                 
+                if not id_match_found:
+                    # Si no hubo match por ID, intentar por etiqueta guardada (fallback)
+                    if saved_audio in current_audio_opts:
+                        audio_selection_to_set = saved_audio
+                    elif saved_audio in a_opts: 
+                        audio_selection_to_set = saved_audio
+                # -------------------------------------------------------------
+                
+                # Si el video filtró los audios (caso multiidioma), verificar validez
+                if audio_selection_to_set not in current_audio_opts and len(current_audio_opts) > 0:
+                     audio_selection_to_set = current_audio_opts[0]
+
                 # Establecer la selección de audio final
                 self.audio_quality_menu.set(audio_selection_to_set)
                 
+                # ✅ CORRECCIÓN CRÍTICA: Sincronizar la "Selección Inteligente" con los Datos del Job
+                # Como estamos bajo _updating_ui = True, el cambio visual NO dispara el guardado automático.
+                # Debemos forzar el guardado de esta selección en la configuración interna del trabajo.
+                
+                job.config['audio_format_label'] = audio_selection_to_set
+
+                # También resolver y guardar el ID inmediatamente para que el procesador no tenga dudas
+                # (Esto evita que el procesador tenga que adivinar de nuevo)
+                if audio_selection_to_set != "-" and audio_selection_to_set in self.current_audio_formats:
+                    sel_audio_data = self.current_audio_formats.get(audio_selection_to_set, {})
+                    job.config['resolved_audio_format_id'] = sel_audio_data.get('format_id')
+                    print(f"DEBUG: Selección inteligente guardada en Job: {audio_selection_to_set}")
+
                 # Restaurar estado del checkbox de miniatura
                 saved_thumbnail = job.config.get('download_thumbnail', False)
                 if saved_thumbnail:
@@ -1727,10 +2013,10 @@ class BatchDownloadTab(ctk.CTkFrame):
                 # Simplemente llamamos a la función lógica para que ajuste los estados 'disabled'/'normal'
                 self._on_batch_quick_recode_toggle()
 
-                # (Recarga la miniatura, ya que este panel se refresca)
+                # (Recarga la miniatura VIA COLA)
                 thumbnail_url = job.analysis_data.get('thumbnail')
                 if thumbnail_url:
-                    threading.Thread(target=self.load_thumbnail, args=(thumbnail_url,), daemon=True).start()
+                     self.thumb_queue.put((job.job_id, thumbnail_url, False))
             
 
         finally:
@@ -1740,18 +2026,15 @@ class BatchDownloadTab(ctk.CTkFrame):
     def load_thumbnail(self, path_or_url: str, is_local: bool = False):
         """Carga una miniatura (desde URL o archivo local) de forma segura."""
         
-        # Para archivos locales, usamos la ruta como clave de caché
         cache_key = path_or_url
         self.current_thumbnail_url = path_or_url if not is_local else None
         
-        # 1. Verificar caché (A prueba de hilos)
+        # 1. Verificar caché
         try:
             cached_item = self.thumbnail_cache[cache_key]
-            
-            # Verificar si es el formato nuevo (diccionario)
-            if isinstance(cached_item, dict) and 'ctk' in cached_item and 'raw' in cached_item:
+            if isinstance(cached_item, dict) and 'ctk' in cached_item:
                 cached_image = cached_item['ctk']
-                self.current_raw_thumbnail = cached_item['raw']
+                self.current_raw_thumbnail = cached_item.get('raw')
                 
                 def set_cached_image():
                     if self.thumbnail_label:
@@ -1761,24 +2044,19 @@ class BatchDownloadTab(ctk.CTkFrame):
                     self.thumbnail_label.image = cached_image
                     self.save_thumbnail_button.configure(state="normal")
                 
-                # ✅ SEGURO: Ejecutar en hilo principal
                 self.app.after(0, set_cached_image)
                 return 
-
         except KeyError:
             pass 
             
-        # ✅ CORRECCIÓN CRÍTICA: Usar lambda dentro de after para evitar ejecución inmediata
         self.app.after(0, lambda: self.create_placeholder_label(self.thumbnail_container, "Cargando..."))
         
         try:
             img_data = None
             if is_local:
-                # Generar fotograma desde archivo local
-                # Esto se hace en el hilo (correcto), no toca UI
+                # --- Lógica Local (Sin cambios) ---
                 job = self.queue_manager.get_job_by_id(self.selected_job_id)
                 duration = job.analysis_data.get('duration', 0) if job else 0
-                
                 frame_path = self.app.ffmpeg_processor.get_frame_from_video(path_or_url, duration)
                 
                 if frame_path and os.path.exists(frame_path):
@@ -1788,31 +2066,60 @@ class BatchDownloadTab(ctk.CTkFrame):
                     except: pass
                 else:
                     raise Exception("No se pudo generar el fotograma local.")
-                
             else:
-                # Descargar desde URL
+                # --- LÓGICA PARA URLS (CORREGIDA: LIMPIEZA DE PARÁMETROS) ---
                 headers = {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
                 }
-                
-                # Lógica de descarga (requests es seguro en hilos)
                 import requests
-                response = requests.get(path_or_url, headers=headers, timeout=15)
-                response.raise_for_status()
-                img_data = response.content
-            
-            # Validar datos
+                import re
+
+               # A) INTENTO DE ALTA CALIDAD (Solo YouTube)
+                if "i.ytimg.com" in path_or_url or "ytimg.com" in path_or_url:  # ✅ Detectar ambos formatos
+                    # 1. Limpiar la URL base
+                    clean_url = path_or_url.split('?')[0]
+                    
+                    # 2. Extraer el ID del video si es una URL de lista de miniaturas
+                    import re
+                    video_id_match = re.search(r'/vi/([^/]+)/', clean_url)
+                    if video_id_match:
+                        video_id = video_id_match.group(1)
+                        # Construir URL de máxima calidad directamente
+                        max_res_url = f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"
+                    else:
+                        # Fallback al método anterior de reemplazo
+                        max_res_url = re.sub(r'/(hq|mq|sd|default)default', '/maxresdefault', clean_url)
+                    
+                    if max_res_url != path_or_url:
+                        try:
+                            resp_hd = requests.get(max_res_url, headers=headers, timeout=3)
+                            if resp_hd.status_code == 200:
+                                img_data = resp_hd.content
+                                self.current_thumbnail_url = max_res_url
+                                self.current_raw_thumbnail = img_data
+                                print(f"DEBUG: ✅ Miniatura HD cargada: maxresdefault")
+                        except:
+                            pass
+
+                # B) PLAN B: DESCARGA ORIGINAL (Fallback)
+                if img_data is None:
+                    # Usamos la URL original completa (con parámetros si los tenía)
+                    response = requests.get(path_or_url, headers=headers, timeout=15)
+                    response.raise_for_status()
+                    img_data = response.content
+                    self.current_raw_thumbnail = img_data
+
+            # Procesamiento de imagen
             if not img_data or len(img_data) < 100:
                 raise Exception("Datos de imagen inválidos")
 
-            # Procesamiento de imagen (Pillow es seguro en hilos)
+            from PIL import Image, ImageOps
+            from io import BytesIO
+
             pil_image = Image.open(BytesIO(img_data))
-            display_image = pil_image.copy()
-            display_image.thumbnail((160, 90), Image.Resampling.LANCZOS) 
             
-            # ⚠️ OJO: Crear CTkImage en un hilo puede ser inestable a veces, 
-            # pero suele funcionar. Si falla, mover esto dentro de set_new_image.
+            # Usar FIT para que llene el cuadro sin deformarse
+            display_image = ImageOps.fit(pil_image, (160, 90), method=Image.Resampling.LANCZOS)
             ctk_image = ctk.CTkImage(light_image=display_image, dark_image=display_image, size=display_image.size)
             
             # Guardar en caché
@@ -1820,14 +2127,8 @@ class BatchDownloadTab(ctk.CTkFrame):
                 'ctk': ctk_image,
                 'raw': img_data
             }
-            self.current_raw_thumbnail = img_data
 
-            # Definir la función que actualizará la UI
             def set_new_image():
-                # Verificar si el usuario cambió de selección mientras cargábamos
-                # (Opcional, pero recomendado)
-                # if self.current_thumbnail_url != path_or_url and not is_local: return
-
                 if self.thumbnail_label:
                     self.thumbnail_label.destroy()
                 self.thumbnail_label = ctk.CTkLabel(self.thumbnail_container, text="", image=ctk_image)
@@ -1835,14 +2136,11 @@ class BatchDownloadTab(ctk.CTkFrame):
                 self.thumbnail_label.image = ctk_image
                 self.save_thumbnail_button.configure(state="normal")
             
-            # ✅ SEGURO: Enviar actualización al hilo principal
             self.app.after(0, set_new_image)
         
         except Exception as e:
             print(f"⚠️ Error al cargar miniatura: {e}")
             self.current_raw_thumbnail = None
-            
-            # ✅ SEGURO: Enviar error al hilo principal
             self.app.after(0, lambda: self.create_placeholder_label(self.thumbnail_container, "❌", font_size=60))
 
     def get_smart_thumbnail_extension(self, image_data):
@@ -1886,30 +2184,86 @@ class BatchDownloadTab(ctk.CTkFrame):
         """Callback cuando cambia el modo de descarga global."""
         mode = self.thumbnail_mode_var.get()
         
+        # 1. Obtener el tipo de trabajo seleccionado (si existe)
+        current_job_type = None
+        if self.selected_job_id:
+            job = self.queue_manager.get_job_by_id(self.selected_job_id)
+            if job:
+                current_job_type = job.job_type
+
+        # 2. Lógica de estado
         if mode == "normal":
             # Modo Manual: Habilitar el checkbox individual
             self.auto_save_thumbnail_check.configure(state="normal")
+            
+            # Deshabilitar y desmarcar el auto-envío (no tiene sentido aquí)
+            self.auto_send_to_it_checkbox.deselect()
+            self.auto_send_to_it_checkbox.configure(state="disabled")
+            
             if self.selected_job_id:
-                self._set_config_panel_state("normal")
+                if current_job_type == "PLAYLIST":
+                    self._set_config_panel_state("disabled")
+                    # Reactivar controles permitidos para Playlist
+                    self.title_entry.configure(state="normal")
+                    self.save_thumbnail_button.configure(state="normal")
+                    
+                    # ✅ CORRECCIÓN: Reactivar Recodificación
+                    self.batch_apply_quick_preset_checkbox.configure(state="normal")
+                    self._on_batch_quick_recode_toggle() # Actualizar dependencias (presets)
+                else:
+                    self._set_config_panel_state("normal")
+                    self._on_batch_quick_recode_toggle()
         
         elif mode == "with_thumbnail":
             # Con video/audio: Deshabilitar checkbox (se descarga siempre)
             self.auto_save_thumbnail_check.configure(state="disabled")
+            
+            # Habilitar auto-envío
+            self.auto_send_to_it_checkbox.configure(state="normal")
+            
             if self.selected_job_id:
-                self._set_config_panel_state("normal")
+                if current_job_type == "PLAYLIST":
+                    self._set_config_panel_state("disabled")
+                    # Reactivar controles permitidos para Playlist
+                    self.title_entry.configure(state="normal")
+                    self.save_thumbnail_button.configure(state="normal")
+                    
+                    # ✅ CORRECCIÓN: Reactivar Recodificación
+                    self.batch_apply_quick_preset_checkbox.configure(state="normal")
+                    self._on_batch_quick_recode_toggle() # Actualizar dependencias
+                else:
+                    self._set_config_panel_state("normal")
+                    self._on_batch_quick_recode_toggle()
         
         elif mode == "only_thumbnail":
-            # Solo miniaturas: Deshabilitar checkbox y panel de calidad
+            # Solo miniaturas: Deshabilitar todo (INCLUIDA la recodificación)
             self.auto_save_thumbnail_check.configure(state="disabled")
+            
+            # Habilitar auto-envío
+            self.auto_send_to_it_checkbox.configure(state="normal")
+            
             if self.selected_job_id:
                 self._set_config_panel_state("disabled")
-
+                # Permitir cambiar título incluso en este modo
+                self.title_entry.configure(state="normal")
+                # En modo "Solo Miniatura" NO reactivamos recodificación porque no hay video/audio
 
     def _on_apply_global_mode(self, selected_mode: str):
         """
         Aplica el modo (Video+Audio o Solo Audio) a TODOS los trabajos 
         actuales en la cola.
         """
+        # 1. Actualizar las opciones del menú de calidad vecino
+        self._update_global_quality_options(selected_mode)
+        
+        # --- NUEVO: Sincronizar el preset global si está activo ---
+        if self.global_recode_checkbox.get() == 1:
+            # Repoblar el menú forzando la selección de un preset compatible con el nuevo modo
+            self._populate_global_preset_menu()
+            # Aplicar inmediatamente el nuevo preset a los jobs
+            self._apply_global_recode_settings()
+        # ----------------------------------------------------------
+        
         print(f"INFO: Aplicando modo global '{selected_mode}' a todos los trabajos...")
         
         # 1. Obtener una copia de la lista de trabajos
@@ -1937,6 +2291,291 @@ class BatchDownloadTab(ctk.CTkFrame):
         
         print(f"INFO: Modo global aplicado a {len(all_jobs)} trabajos.")
 
+    def _update_global_quality_options(self, mode):
+        """Actualiza las opciones del menú de calidad global según el modo."""
+        if mode == "Video+Audio":
+            options = [
+                "Mejor Compatible ✨", 
+                "Mejor Calidad (Auto)", 
+                "4K (2160p)", 
+                "2K (1440p)", 
+                "1080p", 
+                "720p", 
+                "480p"
+            ]
+        else: # Solo Audio
+            options = [
+                "Mejor Compatible (MP3/WAV) ✨",
+                "Mejor Calidad (Auto)",
+                "Alta (320kbps)",
+                "Media (128kbps)", 
+                "Baja (64kbps)"   
+            ]
+        
+        self.global_quality_menu.configure(values=options)
+        self.global_quality_menu.set(options[0])
+
+    def _on_apply_global_quality(self, selected_quality):
+        """
+        Recorre la lista de trabajos y selecciona el formato específico
+        que mejor coincida con el criterio global seleccionado.
+        """
+        print(f"INFO: Aplicando calidad global '{selected_quality}'...")
+        
+        mode = self.global_mode_var.get()
+        
+        with self.queue_manager.jobs_lock:
+            for job in self.queue_manager.jobs:
+                # 1. IGNORAR PLAYLISTS (Regla de oro)
+                if job.job_type == "PLAYLIST":
+                    continue
+                
+                # 2. Ignorar trabajos ya completados o fallidos
+                if job.status not in ("PENDING", "RUNNING"):
+                    continue
+
+                # 3. Ignorar items sin datos de análisis
+                if not job.analysis_data:
+                    continue
+
+                # 4. Buscar la mejor etiqueta para este trabajo específico
+                best_label = self._find_best_label_match(job, mode, selected_quality)
+                
+                if best_label:
+                    print(f"DEBUG: Job {job.job_id[:6]} -> Seleccionado: '{best_label}'")
+                    if mode == "Video+Audio":
+                        job.config['video_format_label'] = best_label
+                        # IMPORTANTE: Asegurar que el modo del job coincida
+                        job.config['mode'] = "Video+Audio"
+                    else:
+                        job.config['audio_format_label'] = best_label
+                        job.config['mode'] = "Solo Audio"
+
+        # 5. Refrescar UI si hay un job seleccionado
+        if self.selected_job_id:
+            current_job = self.queue_manager.get_job_by_id(self.selected_job_id)
+            # Solo refrescar si no es playlist
+            if current_job and current_job.job_type != "PLAYLIST":
+                self._populate_config_panel(current_job)
+
+    def _find_best_label_match(self, job, mode, criteria):
+        """
+        Busca el mejor formato priorizando: ORIGINAL > Idioma Preferido > Calidad.
+        """
+        info = job.analysis_data
+        formats = info.get('formats', [])
+        duration = info.get('duration', 0)
+        
+        # Intentar detectar el idioma original del video desde los metadatos globales
+        video_original_lang = info.get('language') 
+        
+        if not formats: return None
+
+        candidates = []
+        import re
+        
+        # --- 1. RECOLECCIÓN DE CANDIDATOS ---
+        for f in formats:
+            format_type = self._classify_format(f)
+            
+            # A) Bitrate Robusto
+            bitrate = f.get('abr') or f.get('tbr') or 0
+            if bitrate == 0:
+                note = f.get('format_note', '').lower()
+                match = re.search(r'(\d+)k', note)
+                if match: bitrate = float(match.group(1))
+                elif 'premium' in note or 'high' in note: bitrate = 256
+                elif 'medium' in note: bitrate = 128
+                elif 'low' in note or 'ultralow' in note: bitrate = 48
+
+            if bitrate == 0 and duration > 0:
+                filesize = f.get('filesize') or f.get('filesize_approx') or 0
+                if filesize > 0: bitrate = (filesize * 8) / duration / 1000
+
+            is_valid_candidate = False
+            height = f.get('height', 0)
+            
+            # --- FILTROS POR MODO ---
+            if mode == "Video+Audio":
+                if format_type in ['VIDEO', 'VIDEO_ONLY']:
+                    is_valid_candidate = True
+            
+            elif mode == "Solo Audio":
+                if format_type == 'AUDIO':
+                    is_valid_candidate = True
+                    height = 0
+                elif format_type == 'VIDEO':
+                    acodec = f.get('acodec', 'none')
+                    if acodec and acodec != 'none':
+                        is_valid_candidate = True
+                        height = 0
+
+            if is_valid_candidate:
+                # 1. Detectar si es Original
+                f_note = (f.get('format_note') or '').lower()
+                f_lang = f.get('language')
+                
+                is_original = False
+                if 'original' in f_note:
+                    is_original = True
+                elif video_original_lang and f_lang and f_lang.startswith(video_original_lang):
+                    is_original = True
+                elif f.get('language_preference', -1) >= 10:
+                    is_original = True
+
+                # 2. Prioridad de Idioma
+                lang_code_raw = f.get('language') or ''
+                norm_code = lang_code_raw.replace('_', '-')
+                lang_prio = self.app.LANGUAGE_ORDER.get(
+                    norm_code, 
+                    self.app.LANGUAGE_ORDER.get(norm_code.split('-')[0], self.app.DEFAULT_PRIORITY)
+                )
+                
+                candidates.append({
+                    'format': f,
+                    'height': height,
+                    'abr': bitrate,
+                    'is_original': is_original,
+                    'lang_prio': lang_prio,
+                    'ext': f.get('ext', '')
+                })
+
+        if not candidates: return None
+
+        # --- 2. ORDENAMIENTO INTELIGENTE ---
+        candidates.sort(key=lambda x: (
+            not x['is_original'],
+            x['lang_prio'],
+            -(x['height'] or 0), 
+            -(x['abr'] or 0)
+        ))
+
+        selected_format = None
+
+        # A) Lógica para Audio (NUEVA IMPLEMENTACIÓN BASADA EN POSICIÓN)
+        if mode == "Solo Audio":
+            
+            if "Mejor Calidad" in criteria:
+                # Buscar el primer ORIGINAL
+                originals = [c for c in candidates if c['is_original']]
+                
+                if originals:
+                    selected_format = originals[0]
+                    print(f"DEBUG: Audio Mejor Calidad - Original encontrado: {selected_format['abr']:.0f}kbps")
+                else:
+                    # Fallback: si no hay originales, usar el primero de toda la lista
+                    selected_format = candidates[0]
+                    print(f"DEBUG: Audio Mejor Calidad - Fallback (sin originales): {selected_format['abr']:.0f}kbps")
+            
+            elif "Mejor Compatible" in criteria:
+                # Buscar el primer compatible (✨)
+                for c in candidates:
+                    if c['ext'] in ['m4a', 'mp3']:
+                        selected_format = c
+                        break
+                if not selected_format: 
+                    selected_format = candidates[0]
+            
+            elif "Media" in criteria:
+                # Filtrar solo ORIGINALES
+                originals = [c for c in candidates if c['is_original'] and c['abr'] > 0]
+                
+                # Si no hay originales, usar toda la lista como fallback
+                work_list = originals if originals else [c for c in candidates if c['abr'] > 0]
+                
+                if not work_list:
+                    selected_format = candidates[0]
+                else:
+                    # Calcular el índice del medio
+                    mid_index = len(work_list) // 2
+                    candidate_middle = work_list[mid_index]
+                    
+                    # Si el del medio es ≥100kbps, usarlo
+                    if candidate_middle['abr'] >= 100:
+                        selected_format = candidate_middle
+                        print(f"DEBUG: Audio Media - Centro de lista: {selected_format['abr']:.0f}kbps")
+                    else:
+                        # Buscar el primero ≥100kbps en la lista
+                        found = False
+                        for c in work_list:
+                            if c['abr'] >= 100:
+                                selected_format = c
+                                found = True
+                                print(f"DEBUG: Audio Media - Primero ≥100kbps: {selected_format['abr']:.0f}kbps")
+                                break
+                        
+                        # Si ninguno es ≥100kbps, usar el del medio original
+                        if not found:
+                            selected_format = candidate_middle
+                            print(f"DEBUG: Audio Media - Centro (todos <100): {selected_format['abr']:.0f}kbps")
+            
+            elif "Baja" in criteria:
+                # Mantener la lógica actual que ya funciona
+                threshold = 96
+                
+                for c in candidates:
+                    if c['abr'] > 0 and c['abr'] <= threshold:
+                        selected_format = c
+                        break
+                
+                if not selected_format:
+                    originals = [c for c in candidates if c['is_original'] and c['abr'] > 0]
+                    if originals:
+                        originals.sort(key=lambda x: x['abr'])
+                        selected_format = originals[0]
+                    else:
+                        candidates_with_bitrate = [c for c in candidates if c['abr'] > 0]
+                        if candidates_with_bitrate:
+                            candidates_with_bitrate.sort(key=lambda x: x['abr'])
+                            selected_format = candidates_with_bitrate[0]
+                        else:
+                            selected_format = candidates[0]
+
+        # B) Mejor Compatible (Video)
+        elif "Mejor Compatible" in criteria:
+            for c in candidates:
+                if mode == "Video+Audio":
+                    if c['ext'] == 'mp4' and 'avc' in (c['format'].get('vcodec') or ''):
+                        selected_format = c
+                        break
+            if not selected_format: selected_format = candidates[0]
+
+        # C) Mejor Calidad (Auto) o Resoluciones (Video)
+        else: 
+            if "p" in criteria and mode == "Video+Audio":
+                target_h = 0
+                if "4K" in criteria: target_h = 2160
+                elif "2K" in criteria: target_h = 1440
+                elif "1080p" in criteria: target_h = 1080
+                elif "720p" in criteria: target_h = 720
+                elif "480p" in criteria: target_h = 480
+                
+                candidates.sort(key=lambda x: (
+                    not x['is_original'], 
+                    abs((x['height'] or 0) - target_h),
+                    x['lang_prio']
+                ))
+                selected_format = candidates[0]
+            else:
+                selected_format = candidates[0]
+
+        # --- 3. APLICACIÓN ---
+        if selected_format:
+            f = selected_format['format']
+            target_id = f.get('format_id')
+            
+            print(f"DEBUG: Seleccionado -> {target_id} ({selected_format['abr']:.0f}kbps) [Original: {selected_format['is_original']}]")
+            
+            if mode == "Video+Audio":
+                job.config['resolved_video_format_id'] = target_id
+                job.config['video_format_label'] = f"Global: {target_id} (Auto)"
+            else:
+                job.config['resolved_audio_format_id'] = target_id
+                job.config['audio_format_label'] = f"Global: {target_id} (Auto)"
+            
+            return None
+
+        return None
 
     def _on_save_thumbnail_click(self):
         """
@@ -2342,16 +2981,17 @@ class BatchDownloadTab(ctk.CTkFrame):
         """
         print("INFO: Limpiando la lista de trabajos y reseteando la sesión de lote...")
         
-        # 1. Pausar la cola (si estaba corriendo)
-        self.queue_manager.pause_queue()
+        # 1. Pausar la cola
         self.queue_manager.pause_queue()
 
-        # 2. Eliminar todos los trabajos de la UI y la lógica
+        # 2. Eliminar todos los trabajos
         all_job_ids = list(self.job_widgets.keys())
         for job_id in all_job_ids:
-            self._remove_job(job_id) 
-            # _remove_job eventualmente llamará a self.start_queue_button.configure(state="disabled")
-            # cuando la lista esté vacía.
+            self._remove_job(job_id)  # Ya limpia la caché individual
+
+        # 🆕 SEGURIDAD: Limpiar toda la caché por si acaso
+        self.playlist_cache.clear()
+        print("DEBUG: 🧹 Caché completa de playlists limpiada")
 
         # 3. Resetear la subcarpeta del lote (LA CLAVE)
         # Esto asegura que el próximo "Iniciar Cola" cree una carpeta nueva.
@@ -2585,11 +3225,26 @@ class BatchDownloadTab(ctk.CTkFrame):
 
             try:
                 analizar_playlist = self.playlist_analysis_check.get()
+                # ✅ LEER NUEVO CHECKBOX
+                user_wants_fast = self.fast_mode_check.get()
             except Exception as e:
-                print(f"ADVERTENCIA: No se pudo leer la casilla de playlist: {e}")
+                print(f"ADVERTENCIA: No se pudo leer las casillas: {e}")
                 analizar_playlist = True
+                user_wants_fast = True
             
-            print(f"DEBUG: Iniciando análisis. Modo Playlist: {analizar_playlist}")
+            print(f"DEBUG: Iniciando análisis. Playlist: {analizar_playlist}, Rápido: {user_wants_fast}")
+
+            # --- MODIFICADO: Detección de Modo Rápido ---
+            is_youtube = "youtube.com" in url or "youtu.be" in url
+            
+            # Ahora requerimos que sea YouTube, sea Playlist Y que el usuario quiera modo rápido
+            use_fast_mode = is_youtube and analizar_playlist and user_wants_fast
+            
+            if use_fast_mode:
+                print("DEBUG: 🚀 Modo Rápido activado (extract_flat)")
+            else:
+                print("DEBUG: 🐢 Modo Lento/Profundo activado (Análisis completo)")
+            # -----------------------------------------------------
 
             def check_if_cancelled(info_dict, *args, **kwargs):
                 job = self.queue_manager.get_job_by_id(job_id)
@@ -2601,15 +3256,20 @@ class BatchDownloadTab(ctk.CTkFrame):
             # --- 2. CONFIGURAR YT-DLP ---
             ydl_opts = {
                 'no_warnings': True,
-                'quiet': False, # IMPORTANTE: No silenciar, o el logger no recibe nada
+                'quiet': False, 
                 'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/5.0 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
                 'referer': url,
                 'noplaylist': not analizar_playlist,
                 'listsubtitles': False,
                 'ignoreerrors': True,
                 'match_filter': check_if_cancelled,
-                'logger': MyLogger(self, job_id) # Usar nuestro logger mejorado
+                'logger': MyLogger(self, job_id) 
             }
+
+            # --- NUEVO: Activar extracción plana si corresponde ---
+            if use_fast_mode:
+                ydl_opts['extract_flat'] = 'in_playlist' # La clave de la velocidad
+            # ----------------------------------------------------
 
             cookie_mode = single_tab.cookie_mode_menu.get()
             browser_arg = None
@@ -2630,9 +3290,9 @@ class BatchDownloadTab(ctk.CTkFrame):
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 check_if_cancelled(None)
-                # Actualizar estado inicial
-                self.app.after(0, self.update_job_ui, job_id, "RUNNING", "Conectando con YouTube...")
-                
+                # Actualizar estado inicial (Mensaje genérico)
+                self.app.after(0, self.update_job_ui, job_id, "RUNNING", "Conectando...")
+                                
                 # La magia ocurre aquí dentro. extract_info llamará a nuestro logger
                 info_dict = ydl.extract_info(url, download=False)
             
@@ -2696,14 +3356,33 @@ class BatchDownloadTab(ctk.CTkFrame):
         # --- FIN DE MODIFICACIÓN (BUG 3) ---
 
         is_playlist = info_dict.get("_type") == "playlist" or (info_dict.get("entries") and len(info_dict.get("entries")) > 0)
-        
+    
         if is_playlist and info_dict.get('extractor_key') != 'Generic':
+            # --- NUEVO: Lógica de Playlist ---
+            
+            is_flat_result = info_dict.get('entries', [{}])[0].get('_type') == 'url'
+            
+            if is_flat_result:
+                print("INFO: Resultado 'flat' detectado. Abriendo selector de playlist...")
+                
+                # 🆕 GUARDAR EN CACHÉ con estructura completa
+                self.playlist_cache[job_id] = {
+                    'info_dict': info_dict,
+                    'thumbnails': {}  # Se llenará después
+                }
+                print(f"DEBUG: 💾 Playlist cacheada para job {job_id[:6]}")
+                
+                self._open_playlist_selector(job, info_dict)
+                return
+                
+            # --- Fin Lógica Nueva (Si no es flat, sigue el código antiguo abajo) ---
+
             entries = info_dict.get('entries', [])
             if not entries:
                 self.update_job_ui(job_id, "FAILED", "Error: Playlist/Colección está vacía.")
                 return
 
-            print(f"INFO: Playlist detectada con {len(entries)} videos.")
+            print(f"INFO: Playlist detectada con {len(entries)} videos (Modo Clásico).")
             
             all_jobs = [job] 
             for i in range(1, len(entries)):
@@ -3002,6 +3681,15 @@ class BatchDownloadTab(ctk.CTkFrame):
         else:
             self.playlist_analysis_check.deselect()
 
+       # Restaurar estado de Modo Rápido (Variable garantizada en MainWindow)
+        if self.app.batch_fast_mode_saved:
+            self.fast_mode_check.select()
+        else:
+            self.fast_mode_check.deselect()
+        
+        # Sincronizar estado visual (si playlist está off, fast debe estar disabled)
+        self._on_playlist_analysis_toggle()
+
         if self.app.batch_auto_import_saved:
             self.auto_import_checkbox.select()
         else:
@@ -3019,6 +3707,7 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.app.batch_download_path = self.output_path_entry.get() 
         self.app.batch_playlist_analysis_saved = self.playlist_analysis_check.get() == 1
         self.app.batch_auto_import_saved = self.auto_import_checkbox.get() == 1
+        self.app.batch_fast_mode_saved = self.fast_mode_check.get() == 1
 
     def _on_batch_quick_recode_toggle(self):
         """
@@ -3071,13 +3760,28 @@ class BatchDownloadTab(ctk.CTkFrame):
 
     def _populate_batch_preset_menu(self):
         """
-        Lee los presets disponibles (de la app principal) y los añade al menú,
-        filtrando por el modo (Video+Audio o Solo Audio) DEL ITEM SELECCIONADO.
-        Adaptado de single_download_tab.py.
+        Lee los presets disponibles y filtra por el modo (Video+Audio o Solo Audio).
+        CORREGIDO: Ahora detecta el modo específico de la Playlist seleccionada.
         """
         
-        # 1. Obtener el modo del item actual (no el global)
-        current_item_mode = self.mode_selector.get()
+        # 1. Determinar el modo del ítem actual
+        current_item_mode = "Video+Audio" # Default
+        
+        if self.selected_job_id:
+            job = self.queue_manager.get_job_by_id(self.selected_job_id)
+            if job:
+                if job.job_type == "PLAYLIST":
+                    # Si es playlist, usar su configuración interna
+                    current_item_mode = job.config.get('playlist_mode', 'Video+Audio')
+                elif job.job_type == "LOCAL_RECODE":
+                    # Si es local, usar lo que diga el selector
+                    current_item_mode = self.mode_selector.get()
+                else:
+                    # Si es descarga normal, usar su config o el selector global
+                    current_item_mode = job.config.get('mode', self.mode_selector.get())
+
+        print(f"DEBUG: Poblando presets para modo: {current_item_mode}")
+
         compatible_presets = []
 
         # 2. Leer presets integrados
@@ -3100,7 +3804,8 @@ class BatchDownloadTab(ctk.CTkFrame):
             self.batch_recode_preset_menu.configure(values=compatible_presets, state="normal")
             
             # Intentar restaurar la selección guardada del job
-            job = self.queue_manager.get_job_by_id(self.selected_job_id)
+            job = self.queue_manager.get_job_by_id(self.selected_job_id) if self.selected_job_id else None
+            
             if job:
                 saved_preset = job.config.get("recode_preset_name")
                 if saved_preset and saved_preset in compatible_presets:
@@ -3255,9 +3960,27 @@ class BatchDownloadTab(ctk.CTkFrame):
         if all_presets:
             print(f"INFO: Configurando menú global con {real_presets_count} presets.")
             self.global_recode_preset_menu.configure(values=all_presets)
-            # Intentar seleccionar el primer preset real (no un separador)
-            first_valid_preset = next((p for p in all_presets if not p.startswith("---")), all_presets[0])
-            self.global_recode_preset_menu.set(first_valid_preset)
+            
+            # --- NUEVA LÓGICA DE SELECCIÓN INTELIGENTE ---
+            current_global_mode = self.global_mode_var.get()
+            target_preset = None
+            
+            # 1. Buscar el primer preset que coincida con el modo global actual
+            for preset_name in all_presets:
+                if preset_name.startswith("---"): continue
+                
+                # Buscar parámetros del preset
+                params = self._find_preset_params(preset_name)
+                if params and params.get("mode_compatibility") == current_global_mode:
+                    target_preset = preset_name
+                    break
+            
+            # 2. Si no se encontró uno compatible (raro), usar el primero disponible
+            if not target_preset:
+                target_preset = next((p for p in all_presets if not p.startswith("---")), all_presets[0])
+            
+            self.global_recode_preset_menu.set(target_preset)
+            
         else:
             print("ADVERTENCIA: No se encontraron presets reales. Configurando menú a 'No hay presets'.")
             self.global_recode_preset_menu.configure(values=["- No hay presets -"], state="disabled")
@@ -3754,3 +4477,151 @@ class BatchDownloadTab(ctk.CTkFrame):
             args=(filepaths,), 
             daemon=True
         ).start()
+
+    def _open_playlist_selector(self, job, info_dict):
+        """
+        Abre la ventana de selección y configura el Job como contenedor de playlist.
+        """
+        try:
+            # 🆕 CRÍTICO: Forzar foco a la ventana principal ANTES de crear el diálogo
+            self.app.lift()
+            self.app.focus_force()
+            self.app.attributes("-topmost", True)
+            self.app.update()  # Procesar eventos pendientes
+            self.app.after(100, lambda: self.app.attributes("-topmost", False))  # Quitar topmost después
+            
+            # 🆕 PASAR CACHÉ DE MINIATURAS SI EXISTE
+            cached_thumbs = None
+            if job.job_id in self.playlist_cache:
+                cached_thumbs = self.playlist_cache[job.job_id].get('thumbnails', {})
+                print(f"DEBUG: ✅ Recuperando {len(cached_thumbs)} miniaturas del caché")
+            
+            # Crear y abrir el diálogo
+            dialog = PlaylistSelectionDialog(self, info_dict, cached_thumbnails=cached_thumbs)
+            
+            # Esperar a que el usuario termine
+            self.wait_window(dialog)
+            
+            result = dialog.result
+            
+            if not result:
+                # Usuario canceló
+                self.update_job_ui(job.job_id, "FAILED", "Selección cancelada por el usuario.")
+                return
+
+            # 🆕 GUARDAR LAS MINIATURAS EN EL CACHÉ
+            if job.job_id not in self.playlist_cache:
+                self.playlist_cache[job.job_id] = {
+                    'info_dict': info_dict,
+                    'thumbnails': {}
+                }
+            
+            # Actualizar miniaturas en caché
+            self.playlist_cache[job.job_id]['thumbnails'] = dialog.thumbnail_cache
+            print(f"DEBUG: 💾 {len(dialog.thumbnail_cache)} miniaturas guardadas en caché para {job.job_id[:6]}")
+
+            # 2. Configurar el Job como "Contenedor de Playlist"
+            job.job_type = "PLAYLIST"
+            job.status = "PENDING"
+            
+            # Guardar la configuración elegida
+            job.config['playlist_mode'] = result['mode']
+            job.config['playlist_quality'] = result['quality']
+            job.config['selected_indices'] = result['selected_indices']
+            job.config['total_videos'] = result['total_videos']
+            
+            # Guardar la info cruda
+            job.analysis_data = info_dict
+            
+            # Actualizar UI
+            playlist_title = info_dict.get('title', 'Playlist Desconocida')
+            job.config['title'] = playlist_title
+            
+            count = len(result['selected_indices'])
+            self.update_job_ui(job.job_id, "PENDING", f"Playlist: {count} videos listos")
+            
+            if job.job_id in self.job_widgets:
+                self.job_widgets[job.job_id].title_label.configure(text=playlist_title)
+            
+            self._on_job_select(job.job_id)
+            self.start_queue_button.configure(state="normal")
+            self.progress_label.configure(text="Playlist configurada. Presiona Iniciar Cola.")
+
+        except Exception as e:
+            print(f"ERROR en selector de playlist: {e}")
+            import traceback
+            traceback.print_exc()
+            self.update_job_ui(job.job_id, "FAILED", f"Error UI: {e}")
+
+    def _reconfigure_playlist_job(self, job_id):
+        """Reabre la ventana de selección para una playlist existente."""
+        job = self.queue_manager.get_job_by_id(job_id)
+        if not job or job.job_type != "PLAYLIST": 
+            return
+        
+        if job.status == "RUNNING":
+            messagebox.showwarning("Ocupado", "Pausa la cola antes de editar.")
+            return
+
+        print(f"INFO: Reconfigurando playlist {job_id[:6]}")
+        
+        # 🆕 VERIFICAR SI ESTÁ EN CACHÉ
+        info_dict = None
+        cached_thumbs = None
+        
+        if job_id in self.playlist_cache:
+            print(f"DEBUG: ✅ Usando datos cacheados para {job_id[:6]} (carga instantánea)")
+            cache_entry = self.playlist_cache[job_id]
+            info_dict = cache_entry['info_dict']
+            cached_thumbs = cache_entry.get('thumbnails', {})
+            print(f"DEBUG: {len(cached_thumbs)} miniaturas disponibles en caché")
+        else:
+            print(f"DEBUG: ⚠️ No hay caché para {job_id[:6]}, usando analysis_data")
+            info_dict = job.analysis_data
+        
+        if not info_dict:
+            messagebox.showerror("Error", "No se encontraron datos de la playlist.")
+            return
+        
+        # 🆕 PASAR MINIATURAS AL DIÁLOGO
+        dialog = PlaylistSelectionDialog(self, info_dict, title="Editar Selección", cached_thumbnails=cached_thumbs)
+        
+        # --- PRE-CARGAR ESTADO ANTERIOR ---
+        saved_mode = job.config.get('playlist_mode')
+        if saved_mode:
+            dialog.mode_var.set(saved_mode)
+            dialog.mode_menu.set(saved_mode)
+            dialog._update_quality_options(saved_mode)
+            
+        saved_quality = job.config.get('playlist_quality')
+        if saved_quality:
+            dialog.quality_menu.set(saved_quality)
+            
+        saved_indices = job.config.get('selected_indices', [])
+        for i, var in enumerate(dialog.check_vars):
+            var.set(i in saved_indices)
+            
+        self.wait_window(dialog)
+        
+        result = dialog.result
+        if result:
+            # 🆕 ACTUALIZAR MINIATURAS EN CACHÉ
+            if job_id in self.playlist_cache:
+                self.playlist_cache[job_id]['thumbnails'] = dialog.thumbnail_cache
+                print(f"DEBUG: 🔄 Caché de miniaturas actualizado ({len(dialog.thumbnail_cache)} imágenes)")
+            
+            # Actualizar configuración del Job
+            job.config['playlist_mode'] = result['mode']
+            job.config['playlist_quality'] = result['quality']
+            job.config['selected_indices'] = result['selected_indices']
+            job.config['total_videos'] = result['total_videos']
+            
+            count = len(result['selected_indices'])
+            self.update_job_ui(job.job_id, "PENDING", f"Playlist actualizada: {count} videos")
+            print("INFO: Configuración de playlist actualizada.")
+
+            # ✅ NUEVO BLOQUE: Refrescar la UI si este trabajo está seleccionado actualmente
+            if self.selected_job_id == job_id:
+                print(f"DEBUG: Refrescando panel lateral tras reconfigurar {job_id[:6]}")
+                # Esto forzará la actualización del selector de modo y la lista de presets
+                self._populate_config_panel(job)

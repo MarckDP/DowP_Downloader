@@ -26,11 +26,12 @@ from src.core.exceptions import UserCancelledError
 from .dialogs import Tooltip, MultiPageDialog, ManualDownloadDialog
 from src.core.image_converter import ImageConverter
 from src.core.image_processor import ImageProcessor
+from src.core.setup import get_remote_file_size, format_size
 from src.core.constants import (
     REMBG_MODEL_FAMILIES, REALESRGAN_MODELS, WAIFU2X_MODELS, REALSR_MODELS, SRMD_MODELS,
     IMAGE_RASTER_FORMATS, IMAGE_RAW_FORMATS
 )
-from main import REMBG_MODELS_DIR, MODELS_DIR
+from main import REMBG_MODELS_DIR, MODELS_DIR, UPSCALING_DIR
 
 try:
     from tkinterdnd2 import DND_FILES
@@ -625,6 +626,7 @@ class ImageToolsTab(ctk.CTkFrame):
         self.temp_image_dir = self._get_temp_dir()
         self.is_analyzing_url = False
         self.last_processed_output_dir = None
+        self.current_selected_output_path = None
 
         # --- 1. Diseño de la Rejilla Principal (3 Zonas) ---
         
@@ -838,7 +840,25 @@ class ImageToolsTab(ctk.CTkFrame):
         ctk.CTkLabel(self.title_frame, text="Título:").grid(row=0, column=0, padx=(10, 5))
         self.title_entry = ctk.CTkEntry(self.title_frame, placeholder_text="Nombre del archivo de salida...")
         self.title_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.title_entry))
+        
+        # ✅ NUEVO: Guardar título al escribir (KeyRelease)
+        self.title_entry.bind("<KeyRelease>", self._on_title_entry_change)
+        
         self.title_entry.grid(row=0, column=1, padx=(0, 10), sticky="ew")
+
+        # ✅ NUEVO: Botón Copiar Resultado
+        self.copy_result_button = ctk.CTkButton(
+            self.title_frame, 
+            text="Copiar", 
+            width=60, 
+            state="disabled", # Nace deshabilitado
+            command=self._copy_result_to_clipboard,
+            fg_color="#555555", 
+            hover_color="#444444"
+        )
+        self.copy_result_button.grid(row=0, column=2, padx=(0, 5), sticky="e")
+        
+        Tooltip(self.copy_result_button, "Copia la imagen procesada al portapapeles.", delay_ms=1000)
 
         # --- 3. Zona de Opciones (Fila 2) ---
         self.options_frame = ctk.CTkScrollableFrame(
@@ -1106,6 +1126,30 @@ class ImageToolsTab(ctk.CTkFrame):
         self.rembg_status_label = ctk.CTkLabel(self.rembg_options_frame, text="", font=ctk.CTkFont(size=10))
         self.rembg_status_label.grid(row=2, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
 
+        # --- NUEVO: Botones de Gestión (Abrir / Borrar) ---
+        self.rembg_actions_frame = ctk.CTkFrame(self.rembg_options_frame, fg_color="transparent")
+        self.rembg_actions_frame.grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
+        self.rembg_actions_frame.grid_columnconfigure((0, 1), weight=1)
+
+        self.rembg_open_btn = ctk.CTkButton(
+            self.rembg_actions_frame, 
+            text="Abrir", 
+            height=24,
+            fg_color="#555555", hover_color="#444444",
+            command=lambda: self._open_model_folder("rembg")
+        )
+        self.rembg_open_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+
+        self.rembg_delete_btn = ctk.CTkButton(
+            self.rembg_actions_frame, 
+            text="Borrar", 
+            height=24,
+            fg_color="#DC3545", hover_color="#C82333",
+            command=lambda: self._delete_current_model("rembg")
+        )
+        self.rembg_delete_btn.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+        # --------------------------------------------------
+
         self.rembg_options_frame.pack_forget()
         
         # Inicializar menús con el default
@@ -1189,10 +1233,37 @@ class ImageToolsTab(ctk.CTkFrame):
         self.upscale_tta_check = ctk.CTkCheckBox(self.upscale_options_frame, text="TTA (Mejor calidad, muy lento)")
         self.upscale_tta_check.grid(row=4, column=0, columnspan=4, padx=10, pady=5, sticky="w")
 
+        # --- FILA 5: Label de Estado ---
+        self.upscale_status_label = ctk.CTkLabel(self.upscale_options_frame, text="", font=ctk.CTkFont(size=10))
+        self.upscale_status_label.grid(row=5, column=0, columnspan=4, padx=10, pady=(5, 5), sticky="ew")
+
+        # --- FILA 6: Botones de Gestión ---
+        self.upscale_actions_frame = ctk.CTkFrame(self.upscale_options_frame, fg_color="transparent")
+        self.upscale_actions_frame.grid(row=6, column=0, columnspan=4, padx=10, pady=(0, 10), sticky="ew")
+        self.upscale_actions_frame.grid_columnconfigure((0, 1), weight=1)
+
+        self.upscale_open_btn = ctk.CTkButton(
+            self.upscale_actions_frame, 
+            text="Abrir", 
+            height=24,
+            fg_color="#555555", hover_color="#444444",
+            command=lambda: self._open_model_folder("upscale")
+        )
+        self.upscale_open_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+
+        self.upscale_delete_btn = ctk.CTkButton(
+            self.upscale_actions_frame, 
+            text="Borrar", 
+            height=24,
+            fg_color="#DC3545", hover_color="#C82333",
+            command=lambda: self._delete_current_model("upscale")
+        )
+        self.upscale_delete_btn.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+
         self.upscale_options_frame.pack_forget()
         
-        # Inicializar lógica del menú
-        self._on_upscale_engine_change("Real-ESRGAN")
+        # Inicializar lógica del menú (SILENCIOSAMENTE)
+        self._on_upscale_engine_change("Real-ESRGAN", silent=True)
 
         # 3.5: Módulo "Cuadrito" Maestro de Cambio de Fondo
         self.background_master_frame = ctk.CTkFrame(self.options_frame)
@@ -1885,7 +1956,7 @@ class ImageToolsTab(ctk.CTkFrame):
         else:
             self.upscale_options_frame.pack_forget()
 
-    def _on_upscale_engine_change(self, engine):
+    def _on_upscale_engine_change(self, engine, silent=False):
         """Carga modelos y ajusta visibilidad según el motor."""
         
         # 🔍 DEBUG
@@ -1928,17 +1999,123 @@ class ImageToolsTab(ctk.CTkFrame):
             self.upscale_denoise_label.grid()
             self.upscale_denoise_menu.grid()
         
-        # ✅ CRÍTICO: Pasar el motor explícitamente
+        # ✅ CRÍTICO: Pasar el motor y el flag silent explícitamente
         selected_model = self.upscale_model_menu.get()
-        print(f"DEBUG: Después de cambiar motor, modelo seleccionado: {selected_model}")
-        self._on_upscale_model_change(selected_model, engine=engine)
+        # Pasamos silent=silent para que la cadena de silencio continúe
+        self._on_upscale_model_change(selected_model, engine=engine, silent=silent)
 
-    def _on_upscale_model_change(self, selected_model_friendly, engine=None):
-        """Actualiza el menú de ESCALAS permitido."""
+    def _on_upscale_model_change(self, selected_model_friendly, engine=None, silent=False):
+        """
+        Actualiza escalas y verifica si el motor de upscaling está instalado.
+        Combina tu lógica de escalas con la nueva lógica de gestión de archivos.
+        """
+        # 1. Si la herramienta no está activa, no hacer nada
+        if self.upscale_checkbox.get() != 1: return
         
-        # Si no se pasa el motor explícitamente, lo leemos del menú
+        # 2. Si no se pasa el motor explícitamente, leerlo del menú
         if engine is None:
             engine = self.upscale_engine_menu.get()
+            
+        # ==============================================================================
+        # PARTE A: VERIFICACIÓN DE INSTALACIÓN (NUEVO)
+        # ==============================================================================
+        
+        # Mapeo para saber qué archivo ejecutable buscar según el motor
+        engine_map = {
+            "Real-ESRGAN": ("realesrgan", "realesrgan-ncnn-vulkan.exe"),
+            "Waifu2x": ("waifu2x", "waifu2x-ncnn-vulkan.exe"),
+            "RealSR": ("realsr", "realsr-ncnn-vulkan.exe"),
+            "SRMD": ("srmd", "srmd-ncnn-vulkan.exe")
+        }
+        
+        # Obtener carpeta y ejecutable (fallback a vacíos si no encuentra)
+        # Nota: El .split(" ")[0] es por si el nombre tiene espacios extra, ej: "RealSR (Fotos)" -> "RealSR"
+        engine_key = engine.split(" ")[0]
+        folder, exe = engine_map.get(engine_key, ("upscaling", ""))
+        
+        # Construir ruta completa: bin/models/upscaling/{carpeta}/{exe}
+        target_dir = os.path.join(UPSCALING_DIR, folder)
+        exe_path = os.path.join(target_dir, exe)
+        
+        is_installed = os.path.exists(exe_path)
+        
+        # --- Actualizar UI (Botones y Estado) ---
+        if is_installed:
+            self.upscale_status_label.configure(text="✅ Motor listo", text_color="gray")
+            self.start_process_button.configure(state="normal")
+            
+            # Activar botones de gestión
+            if hasattr(self, 'upscale_open_btn'):
+                self.upscale_open_btn.configure(state="normal")
+                
+                # --- CAMBIO AQUÍ: HABILITAR EL BOTÓN ---
+                self.upscale_delete_btn.configure(state="normal") 
+                # Antes decía: self.upscale_delete_btn.configure(state="disabled") 
+        else:
+            self.upscale_status_label.configure(text="⚠️ Motor no instalado", text_color="orange")
+            
+            if hasattr(self, 'upscale_open_btn'):
+                self.upscale_open_btn.configure(state="normal") # Permitir abrir para ver dónde instalar
+                self.upscale_delete_btn.configure(state="disabled")
+
+            # --- Lógica de Descarga Automática (Solo si NO es silencioso) ---
+            if not silent:
+                # Importaciones locales para evitar ciclos
+                from src.core.setup import get_remote_file_size, format_size, check_and_download_upscaling_tools
+                from src.core.constants import UPSCALING_TOOLS
+                
+                # Buscar info de descarga en las constantes
+                tool_info = UPSCALING_TOOLS.get(engine_key)
+                
+                if tool_info:
+                    # 1. Mostrar "Consultando..."
+                    self.upscale_status_label.configure(text="Consultando tamaño...", text_color="#52a2f2")
+                    self.update()
+                    
+                    # 2. Obtener peso remoto (HEAD request)
+                    file_size = get_remote_file_size(tool_info["url"])
+                    size_str = format_size(file_size)
+                    
+                    # 3. Preguntar al usuario
+                    user_response = messagebox.askyesno(
+                        "Descargar Motor IA",
+                        f"El motor '{engine_key}' no está instalado.\n\n"
+                        f"Tamaño de descarga: {size_str}\n\n"
+                        "¿Deseas descargarlo ahora?"
+                    )
+                    
+                    if user_response:
+                        self.upscale_status_label.configure(text="Iniciando descarga...", text_color="#52a2f2")
+                        
+                        # Función interna para el hilo de descarga
+                        def download_thread():
+                            # Callback para actualizar la barra de progreso
+                            def progress_cb(text, val):
+                                self.app.ui_update_queue.put((
+                                    lambda t=text: self.upscale_status_label.configure(text=t), ()
+                                ))
+
+                            # ✅ CORRECCIÓN: Pasamos la herramienta específica para que solo descargue esa
+                            # engine_key ya contiene "Real-ESRGAN", "Waifu2x", etc.
+                            success = check_and_download_upscaling_tools(progress_cb, target_tool=engine_key)
+                            
+                            if success:
+                                # Si termina bien, volvemos a llamar a esta función (silent=True) para refrescar botones
+                                self.app.ui_update_queue.put((
+                                    lambda: self._on_upscale_model_change(selected_model_friendly, engine, silent=True), ()
+                                ))
+                            else:
+                                self.app.ui_update_queue.put((
+                                    lambda: self.upscale_status_label.configure(text="❌ Error descarga", text_color="red"), ()
+                                ))
+
+                        threading.Thread(target=download_thread, daemon=True).start()
+                    else:
+                        self.upscale_status_label.configure(text="⚠️ Descarga cancelada", text_color="orange")
+
+        # ==============================================================================
+        # PARTE B: TU CÓDIGO ORIGINAL (ACTUALIZAR MENÚ DE ESCALAS)
+        # ==============================================================================
         
         # 🔍 DEBUG: Imprimir para ver qué está pasando
         print(f"DEBUG Upscale: Motor={engine}, Modelo={selected_model_friendly}")
@@ -1948,7 +2125,6 @@ class ImageToolsTab(ctk.CTkFrame):
         if engine == "Real-ESRGAN":
             if selected_model_friendly in REALESRGAN_MODELS:
                 valid_scales = REALESRGAN_MODELS[selected_model_friendly]["scales"]
-                print(f"DEBUG: Escalas encontradas para {selected_model_friendly}: {valid_scales}")
             else:
                 print(f"⚠️ ADVERTENCIA: Modelo '{selected_model_friendly}' no encontrado en REALESRGAN_MODELS")
                 
@@ -1968,10 +2144,6 @@ class ImageToolsTab(ctk.CTkFrame):
             print(f"⚠️ ADVERTENCIA: No se encontraron escalas válidas. Usando fallback ['4x']")
             valid_scales = ["4x"]  # Fallback seguro
         
-        # 🔍 DEBUG: Ver qué valores se van a establecer
-        print(f"DEBUG: Configurando menú con escalas: {valid_scales}")
-        print(f"DEBUG: Escala actual antes de cambiar: {self.upscale_scale_menu.get()}")
-        
         # ✅ Actualizar el menú con las escalas válidas
         self.upscale_scale_menu.configure(values=valid_scales)
         
@@ -1980,8 +2152,6 @@ class ImageToolsTab(ctk.CTkFrame):
         if current_scale not in valid_scales:
             print(f"DEBUG: Cambiando escala de '{current_scale}' a '{valid_scales[0]}'")
             self.upscale_scale_menu.set(valid_scales[0])
-        else:
-            print(f"DEBUG: Manteniendo escala actual '{current_scale}'")
 
     # ==================================================================
     # --- NUEVA LÓGICA DE UI DE ESCALADO ---
@@ -2218,11 +2388,14 @@ class ImageToolsTab(ctk.CTkFrame):
             else:
                 # Si está vacío, usar el nombre de la primera imagen
                 if self.file_list_data:
-                    first_file_path, _ = self.file_list_data[0]
+                    
+                    # ✅ CORRECCIÓN: Acceder directamente al índice 0
+                    first_file_path = self.file_list_data[0][0] 
+                    
                     base_name = os.path.splitext(os.path.basename(first_file_path))[0]
-                    base_name += "_video" # Añadir sufijo para diferenciar
+                    base_name += "_video" 
                 else:
-                    base_name = "video_output" # Fallback extremo (lista vacía)
+                    base_name = "video_output"
 
             # 2. Sanitizar el nombre (quitar caracteres prohibidos)
             import re
@@ -2245,13 +2418,20 @@ class ImageToolsTab(ctk.CTkFrame):
                 elif action == "rename":
                     output_path = self._get_unique_filename(output_path)
             
-            # 4. Iniciar el proceso (esto es bloqueante)
+            # ✅ CORRECCIÓN CRÍTICA: Sanitizar la lista de datos para el convertidor de video
+            # ImageConverter espera [(ruta, pagina), ...], no listas de 4 elementos.
+            clean_file_list = []
+            for item in self.file_list_data:
+                # Extraemos solo los dos primeros elementos
+                clean_file_list.append((item[0], item[1]))
+
+            # 4. Iniciar el proceso pasando la LISTA LIMPIA
             final_video_path = self.image_converter.create_video_from_images(
-                file_data_list=self.file_list_data,
+                file_data_list=clean_file_list, # <--- USAR LA LISTA LIMPIA
                 output_path=output_path,
                 options=options,
                 progress_callback=progress_callback,
-                cancellation_event=cancel_event # <-- PASAR EVENTO REAL
+                cancellation_event=cancel_event
             )
             
             # 5. Importar a Adobe si está activado
@@ -2404,9 +2584,9 @@ class ImageToolsTab(ctk.CTkFrame):
             saved_family = rem.get("family", "Rembg Standard (U2Net)")
             self.rembg_family_menu.set(saved_family)
             
-            # 3. CRÍTICO: Forzar la población del menú de modelos AHORA
+            # 3. CRÍTICO: Forzar la población del menú de modelos AHORA (SILENCIOSAMENTE)
             # Esto llenará el segundo menú con los valores correctos basados en la familia
-            self._on_rembg_family_change(saved_family) 
+            self._on_rembg_family_change(saved_family, silent=True)
             
             # 4. Establecer el modelo específico (si existe y es válido)
             saved_model = rem.get("model")
@@ -2414,28 +2594,28 @@ class ImageToolsTab(ctk.CTkFrame):
                 current_values = self.rembg_model_menu.cget("values")
                 if current_values and saved_model in current_values:
                     self.rembg_model_menu.set(saved_model)
-                    # Validar silencioamente si está instalado (cambia el label de estado)
+                    # ✅ ESTO ES CORRECTO: Pasamos silent=True para no activar popups al inicio
                     self._on_rembg_model_change(saved_model, silent=True)
             
-            # 5. Mostrar u ocultar el panel según el checkbox
-            self._on_toggle_rembg_frame()
+            # -- Rembg (IA) --            
+            # 5. Mostrar u ocultar el panel (CON SILENCIO)
+            self._on_toggle_rembg_frame(silent=True) 
 
-            # -- Upscaling (IA) -- (Aseguramos que esto también se cargue)
+            # -- Upscaling (IA) --
             if settings.get("upscale_enabled"): self.upscale_checkbox.select()
             else: self.upscale_checkbox.deselect()
             
             if settings.get("upscale_engine"): 
                 self.upscale_engine_menu.set(settings["upscale_engine"])
-                # Importante: Actualizar los modelos disponibles para este motor
-                self._on_upscale_engine_change(settings["upscale_engine"])
+                # Importante: Actualizar los modelos disponibles para este motor (CON SILENCIO)
+                self._on_upscale_engine_change(settings["upscale_engine"], silent=True) 
                 
             if settings.get("upscale_model_friendly"):
-                # Verificar si el modelo existe en la lista actual antes de setearlo
                 current_models = self.upscale_model_menu.cget("values")
                 if settings["upscale_model_friendly"] in current_models:
                     self.upscale_model_menu.set(settings["upscale_model_friendly"])
-                    # Actualizar escalas permitidas
-                    self._on_upscale_model_change(settings["upscale_model_friendly"])
+                    # Actualizar escalas y botones (CON SILENCIO)
+                    self._on_upscale_model_change(settings["upscale_model_friendly"], silent=True) 
 
             if settings.get("upscale_scale"): self.upscale_scale_menu.set(settings["upscale_scale"])
             if settings.get("upscale_denoise"): self.upscale_denoise_menu.set(settings["upscale_denoise"])
@@ -2941,7 +3121,7 @@ class ImageToolsTab(ctk.CTkFrame):
     def _on_delete_selected(self, event=None):
         """Elimina los ítems seleccionados de la lista (optimizado)."""
         
-        selected_indices = self.file_list_box.curselection()  # ⭐ CORREGIDO
+        selected_indices = self.file_list_box.curselection()
         
         if not selected_indices:
             print("INFO: No hay nada seleccionado para borrar.")
@@ -2949,17 +3129,39 @@ class ImageToolsTab(ctk.CTkFrame):
 
         print(f"INFO: Borrando {len(selected_indices)} ítems seleccionados.")
 
-        # ⭐ NUEVO: Borrar del caché también
+        # ⭐ NUEVO: Borrar del caché usando la CLAVE CORRECTA
         with self.thumbnail_lock:
             for index in selected_indices:
                 if index < len(self.file_list_data):
-                    filepath = self.file_list_data[index]
-                    self.thumbnail_cache.pop(filepath, None)  # Eliminar del caché
+                    # 1. Obtener los datos del ítem (que ahora es una lista [ruta, pag, out, titulo])
+                    item_data = self.file_list_data[index]
+                    
+                    # 2. Extraer la ruta y la página (soportando tuplas antiguas o listas nuevas)
+                    if isinstance(item_data, (list, tuple)):
+                        file_path = item_data[0]
+                        page_num = item_data[1]
+                    else:
+                        file_path = item_data
+                        page_num = 1 # Default
+                    
+                    # 3. Reconstruir la clave de texto única que usa el caché
+                    cache_key = f"{file_path}::{page_num}"
+                    
+                    # 4. Eliminar usando esa clave
+                    if cache_key in self.thumbnail_cache:
+                        self.thumbnail_cache.pop(cache_key, None)
         
-        # CRÍTICO: Debemos iterar en reversa para no arruinar los índices
+        # CRÍTICO: Debemos iterar en reversa para no arruinar los índices al borrar
         for index in reversed(selected_indices):
-            self.file_list_box.delete(index)  # ⭐ CORREGIDO
+            self.file_list_box.delete(index)
             self.file_list_data.pop(index)
+        
+        # Limpiar visor si borramos el seleccionado actual
+        if not self.file_list_data:
+            self.title_entry.delete(0, "end")
+            self._display_thumbnail_in_viewer(None, None)
+            if hasattr(self, 'copy_result_button'):
+                self.copy_result_button.configure(state="disabled")
         
         # Llamar a la función de estado centralizada
         self._update_list_status()
@@ -2970,47 +3172,81 @@ class ImageToolsTab(ctk.CTkFrame):
         Se activa al hacer clic o usar las flechas.
         Carga la vista previa/título y actualiza el estado de los botones.
         """
-        # 1. Actualizar estado de botones
+        # 1. Actualizar estado de botones generales (Borrar, etc)
         self._update_list_status()
         
-        selected_indices = self.file_list_box.curselection()  # ⭐ CORREGIDO
+        selected_indices = self.file_list_box.curselection()
         
         if not selected_indices:
             self.title_entry.delete(0, "end")
             self._display_thumbnail_in_viewer(None, None)
+            # Deshabilitar copiar si no hay selección
+            if hasattr(self, 'copy_result_button'):
+                self.copy_result_button.configure(state="disabled")
+            self.current_selected_output_path = None
             return
             
-        # 2. Lógica para el Visor y Título
+        # 2. Lógica para el Visor, Título y BOTÓN DE COPIAR
         first_index = selected_indices[0]
         try:
-            # --- CAMBIO AQUÍ: Detectar si tenemos resultado procesado ---
+            # Obtener datos del ítem seleccionado
             item_data = self.file_list_data[first_index]
             
             filepath = item_data[0]
             page_num = item_data[1]
-            output_path = item_data[2] if len(item_data) > 2 else None
             
-            # Si tenemos output_path, lanzamos el comparador en lugar del visor normal
+            # ✅ CORRECCIÓN: Lectura segura de índices
+            output_path = item_data[2] if len(item_data) > 2 else None
+            saved_title = item_data[3] if len(item_data) > 3 else None  # <--- BLINDAJE AQUÍ
+            
+            self.current_selected_output_path = output_path
+
+            # Actualizar estado del botón COPIAR
+            if hasattr(self, 'copy_result_button'):
+                if output_path and os.path.exists(output_path):
+                    # Verificar si es una imagen copiable
+                    ext = os.path.splitext(output_path)[1].lower()
+                    if ext in [".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".webp", ".ico"] and os.path.isfile(output_path):
+                        # ✅ CAMBIO AQUÍ: Usar el color MORADO (Process Color)
+                        self.copy_result_button.configure(
+                            state="normal", 
+                            fg_color=self.PROCESS_BTN_COLOR,      # Morado (#6F42C1)
+                            hover_color=self.PROCESS_BTN_HOVER    # Morado oscuro (#59369A)
+                        )
+                    else:
+                        # Deshabilitar (Gris oscuro estándar de disabled)
+                        self.copy_result_button.configure(state="disabled")
+                else:
+                    self.copy_result_button.configure(state="disabled")
+            
+            # Si ya tenemos un output procesado, mostrarlo en el comparador
             if output_path and os.path.exists(output_path):
                 self._start_comparison_viewer(filepath, output_path, page_num)
-                # Actualizamos título y salimos para no ejecutar la lógica antigua
-                title_no_ext = os.path.splitext(os.path.basename(filepath))[0]
+                
+                # Si hay título guardado, usarlo. Si no, usar nombre del archivo de salida
+                if saved_title:
+                    title_to_show = saved_title
+                else:
+                    title_to_show = os.path.splitext(os.path.basename(output_path))[0]
+                
                 self.title_entry.delete(0, "end")
-                self.title_entry.insert(0, title_no_ext) 
-                return 
-            # ------------------------------------------------------------
-            
-            # 2. Quitar la extensión (.pdf) para el título...
-            title_no_ext = os.path.splitext(os.path.basename(filepath))[0]
-            
-            # 3. Crear un título de salida sugerido
-            if page_num and self.image_processor.get_document_page_count(filepath) > 1:
-                 title_with_page = f"{title_no_ext}_p{page_num}"
+                self.title_entry.insert(0, title_to_show) 
+                return
+                        
+            # ✅ LÓGICA DE TÍTULO MEJORADA
+            if saved_title:
+                # Si el usuario escribió algo antes, restaurarlo
+                title_to_show = saved_title
             else:
-                 title_with_page = title_no_ext
+                # Si no, generar el default (Nombre archivo + pág)
+                title_no_ext = os.path.splitext(os.path.basename(filepath))[0]
+                if page_num and self.image_processor.get_document_page_count(filepath) > 1:
+                     title_to_show = f"{title_no_ext}_p{page_num}"
+                else:
+                     title_to_show = title_no_ext
 
             self.title_entry.delete(0, "end")
-            self.title_entry.insert(0, title_with_page) # Título sugerido
+            self.title_entry.insert(0, title_to_show)
             
             # 4. La clave de caché AHORA debe incluir la página
             cache_key = f"{filepath}::{page_num}"
@@ -3026,26 +3262,36 @@ class ImageToolsTab(ctk.CTkFrame):
                     self._display_cached_thumbnail(cached_image, cache_key)
                     return
 
-            # ⭐ NUEVO: Vaciar la cola antes de agregar (cancelar solicitudes obsoletas)
-            # Esto permite que funcione con teclas mantenidas
+            # Vaciar la cola antes de agregar (cancelar solicitudes obsoletas)
             try:
-                while True:
-                    self.thumbnail_queue.get_nowait()  # Vaciar todo
-            except queue.Empty:
-                pass  # La cola ya está vacía
+                while True: self.thumbnail_queue.get_nowait()
+            except queue.Empty: pass
 
-            # ❌ No está en caché, agregar a la cola
+            # No está en caché, agregar a la cola
             self.thumbnail_queue.put( (filepath, page_num) )
-
-            # Mostrar "Cargando..." mientras se procesa
             self._display_thumbnail_in_viewer(None, None, is_loading=True)
-
-            # Iniciar el worker si no está activo
             self._start_thumbnail_worker()
             
         except Exception as e:
             print(f"ERROR: No se pudo seleccionar el ítem en el índice {first_index}: {e}")
             self._display_thumbnail_in_viewer(None, None)
+    
+    def _on_title_entry_change(self, event=None):
+        """Guarda el texto del título en la estructura de datos del ítem seleccionado."""
+        selected_indices = self.file_list_box.curselection()
+        if not selected_indices:
+            return
+            
+        index = selected_indices[0]
+        current_text = self.title_entry.get().strip()
+        
+        # Si el texto está vacío, guardamos None (para que se regenere el default luego)
+        value_to_save = current_text if current_text else None
+        
+        # Guardar en la posición 3 (CustomTitle)
+        # Estructura: [path, page, output, title]
+        if index < len(self.file_list_data):
+            self.file_list_data[index][3] = value_to_save
 
     def _on_start_process(self):
         """Inicia o cancela el procesamiento de archivos."""
@@ -3078,8 +3324,13 @@ class ImageToolsTab(ctk.CTkFrame):
                 if is_raster_op:
                     from src.core.constants import IMAGE_INPUT_FORMATS
                     has_vectors = False
-                    # CORREGIDO: Iterar sobre las tuplas (path, page)
-                    for f_path, page in self.file_list_data:
+                    
+                    # 🔴 ERROR ANTERIOR: for f_path, page in self.file_list_data:
+                    # ✅ CORRECCIÓN: Iterar el ítem y extraer por índice
+                    for item_data in self.file_list_data:
+                        # Soportar tupla vieja o lista nueva
+                        f_path = item_data[0] 
+                        
                         ext = os.path.splitext(f_path)[1].lower()
                         if ext in IMAGE_INPUT_FORMATS:
                             has_vectors = True
@@ -3240,6 +3491,104 @@ class ImageToolsTab(ctk.CTkFrame):
             daemon=True
         ).start()
 
+    def _copy_result_to_clipboard(self):
+        """
+        Copia el archivo SELECCIONADO al portapapeles usando la API nativa de Windows.
+        """
+        # ✅ CAMBIO: Usar la variable vinculada a la selección actual
+        if not hasattr(self, 'current_selected_output_path') or not self.current_selected_output_path:
+            return
+
+        file_path = os.path.abspath(self.current_selected_output_path)
+        
+        if not os.path.exists(file_path):
+            messagebox.showerror("Error", "El archivo ya no existe en el disco.")
+            # Deshabilitar botón visualmente ya que falló
+            self.copy_result_button.configure(state="disabled")
+            return
+
+        import ctypes
+        from ctypes import wintypes
+
+        try:
+            # --- DEFINICIÓN DE TIPOS (CRÍTICO PARA 64-BITS) ---
+            kernel32 = ctypes.windll.kernel32
+            user32 = ctypes.windll.user32
+
+            kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+            kernel32.GlobalAlloc.restype = ctypes.c_void_p
+            kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalLock.restype = ctypes.c_void_p
+            kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            kernel32.GlobalUnlock.restype = wintypes.BOOL
+            user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+            user32.OpenClipboard.restype = wintypes.BOOL
+            user32.SetClipboardData.argtypes = [wintypes.UINT, ctypes.c_void_p]
+            user32.SetClipboardData.restype = ctypes.c_void_p
+            user32.EmptyClipboard.argtypes = []
+            user32.EmptyClipboard.restype = wintypes.BOOL
+            user32.CloseClipboard.argtypes = []
+            user32.CloseClipboard.restype = wintypes.BOOL
+
+            CF_HDROP = 15
+            GHND = 0x0042
+            
+            class DROPFILES(ctypes.Structure):
+                _fields_ = [
+                    ("pFiles", ctypes.c_uint32),
+                    ("pt_x", ctypes.c_long),
+                    ("pt_y", ctypes.c_long),
+                    ("fNC", ctypes.c_int),
+                    ("fWide", ctypes.c_int),
+                ]
+
+            files_list = [file_path]
+            file_data = ("\0".join(files_list) + "\0\0").encode("utf-16-le")
+            dropfiles_struct_size = ctypes.sizeof(DROPFILES)
+            total_size = dropfiles_struct_size + len(file_data)
+
+            hGlobal = kernel32.GlobalAlloc(GHND, total_size)
+            if not hGlobal: raise MemoryError("GlobalAlloc falló.")
+
+            ptr = kernel32.GlobalLock(hGlobal)
+            if not ptr:
+                kernel32.GlobalFree(hGlobal)
+                raise Exception("GlobalLock falló.")
+
+            try:
+                df = DROPFILES()
+                df.pFiles = dropfiles_struct_size 
+                df.fWide = 1 
+                ctypes.memmove(ptr, ctypes.byref(df), dropfiles_struct_size)
+                ctypes.memmove(ptr + dropfiles_struct_size, file_data, len(file_data))
+            finally:
+                kernel32.GlobalUnlock(hGlobal)
+
+            if not user32.OpenClipboard(None):
+                kernel32.GlobalFree(hGlobal)
+                raise Exception("OpenClipboard falló.")
+
+            try:
+                user32.EmptyClipboard()
+                if not user32.SetClipboardData(CF_HDROP, hGlobal):
+                    raise Exception("SetClipboardData falló.")
+            except Exception as e_clip:
+                user32.CloseClipboard()
+                kernel32.GlobalFree(hGlobal)
+                raise e_clip
+            
+            user32.CloseClipboard()
+
+            # Feedback visual
+            original_text = self.copy_result_button.cget("text")
+            original_fg = self.copy_result_button.cget("fg_color")
+            self.copy_result_button.configure(text="¡Copiado!", fg_color="#28A745")
+            self.after(1500, lambda: self.copy_result_button.configure(text=original_text, fg_color=original_fg))
+
+        except Exception as e:
+            print(f"ERROR NATIVO al copiar: {e}")
+            messagebox.showerror("Error de Portapapeles", f"No se pudo copiar el archivo:\n{e}")
+
     def _process_files_thread(self, output_dir, cancel_event):
         """Hilo de trabajo que procesa todos los archivos."""
         
@@ -3271,12 +3620,15 @@ class ImageToolsTab(ctk.CTkFrame):
         
         # Lista de PDFs generados (para combinar al final)
         generated_pdfs = []
+
+        # 🔧 NUEVO: Señalizar que la conversión terminó COMPLETAMENTE
+        self.conversion_complete_event.set()
         
         # Lista de archivos exitosos
         successfully_processed_paths = []
         
         try:
-            for i, item_data in enumerate(self.file_list_data): # cambiamos 'input_path' por 'item_data' para no confundir
+            for i, item_data in enumerate(self.file_list_data):
                 
                 if cancel_event.is_set():
                     print("INFO: Proceso cancelado por el usuario")
@@ -3284,12 +3636,14 @@ class ImageToolsTab(ctk.CTkFrame):
                         text=f"Cancelado: {p} archivos procesados antes de cancelar"))
                     break
                 
-                # --- CORRECCIÓN: Desempaquetado flexible (Soporta 2 o 3 valores) ---
-                item_data = self.file_list_data[i]
+                # ✅ CORRECCIÓN: Extracción segura por índices
+                # item_data ahora tiene 4 elementos: [input, page, output, title]
                 input_path = item_data[0]
                 page_num = item_data[1]
-                # Ignoramos el tercer valor (ruta de salida) si existe
-                # -------------------------------------------------------------------
+                # Ignoramos el resto aquí si no se usan inmediatamente
+                
+                # Lógica para título personalizado (ya la pusimos antes, pero verifica)
+                custom_title = item_data[3] if len(item_data) > 3 else None
                 
                 filename = os.path.basename(input_path)
                 
@@ -3314,8 +3668,8 @@ class ImageToolsTab(ctk.CTkFrame):
                 self.app.after(0, lambda t=f"Procesando ({i+1}/{total_files}): {filename}": 
                             self.progress_label.configure(text=t))
                 
-                # 2. Generar el nombre de salida
-                output_filename = self._get_output_filename(input_path, options, page_num)
+                # 2. Generar el nombre de salida PASANDO EL TÍTULO
+                output_filename = self._get_output_filename(input_path, options, page_num, custom_title)
                 output_path = os.path.join(output_dir, output_filename)
                 
                 # Manejar conflictos
@@ -3343,13 +3697,20 @@ class ImageToolsTab(ctk.CTkFrame):
                         processed += 1
                         print(f"✅ Convertido: {filename} → {os.path.basename(output_path)}")
                         
-                        # --- CAMBIO AQUÍ: Guardamos la ruta de salida en la lista de datos ---
-                        # Obtenemos los datos actuales (entrada, pagina)
-                        current_data = self.file_list_data[i]
-                        input_p, page_p = current_data if len(current_data) == 2 else (current_data[0], current_data[1])
-                        
-                        # Actualizamos la tupla con la ruta de salida
-                        self.file_list_data[i] = (input_p, page_p, output_path)
+                        # --- CORRECCIÓN: Actualizar solo el output sin romper la estructura ---
+                        # La estructura es [input, page, output, title]
+                        # Solo actualizamos el índice 2 (output)
+                        if i < len(self.file_list_data):
+                            # Asegurarnos de que sea una lista mutable
+                            if isinstance(self.file_list_data[i], tuple):
+                                self.file_list_data[i] = list(self.file_list_data[i])
+                            
+                            # Si la lista es vieja (3 elementos), la extendemos
+                            while len(self.file_list_data[i]) < 4:
+                                self.file_list_data[i].append(None)
+                                
+                            # Guardar la ruta de salida
+                            self.file_list_data[i][2] = output_path
                         # ---------------------------------------------------------------------
 
                         successfully_processed_paths.append(output_path)
@@ -3447,7 +3808,7 @@ class ImageToolsTab(ctk.CTkFrame):
                      self.app.after(0, lambda: self._show_process_summary(processed, skipped, errors, error_details))
                 else:
                      print(f"INFO: Proceso terminado exitosamente. Resumen: {summary}")
-        
+
         except Exception as e:
             error_msg = f"Error crítico durante el procesamiento: {e}"
             print(f"ERROR: {error_msg}")
@@ -3713,18 +4074,23 @@ class ImageToolsTab(ctk.CTkFrame):
             # Si estaba en 1080p o Personalizado, lo mantenemos
             self.video_resolution_menu.set(current_selection)
 
-    def _get_output_filename(self, input_path, options, page_num=None):
+    def _get_output_filename(self, input_path, options, page_num=None, custom_title=None):
         """Genera el nombre del archivo de salida."""
         from src.core.constants import IMAGE_INPUT_FORMATS
-        from urllib.parse import unquote  # 🔧 NUEVO
-        
-        base_name = os.path.splitext(os.path.basename(input_path))[0]
-        
-        # 🔧 NUEVO: Decodificar caracteres URL-encoded (%20, %C3%B1, etc.)
-        base_name = unquote(base_name)
-        
-        # 🔧 NUEVO: Limpiar caracteres problemáticos para Windows/Premiere
+        from urllib.parse import unquote
         import re
+
+        # ✅ PRIORIDAD 1: Usar el título personalizado si existe
+        if custom_title:
+            base_name = custom_title
+        else:
+            # Fallback: Generar nombre basado en archivo original
+            base_name = os.path.splitext(os.path.basename(input_path))[0]
+            base_name = unquote(base_name)
+            if page_num and self.image_processor.get_document_page_count(input_path) > 1:
+                base_name = f"{base_name}_p{page_num}"
+        
+        # Sanitizar siempre (por si el usuario puso caracteres raros)
         base_name = re.sub(r'[<>:"/\\|?*]', '_', base_name)
         
         # Añadir el sufijo de página SI existe y si el original tenía varias páginas
@@ -3927,7 +4293,7 @@ class ImageToolsTab(ctk.CTkFrame):
     def _get_selected_list_items(self, get_all=False):
         """
         Helper para obtener las rutas y nombres de los archivos seleccionados.
-        CORREGIDO: Maneja la estructura de tuplas (filepath, page_num).
+        CORREGIDO: Soporta tanto tuplas (antiguas) como listas (nuevas editables).
         """
         filepaths = []
         filenames = []
@@ -3941,11 +4307,12 @@ class ImageToolsTab(ctk.CTkFrame):
                 return [], []
             
         for index in indices:
-            # 1. Obtener la tupla de datos
+            # 1. Obtener los datos (puede ser tupla o lista)
             item_data = self.file_list_data[index]
             
-            # 2. Extraer SOLO la ruta (primer elemento de la tupla)
-            if isinstance(item_data, tuple):
+            # 2. Extraer SOLO la ruta (primer elemento)
+            # ✅ CORRECCIÓN: Comprobar si es list O tuple
+            if isinstance(item_data, (list, tuple)):
                 file_path = item_data[0]
             else:
                 file_path = item_data # Fallback por seguridad
@@ -3956,7 +4323,6 @@ class ImageToolsTab(ctk.CTkFrame):
             filenames.append(self.file_list_box.get(index))
                 
         return filepaths, filenames
-
     def _copy_selected_filename(self):
         filepaths, filenames = self._get_selected_list_items()
         if filenames:
@@ -3999,25 +4365,31 @@ class ImageToolsTab(ctk.CTkFrame):
             print(f"ERROR al abrir ubicación: {e}")
 
     def _add_files_to_list(self, file_tuples: list):
-        """Helper para añadir archivos a la lista. AHORA ACEPTA TUPLAS (filepath, page_num)."""
+        """Helper para añadir archivos a la lista. Normaliza la estructura de datos."""
         
         new_files_added = 0
         for (file_path, page_num) in file_tuples:
             
-            # La clave de datos ahora debe incluir la página para ser única
-            data_key = (file_path, page_num)
+            # Verificar duplicados basándonos solo en path y página
+            # (Buscamos manualmente porque la estructura de datos ahora es más compleja)
+            is_duplicate = any(
+                item[0] == file_path and item[1] == page_num 
+                for item in self.file_list_data
+            )
             
-            if data_key not in self.file_list_data:
-                self.file_list_data.append(data_key) # Guardar la tupla
+            if not is_duplicate:
+                # ✅ ESTRUCTURA NUEVA: [Input, Page, Output, CustomTitle]
+                # Usamos una LISTA (mutable), no una tupla
+                self.file_list_data.append([file_path, page_num, None, None])
                 
                 # El nombre en la UI debe ser descriptivo
                 file_name = os.path.basename(file_path)
                 if page_num and self.image_processor.get_document_page_count(file_path) > 1:
                     display_name = f"{file_name} (pág. {page_num})"
                 else:
-                    display_name = file_name # Mostrar nombre simple si es 1 pág
+                    display_name = file_name 
                     
-                self.file_list_box.insert("end", display_name) # Mostrar nombre con página
+                self.file_list_box.insert("end", display_name)
                 new_files_added += 1
         
         if new_files_added > 0:
@@ -4393,16 +4765,163 @@ class ImageToolsTab(ctk.CTkFrame):
     # --- LÓGICA DE ELIMINAR FONDO (REMBG) ---
     # ==================================================================
 
-    def _on_toggle_rembg_frame(self):
+    def _on_toggle_rembg_frame(self, silent=False):
         """Muestra u oculta las opciones de rembg."""
         if self.rembg_checkbox.get() == 1:
             self.rembg_options_frame.pack(fill="x", padx=5, pady=0, after=self.rembg_checkbox)
-            # Verificar el modelo seleccionado actualmente
-            self._on_rembg_model_change(self.rembg_model_menu.get())
+            # Verificar el modelo seleccionado actualmente (pasando silent)
+            self._on_rembg_model_change(self.rembg_model_menu.get(), silent=silent)
         else:
             self.rembg_options_frame.pack_forget()
 
-    def _on_rembg_family_change(self, selected_family):
+    def _get_model_path(self, category, model_name):
+        """Helper para obtener la ruta y URL de un modelo seleccionado."""
+        from main import REMBG_MODELS_DIR, MODELS_DIR
+        
+        file_path = None
+        url = None
+        
+        if category == "rembg":
+            family = self.rembg_family_menu.get()
+            info = REMBG_MODEL_FAMILIES.get(family, {}).get(model_name)
+            if info:
+                folder = info.get("folder", "rembg")
+                target_dir = os.path.join(MODELS_DIR, folder)
+                file_path = os.path.join(target_dir, info["file"])
+                url = info["url"]
+                
+        elif category == "upscale":
+            engine = self.upscale_engine_menu.get()
+            info = None
+            
+            # Buscar en el diccionario correcto según el motor
+            if engine == "Real-ESRGAN" and model_name in REALESRGAN_MODELS:
+                # Nota: Real-ESRGAN son binarios/modelos internos, usualmente no son archivos .onnx sueltos fáciles de borrar individualmente
+                # Si la estructura es compleja, quizás quieras deshabilitar el borrado para este motor.
+                # Asumiremos que NO se pueden borrar individualmente por ahora para evitar romper el binario.
+                return None, None 
+                
+            elif engine == "Waifu2x" and model_name in WAIFU2X_MODELS:
+                # Waifu2x usa carpetas de modelos. 
+                # Implementación simplificada: No permitimos borrar modelos base del sistema por seguridad
+                return None, None
+
+            # Para BiRefNet u otros futuros que sean archivos únicos .onnx/pth sí funcionaría.
+            # Por ahora, limitaremos la función de borrar a REMBG que es lo que más ocupa espacio variable.
+            
+        return file_path, url
+
+    def _open_model_folder(self, category):
+        """Abre la carpeta contenedora del modelo seleccionado."""
+        # Para Rembg
+        if category == "rembg":
+            # Usamos la variable global importada de main
+            target_dir = REMBG_MODELS_DIR
+            # Si el modelo es RMBG 2.0, está en otra subcarpeta
+            family = self.rembg_family_menu.get()
+            if "RMBG 2.0" in family:
+                target_dir = os.path.join(MODELS_DIR, "rmbg2")
+                
+        elif category == "upscale":
+            engine = self.upscale_engine_menu.get()
+            folder_map = {
+                "Real-ESRGAN": "realesrgan",
+                "Waifu2x": "waifu2x",
+                "RealSR": "realsr",
+                "SRMD": "srmd"
+            }
+            folder = folder_map.get(engine.split(" ")[0], "upscaling")
+            target_dir = os.path.join(UPSCALING_DIR, folder)
+        
+        if os.path.exists(target_dir):
+            try:
+                if os.name == 'nt': os.startfile(target_dir)
+                elif sys.platform == 'darwin': subprocess.Popen(['open', target_dir])
+                else: subprocess.Popen(['xdg-open', target_dir])
+            except Exception as e:
+                print(f"Error abriendo carpeta: {e}")
+
+    def _delete_current_model(self, category):
+        """Borra el archivo o motor seleccionado tras confirmación."""
+        if category == "rembg":
+            # (El código de rembg se mantiene igual, ya que son archivos individuales)
+            model_name = self.rembg_model_menu.get()
+            path, _ = self._get_model_path("rembg", model_name)
+            
+            if path and os.path.exists(path):
+                size_mb = os.path.getsize(path) / (1024 * 1024)
+                
+                confirm = messagebox.askyesno(
+                    "Confirmar Eliminación", 
+                    f"¿Estás seguro de que deseas eliminar el modelo '{model_name}'?\n\n"
+                    f"Liberarás {size_mb:.1f} MB de espacio."
+                )
+                
+                if confirm:
+                    try:
+                        os.remove(path)
+                        print(f"INFO: Modelo eliminado: {path}")
+                        self._on_rembg_model_change(model_name, silent=True)
+                    except Exception as e:
+                        messagebox.showerror("Error", f"No se pudo eliminar el archivo:\n{e}")
+        
+        elif category == "upscale":
+            # --- LÓGICA CORREGIDA: BORRAR MOTOR COMPLETO ---
+            import shutil
+            from main import UPSCALING_DIR
+
+            engine = self.upscale_engine_menu.get()
+            
+            target_path = None
+            folder_name = None
+
+            # Mapeo simple: Nombre del motor -> Nombre de su carpeta
+            if engine == "Waifu2x":
+                folder_name = "waifu2x"
+            elif "RealSR" in engine:
+                folder_name = "realsr"
+            elif "SRMD" in engine:
+                folder_name = "srmd"
+            elif engine == "Real-ESRGAN":
+                folder_name = "realesrgan"
+            
+            if folder_name:
+                target_path = os.path.join(UPSCALING_DIR, folder_name)
+
+            if target_path and os.path.exists(target_path):
+                # Calcular el tamaño total para informar al usuario
+                total_size = 0
+                for dirpath, _, filenames in os.walk(target_path):
+                    for f in filenames:
+                        fp = os.path.join(dirpath, f)
+                        total_size += os.path.getsize(fp)
+                size_mb = total_size / (1024 * 1024)
+
+                confirm = messagebox.askyesno(
+                    "Desinstalar Motor", 
+                    f"¿Estás seguro de que deseas eliminar el motor '{engine}' completo?\n\n"
+                    f"Esto borrará la carpeta entera y todos sus modelos.\n"
+                    f"Espacio liberado: {size_mb:.1f} MB\n\n"
+                    "Tendrás que volver a descargarlo para usarlo."
+                )
+                
+                if confirm:
+                    try:
+                        # Borrar la carpeta completa recursivamente
+                        shutil.rmtree(target_path)
+                        print(f"INFO: Motor Upscale eliminado: {target_path}")
+                        
+                        # Actualizar UI para reflejar que ya no está instalado
+                        # Usamos el modelo actual solo para refrescar la vista
+                        current_model = self.upscale_model_menu.get()
+                        self._on_upscale_model_change(current_model, engine=engine, silent=True)
+                        
+                    except Exception as e:
+                        messagebox.showerror("Error", f"No se pudo eliminar la carpeta:\n{e}")
+            else:
+                messagebox.showwarning("Error", "No se encontró la carpeta del motor para borrar.")
+
+    def _on_rembg_family_change(self, selected_family, silent=False):
         """Actualiza el menú de modelos basado en la familia seleccionada."""
         models_dict = REMBG_MODEL_FAMILIES.get(selected_family, {})
         model_names = list(models_dict.keys())
@@ -4412,7 +4931,8 @@ class ImageToolsTab(ctk.CTkFrame):
             # Intentar seleccionar el "general" o "recomendado" por defecto
             default_model = next((m for m in model_names if "General" in m or "Recomendado" in m), model_names[0])
             self.rembg_model_menu.set(default_model)
-            self._on_rembg_model_change(default_model)
+            # ✅ PASAMOS EL SILENCIO AQUÍ
+            self._on_rembg_model_change(default_model, silent=silent)
         else:
             self.rembg_model_menu.configure(values=["-"])
             self.rembg_model_menu.set("-")
@@ -4420,64 +4940,81 @@ class ImageToolsTab(ctk.CTkFrame):
     def _on_rembg_model_change(self, selected_model, silent=False):
         """
         Verifica si el modelo está descargado.
-        CORREGIDO: Si la herramienta (checkbox) está apagada, no hace nada.
+        Si silent=True (arranque), no descarga, solo verifica.
+        Si silent=False (usuario), pregunta antes de descargar mostrando el peso.
         """
-        # --- NUEVA GUARDIA DE SEGURIDAD ---
-        if self.rembg_checkbox.get() != 1:
-            return
-        # ----------------------------------
-
+        if self.rembg_checkbox.get() != 1: return
         if selected_model == "-" or not selected_model: return
 
         family = self.rembg_family_menu.get()
-        
         model_info = REMBG_MODEL_FAMILIES.get(family, {}).get(selected_model)
         if not model_info: return
 
         filename = model_info["file"]
         folder = model_info.get("folder", "rembg")
-        
-        # Construir ruta: bin/models/{folder}/{filename}
         target_dir = os.path.join(MODELS_DIR, folder)
         file_path = os.path.join(target_dir, filename)
         
-        # Verificar existencia
-        if os.path.exists(file_path) and os.path.getsize(file_path) > 1024:
+        # 1. Verificar existencia
+        is_installed = os.path.exists(file_path) and os.path.getsize(file_path) > 1024
+        
+        # 2. Actualizar Botones de Gestión
+        if is_installed:
             self.rembg_status_label.configure(text="✅ Modelo listo", text_color="gray")
             self.start_process_button.configure(state="normal")
+            
+            # Habilitar botones
+            if hasattr(self, 'rembg_delete_btn'):
+                self.rembg_delete_btn.configure(state="normal")
+                self.rembg_open_btn.configure(state="normal")
         else:
             self.rembg_status_label.configure(text="⚠️ No instalado", text_color="orange")
             
-            if silent:
-                return
+            # Deshabilitar botones (no puedes borrar lo que no tienes)
+            if hasattr(self, 'rembg_delete_btn'):
+                self.rembg_delete_btn.configure(state="disabled")
+                # El botón abrir lo dejamos activo para facilitar la instalación manual si quieren
+                self.rembg_open_btn.configure(state="normal") 
 
-            # --- NUEVA LÓGICA HÍBRIDA ---
-            # Si es RMBG 2.0 PERO la URL no es la de danielgatis (que es pública), forzar manual.
-            if family == "RMBG 2.0 (BriaAI)" and "danielgatis" not in model_info["url"]:
+            # 3. Lógica de Descarga (Solo si NO es silencioso)
+            if not silent:
+                # Caso especial: Descarga Manual Obligatoria (RMBG 2.0 privado)
+                if family == "RMBG 2.0 (BriaAI)" and "danielgatis" not in model_info["url"]:
+                    # ... (Tu lógica de diálogo manual existente se mantiene aquí) ...
+                    def on_manual_success():
+                        self.rembg_status_label.configure(text="✅ Modelo listo (Manual)", text_color="green")
+                        self.start_process_button.configure(state="normal")
+                        self.rembg_delete_btn.configure(state="normal")
+
+                    ManualDownloadDialog(self.app, model_info, target_dir, filename, on_manual_success)
+                    return
+
+                # Caso normal: Descarga Automática con PREGUNTA DE PESO
+                # Obtener peso remoto
+                self.rembg_status_label.configure(text="Consultando tamaño...", text_color="#52a2f2")
+                self.update() # Refrescar UI momentáneamente
                 
-                # Callback para actualizar la UI si el usuario lo descarga correctamente
-                def on_manual_success():
-                    self.rembg_status_label.configure(text="✅ Modelo listo (Manual)", text_color="green")
-                    self.start_process_button.configure(state="normal")
-
-                # Instanciar el diálogo desde dialogs.py
-                ManualDownloadDialog(
-                    master=self.app, # Usar self.app como master para centrar mejor
-                    model_info=model_info, 
-                    target_dir=target_dir, 
-                    filename=filename,
-                    on_success_callback=on_manual_success
+                # Hacemos esto en un hilo rápido o directo (HEAD es rápido)
+                # Para no bloquear, lo ideal sería hilo, pero por simplicidad:
+                file_size = get_remote_file_size(model_info["url"])
+                size_str = format_size(file_size)
+                
+                user_response = messagebox.askyesno(
+                    "Descargar Modelo IA",
+                    f"El modelo '{selected_model}' no está instalado.\n\n"
+                    f"Tamaño de descarga: {size_str}\n\n"
+                    "¿Deseas descargarlo ahora?"
                 )
-                return
-            # ---------------------------------------------------------------------
-
-            # ✅ CORRECCIÓN: Si no es manual, ¡descárgalo automáticamente!
-            print(f"INFO: Iniciando descarga automática de modelo: {selected_model}")
-            threading.Thread(
-                target=self._download_rembg_model_thread,
-                args=(model_info, file_path),
-                daemon=True
-            ).start()
+                
+                if user_response:
+                    self.rembg_status_label.configure(text="Iniciando descarga...", text_color="#52a2f2")
+                    threading.Thread(
+                        target=self._download_rembg_model_thread,
+                        args=(model_info, file_path),
+                        daemon=True
+                    ).start()
+                else:
+                    self.rembg_status_label.configure(text="⚠️ Descarga cancelada", text_color="orange")
 
     def _download_rembg_model_thread(self, model_info, file_path):
         """
@@ -4553,6 +5090,11 @@ class ImageToolsTab(ctk.CTkFrame):
             ))
             self.app.ui_update_queue.put((
                 lambda: self.start_process_button.configure(state="normal"),
+                ()
+            ))
+            
+            self.app.ui_update_queue.put((
+                lambda: self.rembg_delete_btn.configure(state="normal"),
                 ()
             ))
             
@@ -4781,5 +5323,4 @@ class ImageToolsTab(ctk.CTkFrame):
             return False
 
     # Llamar al inicio de tu app
-
     test_raw_support()

@@ -361,6 +361,18 @@ class MainWindow(TkBase):
         # ✅ NUEVO: Ocultar ventana durante inicialización
         self.withdraw()
         
+        # 📏 ESCALADO INTELIGENTE PARA MONITORES PEQUEÑOS
+        # Si la altura de la pantalla es menor a 900px (ej: laptops 1366x768),
+        # reducimos la interfaz al 85% para que quepa todo.
+        screen_height = self.winfo_screenheight()
+        if screen_height < 900:
+            print(f"INFO: Monitor pequeño detectado ({screen_height}px). Aplicando escala 0.85x.")
+            ctk.set_widget_scaling(0.85)  # Reduce el tamaño de los widgets
+            ctk.set_window_scaling(0.85)  # Reduce el tamaño de la ventana
+        else:
+            ctk.set_widget_scaling(1.0)
+            ctk.set_window_scaling(1.0)
+
         # Aplicar estilos de CustomTkinter manualmente
         if TKDND_AVAILABLE:
             ctk.set_appearance_mode("Dark")
@@ -425,17 +437,64 @@ class MainWindow(TkBase):
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.title(f"DowP {self.APP_VERSION}")
         self.iconbitmap(resource_path("DowP-icon.ico"))
-        win_width = 835
-        win_height = 950
+        
+        # Obtener dimensiones de pantalla
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        pos_x = (screen_width // 2) - (win_width // 2)
-        pos_y = (screen_height // 2) - (win_height // 2)
 
-        self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+        # Margen de seguridad para Barra de Tareas (abajo) y Barra de Título (arriba)
+        # 100px es seguro para Windows/Mac/Linux
+        safe_height = screen_height - 100
+
+        # --- LÓGICA DE ADAPTACIÓN DE PANTALLA ---
+        # Umbral subido a 1020px para capturar resoluciones 1440x900 y 1280x1024
+        if screen_height < 1020:  
+            print(f"INFO: Pantalla compacta detectada ({screen_width}x{screen_height}). Ajustando.")
+            
+            # 1. Escalado: Si es muy pequeña (768p), 0.75x. Si es mediana (900p), 0.85x.
+            if screen_height < 800:
+                scale_factor = 0.75
+            else:
+                scale_factor = 0.85 # Un poco más grande para 900p
+            
+            ctk.set_widget_scaling(scale_factor)  
+            ctk.set_window_scaling(scale_factor)
+            
+            # 2. Dimensiones: Usar el ALTO SEGURO calculado
+            win_width = 800
+            win_height = safe_height # <--- ESTO GARANTIZA QUE NO SE CORTE
+            
+            # 3. Posición: Pegado arriba (Y=10) para aprovechar espacio
+            pos_x = (screen_width // 2) - (win_width // 2)
+            pos_y = 10 
+            
+            # 4. Minsize permisivo
+            min_w, min_h = 750, 500
+            
+        else: # Monitores grandes (1080p o más)
+            win_width = 835
+            win_height = 950
+            
+            # Centrado vertical estándar
+            pos_x = (screen_width // 2) - (win_width // 2)
+            pos_y = (screen_height // 2) - (win_height // 2)
+            
+            min_w, min_h = 835, 700
+            
+            # Escalado normal
+            ctk.set_widget_scaling(1.0)
+            ctk.set_window_scaling(1.0)
+
+        # Aplicar
+        self.geometry(f"{win_width}x{win_height}+{int(pos_x)}+{int(pos_y)}")
+        self.minsize(min_w, min_h)
+        
         self.is_updating_dimension = False
         self.current_aspect_ratio = None
-        self.minsize(835, 915)
+        
+        # Aplicar límite mínimo calculado
+        self.minsize(min_w, min_h)
+        
         ctk.set_appearance_mode("Dark")
         server_thread = threading.Thread(target=run_flask_app, daemon=True)
         server_thread.start()
@@ -460,6 +519,7 @@ class MainWindow(TkBase):
         self.batch_playlist_analysis_saved = True
         self.batch_auto_import_saved = True
         self.image_auto_import_saved = True
+        self.batch_fast_mode_saved = True 
         self.quick_preset_saved = ""
         self.recode_settings = {}
         self.apply_quick_preset_checkbox_state = False
@@ -484,6 +544,7 @@ class MainWindow(TkBase):
                     self.batch_playlist_analysis_saved = settings.get("batch_playlist_analysis", self.batch_playlist_analysis_saved)
                     self.batch_auto_import_saved = settings.get("batch_auto_import", self.batch_auto_import_saved)
                     self.image_auto_import_saved = settings.get("image_auto_import", self.image_auto_import_saved) 
+                    self.batch_fast_mode_saved = settings.get("batch_fast_mode", self.batch_fast_mode_saved)
                     self.quick_preset_saved = settings.get("quick_preset_saved", self.quick_preset_saved)
                     if snooze_str:
                         self.ffmpeg_update_snooze_until = datetime.fromisoformat(snooze_str)
@@ -550,8 +611,18 @@ class MainWindow(TkBase):
 
         # 1. Comprobación de actualización de la app
         from src.core.setup import check_app_update
+        
+        # ✅ CORRECCIÓN: Usar función wrapper y la cola para seguridad de hilos
+        def run_update_check_thread():
+            try:
+                result = check_app_update(self.APP_VERSION)
+                # Enviar el resultado al hilo principal a través de la cola
+                self.ui_update_queue.put((self.on_update_check_complete, (result,)))
+            except Exception as e:
+                print(f"ERROR en chequeo de actualización: {e}")
+
         threading.Thread(
-            target=lambda: self.on_update_check_complete(check_app_update(self.APP_VERSION)),
+            target=run_update_check_thread,
             daemon=True
         ).start()
 
@@ -601,72 +672,28 @@ class MainWindow(TkBase):
             # A. Verificar Entorno
             env_status = check_environment_status(
                 lambda text, val: self.update_setup_progress(text, val),
-                check_updates=should_check_online  # <--- AQUÍ ESTÁ LA MAGIA
+                check_updates=should_check_online
             )
             
-            # Si el entorno base está bien, procedemos a los modelos IA
-            if env_status.get("status") == "success":
-                # B. Verificar y Descargar Modelos IA (rembg)
-                # Esta función ya tiene su propia lógica de "si existe, no descargar", así que es rápida
-                check_and_download_rembg_models(
-                     lambda text, val: self.update_setup_progress(text, val)
-                )
+            # B. (ELIMINADO) La descarga de IA ahora es bajo demanda en la pestaña correspondiente.
             
             # C. Finalizar
             self.after(0, lambda: self.on_status_check_complete(env_status))
             self.after(0, lambda: self.update_setup_progress("Iniciando...", 100))
 
         # ---------------------------------------------------------------
-        # 5. DESCARGA DE MODELOS DE IA (HILO DE FONDO EN SINGLE TAB)
+        # 5. GESTIÓN DE MODELOS IA (MODO LAZY - BAJO DEMANDA)
         # ---------------------------------------------------------------
-        # Añadimos la importación de la nueva función
-        from src.core.setup import check_and_download_rembg_models, check_and_download_upscaling_tools
-
+        # Ya no descargamos nada al inicio para reducir peso y tiempo de carga.
+        
         def rembg_background_task():
-            # Encolar actualización inicial
+            # Solo actualizamos la UI para decir que el sistema está listo para usarse cuando se necesite
             self.ui_update_queue.put((
-                lambda: self.single_tab.rembg_status_label.configure(text="Modelos IA: Verificando..."), 
+                lambda: self.single_tab.rembg_status_label.configure(text="Modelos IA: Bajo Demanda\n(Se descargarán al usar)"),
                 ()
             ))
-            
-            # Definir callbacks que encolen (para pasar a las funciones de setup)
-            def update_progress_safe(text, val):
-                self.ui_update_queue.put((
-                    self.single_tab.update_setup_download_progress, 
-                    ('rembg', text, val)
-                ))
 
-            # 1. Ejecutar descarga REMBG
-            success_rembg = check_and_download_rembg_models(update_progress_safe)
-            
-            # 2. Ejecutar descarga UPSCALING
-            if success_rembg:
-                 self.ui_update_queue.put((
-                    lambda: self.single_tab.rembg_status_label.configure(text="IA Upscaling: Verificando..."),
-                    ()
-                 ))
-                 
-                 success_upscale = check_and_download_upscaling_tools(update_progress_safe)
-            else:
-                success_upscale = False
-
-            # Encolar actualización final
-            if success_rembg and success_upscale:
-                self.ui_update_queue.put((
-                    lambda: self.single_tab.rembg_status_label.configure(text="Modelos IA: Listos ✅\n(Instalados)"),
-                    ()
-                ))
-                self.ui_update_queue.put((
-                    self.single_tab.update_setup_download_progress,
-                    ('rembg', "Todos los modelos IA listos.", 0)
-                ))
-            else:
-                self.ui_update_queue.put((
-                    lambda: self.single_tab.rembg_status_label.configure(text="Modelos IA: Error ❌"),
-                    ()
-                ))
-
-        # Lanzar hilo independiente que NO bloquea la ventana de carga
+        # Lanzar hilo simple para actualizar la etiqueta sin bloquear
         threading.Thread(target=rembg_background_task, daemon=True).start()
         
         # 2. Definir rutas
@@ -1163,83 +1190,97 @@ class MainWindow(TkBase):
 
     def _iniciar_auto_actualizacion(self, installer_url, version_str):
         """
-        Descarga el instalador de la nueva versión en un hilo separado,
-        lo ejecuta y cierra la aplicación actual.
+        Descarga el ZIP en Descargas, lo extrae en Temp y ejecuta el instalador.
         """
-        print(f"INFO: Iniciando descarga de la actualización v{version_str} desde {installer_url}")
+        print(f"INFO: Iniciando descarga de actualización v{version_str} (ZIP)...")
 
-        # Deshabilitar botones mientras se descarga
         self.single_tab.update_app_button.configure(text=f"Descargando v{version_str}...", state="disabled")
-        self.single_tab.update_ffmpeg_button.configure(state="disabled") # Opcional: deshabilitar también este
-        self.single_tab.download_button.configure(state="disabled") # Deshabilitar descarga/proceso principal
+        self.single_tab.update_ffmpeg_button.configure(state="disabled")
+        self.single_tab.download_button.configure(state="disabled")
 
-        # Mostrar progreso inicial
         self.single_tab.update_progress(0, f"Descargando actualización v{version_str}...")
 
         def download_and_run():
-            temp_dir = None # Inicializar fuera del try
             try:
-                # --- Descargar el instalador ---
-                import tempfile # Importar aquí para mantenerlo local
-                import requests # Ya deberías tenerlo importado arriba
-                import subprocess # Ya deberías tenerlo importado arriba
-                import os # Ya deberías tenerlo importado arriba
+                import requests
+                import subprocess
+                import os
+                import zipfile
+                import tempfile
+                from pathlib import Path
 
-                # Crear un directorio temporal seguro
-                temp_dir = tempfile.mkdtemp(prefix="dowp_update_")
-                installer_filename = os.path.basename(installer_url) # Ej: DowP_v1.2.1_setup.exe
-                installer_path = os.path.join(temp_dir, installer_filename)
+                # 1. Definir ruta en Descargas (Visible para el usuario)
+                downloads_path = Path.home() / "Downloads"
+                os.makedirs(downloads_path, exist_ok=True)
 
-                # Descargar con progreso (similar a como se descarga FFmpeg)
-                last_reported_progress = -1
-                with requests.get(installer_url, stream=True, timeout=180) as r: # Timeout más largo por si acaso
+                zip_filename = os.path.basename(installer_url) # Ej: DowP_v1.3.0_Light_setup.zip
+                zip_path = downloads_path / zip_filename
+
+                # Manejo de duplicados en Descargas
+                if zip_path.exists():
+                    try:
+                        os.remove(zip_path)
+                    except Exception:
+                        import time
+                        zip_filename = f"{int(time.time())}_{zip_filename}"
+                        zip_path = downloads_path / zip_filename
+
+                print(f"INFO: Descargando ZIP en: {zip_path}")
+
+                # 2. Descargar el ZIP
+                with requests.get(installer_url, stream=True, timeout=180) as r:
                     r.raise_for_status()
                     total_size = int(r.headers.get('content-length', 0))
                     downloaded_size = 0
-                    with open(installer_path, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=8192 * 4): # Chunk más grande
+                    
+                    with open(zip_path, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192 * 4):
                             if not chunk: continue
                             f.write(chunk)
                             downloaded_size += len(chunk)
                             if total_size > 0:
                                 progress_percent = (downloaded_size / total_size) * 100
-                                # Actualiza la UI desde el hilo principal usando 'after'
                                 self.after(0, self.single_tab.update_progress, progress_percent / 100.0,
-                                           f"Descargando: {downloaded_size / (1024*1024):.1f} / {total_size / (1024*1024):.1f} MB")
-                                last_reported_progress = int(progress_percent)
+                                           f"Descargando: {downloaded_size / (1024*1024):.1f} MB")
 
-                self.after(0, self.single_tab.update_progress, 1.0, "Descarga completa. Iniciando instalador...")
-                print(f"INFO: Instalador descargado en: {installer_path}")
+                self.after(0, self.single_tab.update_progress, 1.0, "Extrayendo instalador...")
+                
+                # 3. Extraer en carpeta TEMPORAL (Oculta)
+                # No extraemos en Descargas para no ensuciar la carpeta del usuario
+                extract_dir = tempfile.mkdtemp(prefix="dowp_setup_extract_")
+                
+                print(f"INFO: Extrayendo en: {extract_dir}")
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(extract_dir)
 
-                # --- Ejecutar el instalador y cerrar DowP ---
-                # Usamos Popen para que no espere a que termine
-                # CREATE_NEW_PROCESS_GROUP es para que el instalador no se cierre si cerramos la consola
+                # 4. Buscar el .exe dentro de la carpeta extraída
+                setup_exe_path = None
+                for root, dirs, files in os.walk(extract_dir):
+                    for file in files:
+                        if file.endswith(".exe"):
+                            setup_exe_path = os.path.join(root, file)
+                            break
+                    if setup_exe_path: break
+                
+                if not setup_exe_path:
+                    raise Exception("No se encontró ningún archivo .exe dentro del ZIP de actualización.")
+
+                self.after(0, self.single_tab.update_progress, 1.0, "Abriendo instalador...")
+                print(f"INFO: Ejecutando instalador: {setup_exe_path}")
+
+                # 5. Ejecutar y Cerrar
                 creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
-                subprocess.Popen([installer_path], creationflags=creationflags)
+                subprocess.Popen([setup_exe_path], creationflags=creationflags)
 
-                print("INFO: Instalador iniciado. Cerrando DowP para permitir la actualización...")
-                # Programar el cierre de la ventana principal desde el hilo principal
-                self.after(500, self.destroy) # Espera medio segundo antes de cerrar
+                print("INFO: Instalador iniciado. Cerrando DowP...")
+                self.after(1000, self.destroy)
 
             except Exception as e:
-                print(f"ERROR: Falló el proceso de auto-actualización: {e}")
-                # Si falla, informa al usuario y reactiva los botones
-                self.after(0, lambda: messagebox.showerror("Error de Actualización",
-                                                           f"No se pudo completar la actualización automática:\n\n{e}\n\n"
-                                                           "Puedes intentar descargarla manualmente desde la página de releases."))
-                # Reactivar botones en la UI desde el hilo principal
-                self.after(0, self._reset_buttons_to_original_state) # Reutiliza tu función de reseteo
-                self.after(0, lambda: self.single_tab.update_progress(0, "❌ Falló la actualización automática."))
-                # Limpiar directorio temporal si se creó y falló
-                if temp_dir and os.path.exists(temp_dir):
-                    try:
-                        import shutil
-                        shutil.rmtree(temp_dir)
-                        print(f"DEBUG: Directorio temporal de actualización eliminado: {temp_dir}")
-                    except Exception as clean_e:
-                        print(f"ADVERTENCIA: No se pudo eliminar el directorio temporal {temp_dir}: {clean_e}")
+                print(f"ERROR: Falló la actualización: {e}")
+                self.after(0, lambda: messagebox.showerror("Error", f"No se pudo actualizar:\n{e}"))
+                self.after(0, self._reset_buttons_to_original_state)
+                self.after(0, lambda: self.single_tab.update_progress(0, "❌ Error en actualización."))
 
-        # Iniciar la descarga en un hilo separado para no bloquear la UI
         threading.Thread(target=download_and_run, daemon=True).start()
 
     def _check_for_ui_requests(self):
@@ -1337,8 +1378,9 @@ class MainWindow(TkBase):
             # Pestaña de Lotes
             "batch_playlist_analysis": self.batch_playlist_analysis_saved,
             "batch_auto_import": self.batch_auto_import_saved,
+            "batch_fast_mode": self.batch_fast_mode_saved,
 
-            # Pestaña de Herramientas de Imagen (AÑADIR ESTO)
+            # Pestaña de Herramientas de Imagen
             "image_auto_import": self.image_auto_import_saved,
             "image_settings": self.image_settings
         }

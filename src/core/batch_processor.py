@@ -117,8 +117,9 @@ class QueueManager:
                     if job_to_run.job_type == "DOWNLOAD":
                         self._execute_download_job(job_to_run)
                     elif job_to_run.job_type == "LOCAL_RECODE":
-                        # (Crearemos esta función en el Paso 4)
-                        self._execute_recode_job(job_to_run) 
+                        self._execute_recode_job(job_to_run)
+                    elif job_to_run.job_type == "PLAYLIST":  # <--- NUEVO CASO
+                        self._execute_playlist_job(job_to_run)
                     else:
                         raise Exception(f"Tipo de trabajo desconocido: {job_to_run.job_type}")
                     # --- FIN DE MODIFICACIÓN ---
@@ -198,6 +199,23 @@ class QueueManager:
         self.start_worker_thread()
         self.ui_callback("QUEUE_STATUS", "RUNNING", "")
 
+        # ✅ CORRECCIÓN: Forzar actualización inmediata de la barra
+        # Esto elimina el "100%" residual del análisis y pone la barra en 0% (o en el estado actual)
+        with self.jobs_lock:
+            total_jobs = len(self.jobs)
+            # Recalcular completados reales al momento de iniciar
+            current_completed = sum(1 for j in self.jobs if j.status not in ("PENDING", "RUNNING"))
+            
+            # Sincronizar el contador interno
+            self.jobs_completed = current_completed
+        
+        if total_jobs > 0:
+            progress_percent = current_completed / total_jobs
+            msg = f"Iniciando... ({current_completed}/{total_jobs})"
+            self.ui_callback("GLOBAL_PROGRESS", "UPDATE", msg, progress_percent)
+        else:
+            self.ui_callback("GLOBAL_PROGRESS", "RESET", "Esperando...", 0.0)
+
     def pause_queue(self):
         """Pausa el procesamiento de la cola."""
         print("INFO: Pausando la cola de lotes.")
@@ -228,6 +246,293 @@ class QueueManager:
         print("INFO: Reseteando el progreso global de la cola.")
         self.jobs_completed = 0
         self.ui_callback("GLOBAL_PROGRESS", "RESET", "Esperando para iniciar la cola...", 0.0)
+
+    def _execute_playlist_job(self, job: Job):
+        """
+        Procesa una playlist completa. Maneja lógica de 'Solo Miniaturas' 
+        y descarga de miniaturas en PNG/Alta Calidad si se requiere.
+        """
+        selected_indices = job.config.get('selected_indices', [])
+        total_videos = len(selected_indices)
+        entries = job.analysis_data.get('entries', [])
+        
+        # Configuración global
+        mode = job.config.get('playlist_mode', 'Video+Audio')
+        quality_setting = job.config.get('playlist_quality', 'Mejor Calidad (Auto)')
+        
+        # Verificar modo de miniaturas global (Radial Checks)
+        batch_tab = self.main_app.batch_tab
+        thumbnail_mode = batch_tab.thumbnail_mode_var.get() # 'normal', 'with_thumbnail', 'only_thumbnail'
+        
+        # Directorio base y subcarpeta
+        base_output_dir = batch_tab.output_path_entry.get()
+        # Verificar si hay subcarpeta de lote activa
+        if hasattr(self, 'subfolder_path') and self.subfolder_path:
+            base_output_dir = self.subfolder_path
+
+        # Crear carpeta de la playlist
+        raw_title = job.config.get('title', 'Playlist')
+        playlist_title = self.main_app.single_tab.sanitize_filename(raw_title)
+        playlist_dir = os.path.join(base_output_dir, playlist_title)
+        os.makedirs(playlist_dir, exist_ok=True)
+
+        print(f"INFO: Iniciando playlist '{playlist_title}' ({total_videos} items). Modo Miniatura: {thumbnail_mode}")
+        self.ui_callback(job.job_id, "RUNNING", f"Iniciando playlist ({total_videos} items)...")
+
+        # --- CASO ESPECIAL: SOLO MINIATURAS ---
+        if thumbnail_mode == "only_thumbnail":
+            # Crear carpeta específica de thumbnails dentro de la playlist (opcional, o usar la raíz de la playlist)
+            # El usuario pidió "descargue las miniaturas de la playlist", lo pondremos en la carpeta de la playlist.
+            
+            for i, index in enumerate(selected_indices):
+                if self.pause_event.is_set(): return 
+                if self.stop_event.is_set(): return
+
+                if index >= len(entries): continue
+                entry = entries[index]
+                video_title = entry.get('title', f"Video {index}")
+                
+                # Calcular progreso
+                percent = ((i + 1) / total_videos) * 100
+                msg = f"[{i+1}/{total_videos}] Miniatura: {video_title[:20]}..."
+                self.ui_callback(job.job_id, "RUNNING", msg, percent)
+                
+                # Descargar SOLO la miniatura en PNG
+                try:
+                    # 1. Capturamos la ruta
+                    thumb_path = self._download_best_thumb_png(entry, playlist_dir, video_title)
+                    
+                    # 2. Verificar si Auto-envío está activo
+                    if thumb_path and self.main_app.batch_tab.auto_send_to_it_checkbox.get() == 1:
+                        # 3. Enviar a Herramientas de Imagen (Usando after para seguridad de hilos)
+                        self.main_app.after(0, self.main_app.image_tab._process_imported_files, [thumb_path])
+                        
+                except Exception as e:
+                    print(f"ERROR miniatura {i}: {e}")
+            
+            job.status = "COMPLETED"
+            job.final_filepath = playlist_dir
+            self.ui_callback(job.job_id, "COMPLETED", "Miniaturas descargadas ✅", 100.0)
+            return
+
+        # --- CASO NORMAL (VIDEO/AUDIO) ---
+        for i, index in enumerate(selected_indices):
+            if self.pause_event.is_set():
+                self.ui_callback(job.job_id, "PENDING", f"Pausado en video {i+1}/{total_videos}")
+                return 
+            if self.stop_event.is_set(): return
+            
+            if index >= len(entries): continue
+            entry = entries[index]
+            
+            video_url = entry.get('url')
+            video_title = entry.get('title', f"Video {index}")
+            
+            # Callback de progreso interno
+            def playlist_progress_callback(vid_percent, vid_message):
+                chunk_size = 100 / total_videos
+                base_progress = i * chunk_size
+                current_contribution = (vid_percent / 100) * chunk_size
+                global_percent = base_progress + current_contribution
+                
+                short_title = (video_title[:20] + '..') if len(video_title) > 20 else video_title
+                status_msg = f"[{i+1}/{total_videos}] {short_title}: {vid_percent:.0f}%"
+                self.ui_callback(job.job_id, "RUNNING", status_msg, global_percent)
+
+            # Opciones de descarga
+            child_options = {
+                'url': video_url,
+                'title': video_title,
+                'output_path': playlist_dir,
+                'mode': mode,
+                'cookie_mode': self.main_app.single_tab.cookie_mode_menu.get(),
+            }
+            
+            self._apply_playlist_quality(child_options, mode, quality_setting)
+            
+            # Inicializar variables para importación
+            thumb_path = None
+            final_path_for_import = None
+
+            try:
+                # 1. Descargar Video/Audio
+                downloaded_path = self._download_single_video_in_playlist(child_options, playlist_progress_callback, job.job_id)
+                final_path_for_import = downloaded_path # Por defecto, es el descargado
+                
+                # ✅ LÓGICA DE HERENCIA DE RECODIFICACIÓN
+                if job.config.get('recode_enabled', False) and downloaded_path and os.path.exists(downloaded_path):
+                    
+                    preset_name = job.config.get('recode_preset_name')
+                    preset_params = self._find_preset_params(preset_name)
+                    
+                    if preset_params:
+                        self.ui_callback(job.job_id, "RUNNING", f"[{i+1}/{total_videos}] Recodificando: {video_title}...")
+                        
+                        output_dir = os.path.dirname(downloaded_path)
+                        base_name = os.path.splitext(os.path.basename(downloaded_path))[0]
+                        recoded_base_name = f"{base_name}_recoded"
+                        
+                        # ✅ CORRECCIÓN: Inyectar el modo de la playlist en las opciones
+                        # Creamos una copia para no ensuciar el preset original
+                        recode_options = preset_params.copy()
+                        recode_options['mode'] = mode  # 'mode' viene de job.config.get('playlist_mode')
+                        
+                        print(f"DEBUG: Recodificando hijo con modo: {mode}")
+
+                        # Ejecutar recodificación
+                        recoded_path = self._execute_recode_master(
+                            job=job,
+                            input_file=downloaded_path,
+                            output_dir=output_dir,
+                            base_filename=recoded_base_name,
+                            recode_options=recode_options
+                        )
+                        
+                        final_path_for_import = recoded_path
+                        
+                        # Manejar archivo original
+                        if not job.config.get('recode_keep_original', True):
+                            try:
+                                os.remove(downloaded_path)
+                            except: pass
+                
+                # 3. Descargar Miniatura (Si el modo es "con video/audio" o "manual" activado)
+                if thumbnail_mode == "with_thumbnail":
+                    thumb_path = self._download_best_thumb_png(entry, playlist_dir, video_title)
+                    
+                    # ✅ Lógica de Auto-Envío para ítems de Playlist
+                    if thumb_path and self.main_app.batch_tab.auto_send_to_it_checkbox.get() == 1:
+                        self.main_app.after(0, self.main_app.image_tab._process_imported_files, [thumb_path])
+                    
+                # 4. ✅ LÓGICA DE IMPORTACIÓN AUTOMÁTICA A ADOBE (NUEVO)
+                if self.main_app.batch_tab.auto_import_checkbox.get() and final_path_for_import:
+                    active_target = self.main_app.ACTIVE_TARGET_SID_accessor()
+                    
+                    if active_target:
+                        # Determinar el nombre del Bin (Carpeta en Premiere)
+                        # Usamos el nombre de la playlist (playlist_title) que ya calculamos arriba
+                        target_bin_name = playlist_title 
+                        
+                        # Si hay una subcarpeta de lote global, podemos combinarla o usarla
+                        # Por simplicidad, usaremos el título de la playlist para agrupar los ítems
+                        
+                        file_package = {
+                            "video": final_path_for_import.replace('\\', '/'),
+                            "thumbnail": thumb_path.replace('\\', '/') if thumb_path else None,
+                            "subtitle": None, # (Podrías añadir lógica de subtítulos aquí en el futuro)
+                            "targetBin": target_bin_name
+                        }
+                        
+                        print(f"INFO: [Playlist Item] Enviando a Adobe: {os.path.basename(final_path_for_import)}")
+                        self.main_app.socketio.emit('new_file', {'filePackage': file_package}, to=active_target)
+
+            except Exception as e:
+                print(f"ERROR procesando item {i+1} ({video_title}): {e}")
+                continue
+
+        job.status = "COMPLETED"
+        job.final_filepath = playlist_dir
+        self.ui_callback(job.job_id, "COMPLETED", "Playlist completada ✅", 100.0)
+
+    def _apply_playlist_quality(self, options, mode, quality_setting):
+        """Traduce la selección del menú a selectores de formato de yt-dlp."""
+        
+        # Selectores base
+        selector = "best" 
+        
+        if mode == "Video+Audio":
+            if "Mejor Compatible" in quality_setting:
+                # Buscar H.264 (avc1) y AAC (mp4a) en contenedor MP4
+                # Fallback a best si no encuentra MP4 exacto
+                selector = "bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+            elif "4K" in quality_setting:
+                selector = "bestvideo[height=2160]+bestaudio/best[height=2160]/best"
+            elif "1080p" in quality_setting:
+                selector = "bestvideo[height=1080]+bestaudio/best[height=1080]/best"
+            elif "720p" in quality_setting:
+                selector = "bestvideo[height=720]+bestaudio/best[height=720]/best"
+            elif "480p" in quality_setting:
+                selector = "bestvideo[height=480]+bestaudio/best[height=480]/best"
+            else:
+                # Mejor Calidad (Auto)
+                selector = "bv+ba/b"
+
+        elif mode == "Solo Audio":
+            if "Mejor Compatible" in quality_setting:
+                # Preferir M4A (AAC) o MP3 directo.
+                # Si no existe, descargará el mejor y luego convertiremos (post-proceso)
+                selector = "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio"
+                options['recode_audio_enabled'] = True # Forzar recodificación si es necesario
+                options['recode_audio_codec_name'] = "MP3 (libmp3lame)" # Estandarizar a MP3
+            else:
+                selector = "bestaudio/best"
+        
+        options['format_selector'] = selector
+
+    def _download_single_video_in_playlist(self, options, progress_callback, job_id):
+        """
+        Versión mini de _execute_download_job para uso interno en playlists.
+        """
+        output_dir = options['output_path']
+        title = self.main_app.single_tab.sanitize_filename(options['title'])
+        
+        # Template de salida
+        output_template = os.path.join(output_dir, f"{title}.%(ext)s")
+        
+        ydl_opts = {
+            'outtmpl': output_template,
+            'format': options.get('format_selector', 'best'),
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'ffmpeg_location': self.main_app.ffmpeg_processor.ffmpeg_path
+        }
+        
+        # Cookies (Importante heredar esto)
+        single_tab = self.main_app.single_tab
+        cookie_mode = single_tab.cookie_mode_menu.get()
+        if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
+            ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
+        elif cookie_mode != "No usar":
+            browser = single_tab.browser_var.get()
+            profile = single_tab.browser_profile_entry.get()
+            if profile:
+                ydl_opts['cookiesfrombrowser'] = (f"{browser}:{profile}",)
+            else:
+                ydl_opts['cookiesfrombrowser'] = (browser,)
+
+        # Hook de progreso
+        def hook(d):
+            if self.pause_event.is_set():
+                # Truco para pausar yt-dlp: lanzar error
+                raise UserCancelledError("Pausado")
+            
+            if d['status'] == 'downloading':
+                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                downloaded = d.get('downloaded_bytes', 0)
+                if total > 0:
+                    pct = (downloaded / total) * 100
+                    progress_callback(pct, f"Descargando: {title}")
+            elif d['status'] == 'finished':
+                progress_callback(100, f"Procesando: {title}")
+
+        ydl_opts['progress_hooks'] = [hook]
+        
+        # Ejecutar descarga
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # ✅ CAMBIO: Capturar info para obtener el nombre real del archivo
+                info = ydl.extract_info(options['url'], download=True)
+                
+                # Obtener la ruta final del archivo descargado
+                filename = ydl.prepare_filename(info)
+                return filename # <--- AÑADIR ESTE RETURN
+                
+        except UserCancelledError:
+            raise # Re-lanzar para manejar la pausa arriba
+        except Exception as e:
+            print(f"Error interno en video playlist: {e}")
+            raise e
 
     def _execute_download_job(self, job: Job):
         """
@@ -803,6 +1108,7 @@ class QueueManager:
             
             job.status = "COMPLETED"
             job.final_filepath = final_path
+            job.thumbnail_path = final_path # ✅ NUEVO: Guardar ruta explícitamente
             self.ui_callback(job.job_id, "COMPLETED", f"Miniatura guardada: {os.path.basename(final_path)}")
 
             # 1. Verificar si el usuario quiere importar
@@ -881,7 +1187,8 @@ class QueueManager:
                     pil_image.convert("RGB").save(thumbnail_path_smart, "JPEG", quality=95)
                 
                 print(f"INFO: Miniatura (re-codificada) guardada: {thumbnail_path_smart}")
-                return thumbnail_path_smart # Devolvemos la ruta
+                job.thumbnail_path = thumbnail_path_smart # ✅ NUEVO: Guardar en el job
+                return thumbnail_path_smart
             # --- FIN DE CORRECCIÓN ---
             except Exception as pil_e:
                 print(f"ERROR: Falló el procesamiento de la imagen (PIL): {pil_e}")
@@ -1614,3 +1921,61 @@ class QueueManager:
                 except OSError: pass
             
             raise e # Re-lanzar la excepción
+        
+    def _download_best_thumb_png(self, entry, output_dir, title):
+        """
+        Descarga la mejor miniatura disponible (Forzando MaxRes) y la guarda como PNG.
+        """
+        try:
+            # 1. Buscar la URL base
+            thumb_url = None
+            thumbs = entry.get('thumbnails')
+            
+            if thumbs:
+                sorted_thumbs = sorted(thumbs, key=lambda x: x.get('width', 0) or 0, reverse=True)
+                thumb_url = sorted_thumbs[0].get('url')
+            
+            if not thumb_url:
+                thumb_url = entry.get('thumbnail')
+            
+            if not thumb_url: return
+
+            # 2. INTENTO INTELIGENTE: Forzar MaxResDefault
+            # Primero intentamos descargar la versión HD forzada.
+            # Si falla (404), caemos a la versión original (hqdefault).
+            final_url = thumb_url
+            if "i.ytimg.com" in thumb_url:
+                import re
+                max_res_url = re.sub(r'/(hq|mq|sd|default)default', '/maxresdefault', thumb_url)
+                
+                # Probamos si maxres existe (haciendo una petición HEAD o GET rápida)
+                try:
+                    check_resp = requests.get(max_res_url, timeout=5, stream=True)
+                    if check_resp.status_code == 200:
+                        final_url = max_res_url
+                        check_resp.close() # Cerramos stream
+                    # Si da 404, nos quedamos con thumb_url original
+                except:
+                    pass # Si falla la comprobación, usar la original
+
+            # 3. Descargar datos reales
+            response = requests.get(final_url, timeout=30)
+            response.raise_for_status()
+            image_data = response.content
+            
+            # 4. Procesar y guardar como PNG
+            sanitized_title = self.main_app.single_tab.sanitize_filename(title)
+            output_path = os.path.join(output_dir, f"{sanitized_title}.png")
+            
+            from PIL import Image
+            from io import BytesIO
+
+            img = Image.open(BytesIO(image_data))
+            img.save(output_path, "PNG")
+            print(f"DEBUG: Miniatura PNG guardada ({'MAXRES' if final_url != thumb_url else 'ORIG'}): {output_path}")
+            
+            return output_path # <--- AÑADIDO: Devolver la ruta
+            
+        except Exception as e:
+            print(f"ADVERTENCIA: Falló descarga de miniatura PNG para '{title}': {e}")
+            return None # <--- AÑADIDO: Devolver None si falla

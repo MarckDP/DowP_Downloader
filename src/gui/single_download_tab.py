@@ -232,8 +232,16 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.original_analyze_fg_color = self.ANALYZE_BTN_COLOR
         self.analyze_button.pack(side="left", padx=(5, 10))
         self.original_analyze_fg_color = self.analyze_button.cget("fg_color")
+        
+        # Creamos el frame pero NO lo empaquetamos todavía
+        self.info_frame = ctk.CTkFrame(self) 
+        # (Nota: cambié info_frame a self.info_frame para poder acceder al final, 
+        # pero si no quieres cambiar todas las referencias, guárdalo en una variable temporal al final)
+        
+        # Para no romper tu código existente que usa 'info_frame' variable local:
         info_frame = ctk.CTkFrame(self)
-        info_frame.pack(pady=10, padx=10, fill="both", expand=True)
+        self.info_frame_ref = info_frame # Guardamos referencia para el final
+        
         left_column_container = ctk.CTkFrame(info_frame, fg_color="transparent")
         left_column_container.pack(side="left", padx=10, pady=10, fill="y", anchor="n")
         
@@ -873,46 +881,65 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.import_button.pack(fill="x", padx=10, pady=5)
         self.save_in_same_folder_check = ctk.CTkCheckBox(local_import_frame, text="Guardar en la misma carpeta que el original", command=self._on_save_in_same_folder_change)
         self.clear_local_file_button = ctk.CTkButton(local_import_frame, text="Limpiar y Volver a Modo URL", fg_color="gray", hover_color="#555555", command=self.reset_to_url_mode)
-        download_frame = ctk.CTkFrame(self)
-        download_frame.pack(pady=10, padx=10, fill="x")
-        ctk.CTkLabel(download_frame, text="Carpeta de Salida:").pack(side="left", padx=(10, 5))
-        self.output_path_entry = ctk.CTkEntry(download_frame, placeholder_text="Selecciona una carpeta...")
-        self.output_path_entry.bind("<KeyRelease>", self.update_download_button_state)
-        self.output_path_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.output_path_entry))
-        self.output_path_entry.pack(side="left", fill="x", expand=True, padx=5)
-        self.select_folder_button = ctk.CTkButton(download_frame, text="...", width=40, command=lambda: self.select_output_folder())
-        self.select_folder_button.pack(side="left", padx=(0, 5))
-        self.open_folder_button = ctk.CTkButton(download_frame, text="📂", width=40, font=ctk.CTkFont(size=16), command=self.open_last_download_folder, state="disabled")
-        self.open_folder_button.pack(side="left", padx=(0, 5))
-
-        # Asignar la etiqueta a una variable para añadirle el tooltip
-        speed_label = ctk.CTkLabel(download_frame, text="Límite (MB/s):")
-        speed_label.pack(side="left", padx=(10, 5))
         
-        self.speed_limit_entry = ctk.CTkEntry(download_frame, width=50)
-        
-        # --- AÑADIR TOOLTIP
-        tooltip_text = "Limita la velocidad de descarga (en MB/s).\nÚtil si las descargas fallan por 'demasiadas peticiones'."
-        Tooltip(speed_label, tooltip_text, delay_ms=1000)
-        Tooltip(self.speed_limit_entry, tooltip_text, delay_ms=1000)
-        # --- FIN TOOLTIP ---
-        
-        self.speed_limit_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.speed_limit_entry))
-        self.speed_limit_entry.pack(side="left", padx=(0, 10))
-
-        self.download_button = ctk.CTkButton(download_frame, text=self.original_download_text, state="disabled", command=self.original_download_command, 
-                                     fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER,
-                                     text_color_disabled=self.DISABLED_TEXT_COLOR)
-        self.download_button.pack(side="left", padx=(5, 10))
-
+        # 1. Panel de Progreso (Lo creamos PRIMERO para que quede al fondo absoluto)
         progress_frame = ctk.CTkFrame(self)
-        progress_frame.pack(pady=(0, 10), padx=10, fill="x")
+        progress_frame.pack(side="bottom", pady=(0, 10), padx=10, fill="x") # <--- side="bottom"
+
         self.progress_label = ctk.CTkLabel(progress_frame, text="Esperando...")
         self.progress_label.pack(pady=(5,0))
         self.progress_bar = ctk.CTkProgressBar(progress_frame)
         self.progress_bar.set(0)
         self.progress_bar.pack(pady=(0,5), padx=10, fill="x")
+
+        # 2. Panel de Descarga (Lo creamos SEGUNDO, quedará encima del progreso)
+        download_frame = ctk.CTkFrame(self)
+        download_frame.pack(side="bottom", pady=10, padx=10, fill="x") # <--- side="bottom"
+
+        ctk.CTkLabel(download_frame, text="Carpeta de Salida:").pack(side="left", padx=(10, 5))
         
+        self.output_path_entry = ctk.CTkEntry(download_frame, placeholder_text="Selecciona una carpeta...")
+        self.output_path_entry.bind("<KeyRelease>", self.update_download_button_state)
+        self.output_path_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.output_path_entry))
+        self.output_path_entry.pack(side="left", fill="x", expand=True, padx=5)
+        
+        self.select_folder_button = ctk.CTkButton(download_frame, text="...", width=40, command=lambda: self.select_output_folder())
+        self.select_folder_button.pack(side="left", padx=(0, 5))
+        
+        self.open_folder_button = ctk.CTkButton(download_frame, text="📂", width=40, font=ctk.CTkFont(size=16), command=self.open_last_download_folder, state="disabled")
+        self.open_folder_button.pack(side="left", padx=(0, 5))
+
+        # Etiquetas y Tooltips
+        speed_label = ctk.CTkLabel(download_frame, text="Límite (MB/s):")
+        speed_label.pack(side="left", padx=(10, 5))
+        
+        self.speed_limit_entry = ctk.CTkEntry(download_frame, width=50)
+        
+        tooltip_text = "Limita la velocidad de descarga (en MB/s).\nÚtil si las descargas fallan por 'demasiadas peticiones'."
+        Tooltip(speed_label, tooltip_text, delay_ms=1000)
+        Tooltip(self.speed_limit_entry, tooltip_text, delay_ms=1000)
+        
+        self.speed_limit_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.speed_limit_entry))
+        self.speed_limit_entry.pack(side="left", padx=(0, 10))
+
+        self.download_button = ctk.CTkButton(
+            download_frame, 
+            text=self.original_download_text, 
+            state="disabled", 
+            command=self.original_download_command, 
+            fg_color=self.DOWNLOAD_BTN_COLOR, 
+            hover_color=self.DOWNLOAD_BTN_HOVER,
+            text_color_disabled=self.DISABLED_TEXT_COLOR
+        )
+        self.download_button.pack(side="left", padx=(5, 10))
+
+        # 3. FINALMENTE: Empaquetar el panel central (info_frame)
+        # Esto le dice a la app: "Usa TODO el espacio que sobre para el panel de en medio"
+        # Asegúrate de haber guardado 'self.info_frame_ref' al inicio de la función como te indiqué antes.
+        if hasattr(self, 'info_frame_ref'):
+            self.info_frame_ref.pack(side="top", fill="both", expand=True, padx=10, pady=10)
+        
+        # --- Binds y Configuración Final ---
         self.on_mode_change(self.mode_selector.get())
         self.on_profile_selection_change(self.recode_profile_menu.get())
         self.start_h.bind("<KeyRelease>", lambda e: (self._handle_time_input(e, self.start_h, self.start_m), self.update_download_button_state()))
@@ -6255,11 +6282,51 @@ class SingleDownloadTab(ctk.CTkFrame):
                 default_video_selection = option
                 break 
         
-        default_audio_selection = a_opts[0]
-        for option in a_opts:
-            if "✨" in option:
-                default_audio_selection = option
-                break
+        # --- SELECCIÓN INTELIGENTE DE AUDIO ---
+        # Regla: Original+Compatible > Original(Cualquiera) > Compatible(Idioma Pref) > Primero
+        
+        target_audio = None
+        
+        # Candidatos de reserva
+        candidate_original_incompatible = None
+        candidate_preferred_compatible = None
+        
+        for entry in audio_entries:
+            f = entry['format']
+            label = entry['label']
+            note = (f.get('format_note') or '').lower()
+            acodec = str(f.get('acodec', '')).split('.')[0]
+            
+            is_original = 'original' in note
+            is_compatible = acodec in self.app.EDITOR_FRIENDLY_CRITERIA["compatible_acodecs"]
+            
+            # 1. EL GANADOR: Original Y Compatible
+            if is_original and is_compatible:
+                target_audio = label
+                break # Encontrado el mejor caso posible, salimos.
+            
+            # 2. Reserva A: Original (aunque sea Opus/WebM)
+            if is_original and candidate_original_incompatible is None:
+                candidate_original_incompatible = label
+                
+            # 3. Reserva B: Compatible en tu idioma preferido (ej: Español AAC)
+            # Como la lista 'audio_entries' YA está ordenada por tu idioma,
+            # el primer compatible que encontremos será el mejor de tu idioma.
+            if is_compatible and candidate_preferred_compatible is None:
+                candidate_preferred_compatible = label
+
+        # Decisión final basada en prioridades
+        if target_audio:
+            default_audio_selection = target_audio
+        elif candidate_original_incompatible:
+            # Preferimos el idioma original aunque tengamos que recodificar
+            default_audio_selection = candidate_original_incompatible
+        elif candidate_preferred_compatible:
+            # Si no hay "Original", nos quedamos con el compatible de tu idioma
+            default_audio_selection = candidate_preferred_compatible
+        else:
+            # Fallback total: el primero de la lista
+            default_audio_selection = a_opts[0]
 
         self.video_quality_menu.configure(state="normal" if self.video_formats else "disabled", values=v_opts)
         self.video_quality_menu.set(default_video_selection)
