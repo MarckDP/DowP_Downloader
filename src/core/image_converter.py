@@ -7,7 +7,7 @@ import pillow_avif
 
 from src.core.constants import REALESRGAN_MODELS, WAIFU2X_MODELS, REALSR_MODELS, SRMD_MODELS
 from src.core.constants import IMAGE_RASTER_FORMATS, IMAGE_INPUT_FORMATS, IMAGE_RAW_FORMATS
-from main import BIN_DIR
+from main import BIN_DIR, REMBG_MODELS_DIR, MODELS_DIR
 
 try:
     from pdf2image import convert_from_path, pdfinfo_from_path
@@ -141,7 +141,7 @@ class ImageConverter:
         import gc
         gc.collect()
         
-    def _process_rmbg2(self, pil_image, model_path):
+    def _process_rmbg2(self, pil_image, model_path, use_gpu=True): # <--- CAMBIO 1: Agregado argumento
         """
         Ejecuta la inferencia específica para RMBG 2.0 usando ONNX Runtime.
         Replica la lógica de normalización y redimensión a 1024x1024.
@@ -150,14 +150,28 @@ class ImageConverter:
             import numpy as np
             import onnxruntime as ort
             
-            # 1. Gestión de Sesión (Caché para no cargar el modelo de 1GB cada vez)
-            if model_path not in self.rembg_sessions:
-                print(f"DEBUG: Cargando sesión ONNX para RMBG 2.0: {model_path}")
-                # Proveedores: Intenta usar CUDA (GPU) si está disponible, si no CPU
-                providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-                self.rembg_sessions[model_path] = ort.InferenceSession(model_path, providers=providers)
+            # 1. Gestión de Sesión (Clave única por hardware)
+            session_key = f"{model_path}_{'gpu' if use_gpu else 'cpu'}" # <--- CAMBIO 2: Clave única
             
-            session = self.rembg_sessions[model_path]
+            if session_key not in self.rembg_sessions:
+                hw_label = 'GPU' if use_gpu else 'CPU'
+                print(f"DEBUG: Cargando RMBG 2.0 en [{hw_label}]: {os.path.basename(model_path)}")
+                
+                sess_opts = ort.SessionOptions()
+                
+                if use_gpu:
+                    # --- MODO GPU (Seguro) ---
+                    providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
+                    sess_opts.enable_mem_pattern = False
+                else:
+                    # --- MODO CPU (Rápido) ---
+                    providers = ['CPUExecutionProvider']
+                    sess_opts.enable_cpu_mem_arena = True
+                    sess_opts.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+                
+                self.rembg_sessions[session_key] = ort.InferenceSession(model_path, providers=providers, sess_options=sess_opts)
+            
+            session = self.rembg_sessions[session_key]
 
             # 2. Preprocesamiento
             # Convertir a RGB y guardar tamaño original
@@ -213,26 +227,87 @@ class ImageConverter:
             print(f"ERROR en inferencia RMBG 2.0: {e}")
             return pil_image
         
-    def remove_background(self, pil_image, model_filename="u2netp.onnx", progress_callback=None):
-        """Elimina el fondo. Soporta 'rembg' estándar y 'RMBG 2.0' nativo."""
+    def _process_onnx_manual(self, pil_image, session, target_size):
+        """
+        Inferencia manual universal con corrección matemática para BiRefNet.
+        """
+        import numpy as np
+        
+        # 1. Preprocesamiento
+        original_image = pil_image.convert("RGB")
+        orig_w, orig_h = original_image.size
+        
+        # Redimensionar (BiRefNet/IsNet requieren 1024, U2Net 320)
+        img_resized = original_image.resize(target_size, Image.Resampling.BILINEAR)
+        
+        # Normalización estándar (ImageNet)
+        img_np = np.array(img_resized).astype(np.float32) / 255.0
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        img_np = (img_np - mean) / std
+        
+        img_np = img_np.transpose(2, 0, 1)
+        img_np = np.expand_dims(img_np, 0)
+
+        # 2. Inferencia
+        input_name = session.get_inputs()[0].name
+        result = session.run(None, {input_name: img_np})
+        
+        # Obtener máscara (Batch, 1, H, W) -> (H, W)
+        # Algunos modelos devuelven una lista, tomamos el primer tensor
+        raw_mask = result[0][0, 0]
+
+        # 3. Postprocesamiento Inteligente (CORRECCIÓN BIREFNET)
+        
+        # Detectar si necesitamos Sigmoide:
+        # Si los valores salen del rango [0, 1] (ej: -5 a +5), son Logits.
+        min_val, max_val = raw_mask.min(), raw_mask.max()
+        
+        if min_val < -1.0 or max_val > 1.5:
+            # Aplicar Sigmoide: 1 / (1 + e^-x)
+            # Esto convierte los "fantasmas" en negro/blanco puro
+            mask = 1 / (1 + np.exp(-raw_mask))
+        else:
+            # Ya son probabilidades, usar tal cual
+            mask = raw_mask
+
+        # Normalización final para asegurar rango 0-255 sólido
+        mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-8)
+        mask = (mask * 255).astype(np.uint8)
+        
+        # 4. Redimensionar y Aplicar
+        mask_img = Image.fromarray(mask, mode='L')
+        mask_img = mask_img.resize((orig_w, orig_h), Image.Resampling.LANCZOS)
+
+        final_image = pil_image.convert("RGBA")
+        final_image.putalpha(mask_img)
+        
+        return final_image
+        
+    def remove_background(self, pil_image, model_filename="u2netp.onnx", progress_callback=None, use_gpu=True):
+        """
+        Elimina el fondo.
+        Args:
+            use_gpu (bool): True = GPU (DirectML Anti-Freeze), False = CPU (Full Performance)
+        """
         
         from main import MODELS_DIR
+        import onnxruntime as ort 
         
-        # --- DETECCIÓN DE RMBG 2.0 ---
+        # --- BLOQUE RMBG 2.0 ---
         rmbg2_names = [
-            "bria-rmbg-2.0.onnx",
-            "model.onnx", "model_bnb4.onnx", "model_fp16.onnx", 
+            "bria-rmbg-2.0.onnx", "model.onnx", "model_bnb4.onnx", "model_fp16.onnx", 
             "model_int8.onnx", "model_quantized.onnx", "model_q4.onnx",
             "model_q4f16.onnx", "model_uint8.onnx"
         ]
-        
         rmbg2_path = os.path.join(MODELS_DIR, "rmbg2", model_filename)
 
         if model_filename in rmbg2_names or os.path.exists(rmbg2_path):
             if not os.path.exists(rmbg2_path):
                 print(f"ERROR: El modelo RMBG 2.0 no se encuentra en: {rmbg2_path}")
                 return pil_image
-            return self._process_rmbg2(pil_image, rmbg2_path)
+            # Pasamos use_gpu aquí también
+            return self._process_rmbg2(pil_image, rmbg2_path, use_gpu=use_gpu)
 
         # --- CARGA LAZY DE REMBG ---
         if not self._load_rembg_lazy(progress_callback):
@@ -240,47 +315,78 @@ class ImageConverter:
             return pil_image
 
         try:
-            # 🔥 NUEVO: Mapeo completo de modelos BiRefNet
-            birefnet_mapping = {
-                # Modelos Generales
-                "birefnet-general.onnx": "birefnet-general",
-                "birefnet-general-lite.onnx": "birefnet-general-lite",
+            # 1. Definir clave de caché única (Nombre + GPU/CPU)
+            session_key = f"{model_filename}_{'gpu' if use_gpu else 'cpu'}"
+
+            # 2. Cargar sesión ONNX si no existe
+            if session_key not in self.rembg_sessions:
+                # Construir ruta completa
+                full_model_path = os.path.join(REMBG_MODELS_DIR, model_filename)
                 
-                # Modelos Especializados
-                "birefnet-portrait.onnx": "birefnet-portrait",
-                "birefnet-dis.onnx": "birefnet-dis",
-                "birefnet-cod.onnx": "birefnet-cod",
-                "birefnet-hrsod.onnx": "birefnet-hrsod",
+                # Si no está en la carpeta REMBG, buscar en la raíz de models (fallback)
+                if not os.path.exists(full_model_path):
+                    full_model_path = os.path.join(MODELS_DIR, "rembg", model_filename)
                 
-                # Modelos Masivos y Alta Resolución
-                "birefnet-massive.onnx": "birefnet-massive",
-                "birefnet-hr-general.onnx": "birefnet-hr-general",
-                "birefnet-hr-matting.onnx": "birefnet-hr-matting"
-            }
+                if not os.path.exists(full_model_path):
+                    print(f"ERROR: No encuentro el modelo {model_filename}")
+                    return pil_image
+
+                hw_label = 'GPU' if use_gpu else 'CPU'
+                print(f"DEBUG: Cargando Manualmente {model_filename} en [{hw_label}]")
+                
+                sess_opts = ort.SessionOptions()
+
+                if use_gpu:
+                    # CONFIG GPU (DirectML Anti-Freeze)
+                    providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
+                    sess_opts.enable_mem_pattern = False 
+                    sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+                    sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+                    sess_opts.inter_op_num_threads = 1 
+                    sess_opts.intra_op_num_threads = 1
+                else:
+                    # CONFIG CPU (Máxima Velocidad)
+                    providers = ['CPUExecutionProvider']
+                    sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                    sess_opts.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+                
+                # Cargamos la sesión "cruda" de ONNX Runtime
+                self.rembg_sessions[session_key] = ort.InferenceSession(
+                    full_model_path, 
+                    providers=providers, 
+                    sess_options=sess_opts
+                )
             
-            # Determinar el nombre de sesión
-            session_name = None
+            # 3. Obtener sesión
+            session = self.rembg_sessions[session_key]
             
-            # ✅ CORREGIDO: Primero buscar en el mapeo de BiRefNet
-            if model_filename in birefnet_mapping:
-                session_name = birefnet_mapping[model_filename]
+            # 4. Determinar resolución (CORREGIDO SEGÚN LOGS)
+            model_lower = model_filename.lower()
+            
+            # Reglas basadas en tus errores:
+            # - BiRefNet: SIEMPRE 1024
+            # - IsNet (General/Anime): SIEMPRE 1024 (El log dice Expected: 1024)
+            # - U2Net (Standard/Human/P): 320
+            
+            if "birefnet" in model_lower:
+                size = (1024, 1024)
+            elif "isnet" in model_lower: # <-- CAMBIO CLAVE: IsNet a 1024
+                size = (1024, 1024)
+            elif "u2net" in model_lower:
+                size = (320, 320)
             else:
-                # Fallback: usar el nombre sin extensión (para u2net, isnet, etc.)
-                session_name = os.path.splitext(model_filename)[0]
-
-            print(f"DEBUG: Usando sesión IA (rembg): '{session_name}'")
-
-            # Crear o reutilizar sesión en caché
-            if session_name not in self.rembg_sessions:
-                self.rembg_sessions[session_name] = self.rembg_module.new_session(model_name=session_name)
+                # Ante la duda, hoy en día los modelos modernos usan 1024
+                size = (1024, 1024) 
             
-            session = self.rembg_sessions[session_name]
-            output_image = self.rembg_module.remove(pil_image, session=session)
+            # 5. Ejecutar inferencia MANUAL
+            output_image = self._process_onnx_manual(pil_image, session, target_size=size)
             
             return output_image
             
         except Exception as e:
-            print(f"ERROR al procesar IA ({model_filename}): {e}")
+            print(f"ERROR CRÍTICO al procesar IA ({model_filename}): {e}")
+            import traceback
+            traceback.print_exc()
             return pil_image
     
     def convert_file(self, input_path, output_path, options, page_number=None, progress_callback=None, cancellation_event=None):
@@ -366,14 +472,18 @@ class ImageConverter:
             # 2.5 Eliminar fondo con IA
             if options.get("rembg_enabled", False):
                 model_name = options.get("rembg_model", "u2netp")
-                print(f"INFO: Eliminando fondo con IA (Modelo: {model_name})...")
+                
+                # NUEVO: Leer opción de GPU (Default: True)
+                use_gpu = options.get("rembg_gpu", True)
+                
+                print(f"INFO: Eliminando fondo con IA ({model_name} en {'GPU' if use_gpu else 'CPU'})...")
                 
                 # Reporte con texto para la UI
                 if progress_callback: 
-                    progress_callback(45, f"Preparando IA ({model_name})...")
+                    progress_callback(45, f"Preparando IA ({'GPU' if use_gpu else 'CPU'})...")
                 
-                # Pasamos el callback para que _load_rembg_lazy pueda usarlo si es la primera vez
-                pil_image = self.remove_background(pil_image, model_name, progress_callback)
+                # Pasamos el callback y la opción use_gpu
+                pil_image = self.remove_background(pil_image, model_name, progress_callback, use_gpu=use_gpu)
                 
                 # Reporte: IA Terminada (80%)
                 if progress_callback: progress_callback(80)
@@ -1945,14 +2055,20 @@ class ImageConverter:
 
                         current_pct = base_progress + (step_size * 0.3)
                         model_name = options.get("rembg_model", "u2netp")
+                        use_gpu = options.get("rembg_gpu", True) # <--- NUEVO
                         
-                        progress_callback("Standardizing", current_pct, f"🤖 IA: {os.path.basename(filepath)}")
+                        progress_callback("Standardizing", current_pct, f"🤖 IA ({'GPU' if use_gpu else 'CPU'}): {os.path.basename(filepath)}")
                         
                         # Adaptador de callback
                         def temp_callback(p, m):
                             progress_callback("Standardizing", current_pct, m)
 
-                        fg_image = self.remove_background(pil_image=fg_image, model_filename=model_name, progress_callback=temp_callback)
+                        fg_image = self.remove_background(
+                            pil_image=fg_image, 
+                            model_filename=model_name, 
+                            progress_callback=temp_callback,
+                            use_gpu=use_gpu # <--- PASAR OPCIÓN
+                        )
                     
                     # ✅ 3. CHEQUEO DE CANCELACIÓN (Después de IA)
                     if cancellation_event.is_set(): raise UserCancelledError("Cancelado")
@@ -2071,6 +2187,7 @@ class ImageConverter:
         """
         import subprocess
         import tempfile
+        import multiprocessing
         
         # 1. Inicializar variables para evitar errores en 'finally'
         temp_input_path = None
@@ -2096,16 +2213,44 @@ class ImageConverter:
 
             scale = options.get("upscale_scale", "2")
             tile_size = options.get("upscale_tile", "0") or "0"
+            
+            # --- MEJORA 1: Tile Size "Upscayl" ---
+            # Si es 0 (Auto), NCNN es muy lento. 200 es el estándar de velocidad.
+            if tile_size == "0":
+                tile_size = "200" 
+
             denoise = options.get("upscale_denoise", "0")
             use_tta = options.get("upscale_tta", False)
             
+            # --- MEJORA 2: Input JPG (Más rápido si no hay transparencia) ---
+            ext_temp = ".png"
+            if img.mode != "RGBA" and img.mode != "LA":
+                ext_temp = ".jpg" # JPG es más rápido para el pipeline
+            
             # 2. Crear archivos temporales
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_in:
+            with tempfile.NamedTemporaryFile(suffix=ext_temp, delete=False) as temp_in:
                 temp_input_path = temp_in.name
             
-            img.save(temp_input_path, "PNG")
-            temp_output_path = temp_input_path.replace(".png", "_out.png")
+            if ext_temp == ".jpg":
+                # Guardar como JPG máxima calidad (sin subsampling)
+                img.convert("RGB").save(temp_input_path, "JPEG", quality=100, subsampling=0)
+            else:
+                img.save(temp_input_path, "PNG")
+
+            # El output SIEMPRE será PNG (lo decide el ejecutable)
+            temp_output_path = os.path.splitext(temp_input_path)[0] + "_out.png"
             
+            # --- MEJORA 3: Calcular Hilos de Tubería (Pipeline) ---
+            # Formato NCNN: "load:proc:save"
+            # Upscayl usa estrategias agresivas aquí para saturar la GPU.
+            cpu_count = multiprocessing.cpu_count()
+            if cpu_count >= 8:
+                threads_arg = "2:4:2" # CPUs potentes
+            elif cpu_count >= 4:
+                threads_arg = "1:2:2" # CPUs medias
+            else:
+                threads_arg = "1:1:1" # CPUs básicas
+
             models_root = os.path.join(BIN_DIR, "models", "upscaling")
             cmd = []
             
@@ -2119,7 +2264,8 @@ class ImageConverter:
                     "-n", internal_model_name,
                     "-s", scale,
                     "-t", tile_size,
-                    "-f", "png"
+                    "-f", "png",
+                    "-j", threads_arg # <--- NUEVO: Inyectar hilos
                 ]
                 if use_tta: cmd.append("-x")
 
@@ -2139,7 +2285,8 @@ class ImageConverter:
                     "-m", full_model_path,
                     "-s", forced_scale, # Usamos la escala forzada
                     "-t", tile_size,
-                    "-f", "png"
+                    "-f", "png",
+                    "-j", threads_arg
                 ]
                 if use_tta: cmd.append("-x")
 
@@ -2156,6 +2303,7 @@ class ImageConverter:
                     "-s", scale,
                     "-t", tile_size,
                     "-f", "png"
+                    "-j", threads_arg
                 ]
                 if use_tta: cmd.append("-x")
                     
@@ -2171,7 +2319,8 @@ class ImageConverter:
                     "-n", denoise,
                     "-s", scale,
                     "-t", tile_size,
-                    "-f", "png"
+                    "-f", "png",
+                    "-j", threads_arg
                 ]
                 if use_tta: cmd.append("-x")
 

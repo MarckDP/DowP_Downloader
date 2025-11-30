@@ -1103,32 +1103,43 @@ class ImageToolsTab(ctk.CTkFrame):
         self.rembg_options_frame = ctk.CTkFrame(self.rembg_master_frame, fg_color="transparent")
         self.rembg_options_frame.grid_columnconfigure(1, weight=1)
 
-        # --- MENÚ 1: FAMILIA ---
-        ctk.CTkLabel(self.rembg_options_frame, text="Motor:").grid(row=0, column=0, padx=(10, 5), pady=5, sticky="w")
+        # --- NUEVO: Checkbox de GPU (Fila 0) ---
+        self.rembg_gpu_checkbox = ctk.CTkCheckBox(
+            self.rembg_options_frame, 
+            text="Aceleración de Hardware (GPU)"
+        )
+        self.rembg_gpu_checkbox.select() # Activado por defecto
+        self.rembg_gpu_checkbox.grid(row=0, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="w")
+        
+        Tooltip(self.rembg_gpu_checkbox, "Si está activo, usa la tarjeta gráfica (GPU).\nSi se desactiva, usará el procesador (CPU) a máxima potencia.\nDesactívalo si tienes problemas de drivers o cuelgues.", delay_ms=1000)
+
+        # --- MENÚ 1: FAMILIA (Ahora Fila 1) ---
+        ctk.CTkLabel(self.rembg_options_frame, text="Motor:").grid(row=1, column=0, padx=(10, 5), pady=5, sticky="w")
         
         self.rembg_family_menu = ctk.CTkOptionMenu(
             self.rembg_options_frame,
             values=list(REMBG_MODEL_FAMILIES.keys()),
             command=self._on_rembg_family_change
         )
-        self.rembg_family_menu.grid(row=0, column=1, padx=(0, 10), pady=5, sticky="ew")
+        self.rembg_family_menu.grid(row=1, column=1, padx=(0, 10), pady=5, sticky="ew")
         
-        # --- MENÚ 2: MODELO ---
-        ctk.CTkLabel(self.rembg_options_frame, text="Modelo:").grid(row=1, column=0, padx=(10, 5), pady=5, sticky="w")
+        # --- MENÚ 2: MODELO (Ahora Fila 2) ---
+        ctk.CTkLabel(self.rembg_options_frame, text="Modelo:").grid(row=2, column=0, padx=(10, 5), pady=5, sticky="w")
         
         self.rembg_model_menu = ctk.CTkOptionMenu(
             self.rembg_options_frame,
             values=["-"], # Se llena dinámicamente
             command=self._on_rembg_model_change
         )
-        self.rembg_model_menu.grid(row=1, column=1, padx=(0, 10), pady=5, sticky="ew")
+        self.rembg_model_menu.grid(row=2, column=1, padx=(0, 10), pady=5, sticky="ew")
         
+        # (Ahora Fila 3)
         self.rembg_status_label = ctk.CTkLabel(self.rembg_options_frame, text="", font=ctk.CTkFont(size=10))
-        self.rembg_status_label.grid(row=2, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
+        self.rembg_status_label.grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
 
-        # --- NUEVO: Botones de Gestión (Abrir / Borrar) ---
+        # (Ahora Fila 4)
         self.rembg_actions_frame = ctk.CTkFrame(self.rembg_options_frame, fg_color="transparent")
-        self.rembg_actions_frame.grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
+        self.rembg_actions_frame.grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
         self.rembg_actions_frame.grid_columnconfigure((0, 1), weight=1)
 
         self.rembg_open_btn = ctk.CTkButton(
@@ -2574,12 +2585,18 @@ class ImageToolsTab(ctk.CTkFrame):
             # -- Rembg (IA) --
             rem = settings.get("rembg", {})
             
-            # 1. Restaurar estado del checkbox
+            # 1. Restaurar estado del checkbox principal
             if rem.get("enabled"): 
                 self.rembg_checkbox.select()
             else: 
                 self.rembg_checkbox.deselect()
             
+            # NUEVO: Restaurar estado de GPU (Default True si no existe)
+            if rem.get("gpu", True):
+                self.rembg_gpu_checkbox.select()
+            else:
+                self.rembg_gpu_checkbox.deselect()
+
             # 2. Obtener familia guardada o usar default
             saved_family = rem.get("family", "Rembg Standard (U2Net)")
             self.rembg_family_menu.set(saved_family)
@@ -2674,7 +2691,8 @@ class ImageToolsTab(ctk.CTkFrame):
             },
             
             "rembg": {
-                "enabled": self.rembg_checkbox.get() == 1, # Forzar booleano
+                "enabled": self.rembg_checkbox.get() == 1,
+                "gpu": self.rembg_gpu_checkbox.get() == 1,
                 "family": self.rembg_family_menu.get(),
                 "model": self.rembg_model_menu.get()
             },
@@ -4003,6 +4021,7 @@ class ImageToolsTab(ctk.CTkFrame):
             "video_fit_mode": self.video_fit_mode_menu.get() if hasattr(self, 'video_fit_mode_menu') else "Mantener Tamaño Original",
             # Opciones de rembg
             "rembg_enabled": self.rembg_checkbox.get() == 1,
+            "rembg_gpu": self.rembg_gpu_checkbox.get() == 1, # <--- NUEVO: Enviar opción
             "rembg_model": real_model_name,
             
             # --- NUEVAS OPCIONES DE REESCALADO ---

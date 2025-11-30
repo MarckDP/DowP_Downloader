@@ -12,7 +12,7 @@ from tkinter import messagebox
 from PIL import Image, ImageTk
 
 
-APP_VERSION = "1.2.9"
+APP_VERSION = "1.3.0"
 
 if getattr(sys, 'frozen', False):
     PROJECT_ROOT = os.path.dirname(sys.executable)
