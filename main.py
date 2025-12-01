@@ -7,12 +7,10 @@ import atexit
 import tkinter as tk 
 import pillow_avif
 
-
 from tkinter import messagebox
 from PIL import Image, ImageTk
 
-
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 if getattr(sys, 'frozen', False):
     PROJECT_ROOT = os.path.dirname(sys.executable)

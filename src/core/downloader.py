@@ -19,6 +19,11 @@ def get_video_info(url):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=False)
+        
+        # ✅ CAMBIO: Aplicar sanitización antes de devolver
+        if info_dict:
+            info_dict = apply_site_specific_rules(info_dict)
+            
         return info_dict
     except yt_dlp.utils.DownloadError as e:
         print(f"Error de yt-dlp al obtener información: {e}")
@@ -125,3 +130,51 @@ def download_media(url, ydl_opts, progress_callback, cancellation_event: threadi
     except Exception as e:
         print(f"Error en el proceso de descarga de yt-dlp: {e}")
         raise e
+    
+# =========================================================
+# 🆕 SECCIÓN DE REGLAS ESPECÍFICAS POR SITIO
+# =========================================================
+
+def apply_site_specific_rules(info):
+    """
+    Normaliza metadatos de sitios problemáticos antes de que la UI los procese.
+    """
+    if not info:
+        return info
+
+    extractor = info.get('extractor_key', '').lower()
+    url = info.get('webpage_url', '').lower()
+    
+    # Filtro Estricto para Clips de Twitch
+    is_twitch_clip = 'clips' in extractor or '/clip/' in url
+    
+    if is_twitch_clip:
+        print(f"DEBUG: 🚑 Aplicando parche de compatibilidad para Twitch CLIP ({extractor})")
+        info = _fix_twitch_clip_formats(info)
+
+    return info
+
+def _fix_twitch_clip_formats(info):
+    """
+    Asigna códecs falsos (h264/aac) si faltan, para que la UI habilite los menús.
+    """
+    formats = info.get('formats', [])
+    
+    for f in formats:
+        # ✅ CORRECCIÓN: Detectar explícitamente None, 'none' y 'unknown'
+        vcodec = f.get('vcodec')
+        acodec = f.get('acodec')
+
+        # Si el video es desconocido o nulo -> Forzar H.264
+        if not vcodec or vcodec == 'none' or vcodec == 'unknown':
+            f['vcodec'] = 'h264'
+        
+        # Si el audio es desconocido o nulo -> Forzar AAC
+        if not acodec or acodec == 'none' or acodec == 'unknown':
+            f['acodec'] = 'aac'
+            
+        # Asegurar contenedor MP4
+        if not f.get('ext') or f.get('ext') == 'unknown':
+            f['ext'] = 'mp4'
+
+    return info

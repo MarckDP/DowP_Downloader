@@ -24,7 +24,7 @@ import io
 from datetime import datetime, timedelta
 
 # Importar nuestros otros módulos
-from src.core.downloader import get_video_info, download_media
+from src.core.downloader import get_video_info, download_media, apply_site_specific_rules
 from src.core.processor import FFmpegProcessor, CODEC_PROFILES
 from src.core.exceptions import UserCancelledError, LocalRecodeFailedError, PlaylistDownloadError # <-- MODIFICAR
 from src.core.processor import clean_and_convert_vtt_to_srt
@@ -5514,12 +5514,15 @@ class SingleDownloadTab(ctk.CTkFrame):
 
     def _normalize_info_dict(self, info):
         """
-        Normaliza el diccionario de info para casos donde yt-dlp no devuelve 'formats'.
-        Maneja múltiples casos especiales de extractores.
+        Normaliza el diccionario de info...
         """
         if not info:
             return info
-        
+
+        # ✅ NUEVO: Aplicar reglas específicas de sitios (Twitch, etc.)
+        # Esto corregirá los códecs 'unknown' antes de que el resto de la lógica los vea.
+        info = apply_site_specific_rules(info)
+
         formats = info.get('formats', [])
         
         # ✅ CASO 1: Ya tiene formats, retornar tal cual

@@ -16,7 +16,7 @@ from customtkinter import filedialog
 from contextlib import redirect_stdout
 
 from src.core.exceptions import UserCancelledError 
-from src.core.downloader import get_video_info
+from src.core.downloader import get_video_info, apply_site_specific_rules
 from src.core.batch_processor import Job
 from .dialogs import Tooltip, messagebox, PlaylistSelectionDialog
 
@@ -3545,6 +3545,10 @@ class BatchDownloadTab(ctk.CTkFrame):
         """
         if not info:
             return info
+        
+        # ✅ INYECCIÓN DEL PARCHE (Twitch Clips y otros)
+        # Esto transforma los 'unknown' en 'h264/aac' ANTES de que la UI los procese.
+        info = apply_site_specific_rules(info)
         
         formats = info.get('formats', [])
         

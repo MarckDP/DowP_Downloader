@@ -9,7 +9,7 @@ import requests
 from PIL import Image
 from io import BytesIO
 
-from src.core.downloader import download_media
+from src.core.downloader import download_media, apply_site_specific_rules
 from src.core.exceptions import UserCancelledError
 
 from src.core.constants import (
@@ -599,6 +599,10 @@ class QueueManager:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     job.analysis_data = ydl.extract_info(url, download=False)
                 
+                # ✅ INYECCIÓN DEL PARCHE
+                if job.analysis_data:
+                    job.analysis_data = apply_site_specific_rules(job.analysis_data)
+
                 # 🆕 CRÍTICO: Normalizar si falta información
                 job.analysis_data = self._normalize_info_dict(job.analysis_data)
                     
@@ -743,12 +747,41 @@ class QueueManager:
 
         # Preparar Opciones de yt-dlp
         ydl_opts = {
-            'outtmpl': output_template, # <-- AHORA USAMOS EL TEMPLATE
+            'outtmpl': output_template,
             'overwrites': True,
             'ffmpeg_location': self.main_app.ffmpeg_processor.ffmpeg_path,
             'format': precise_selector,
             'restrictfilenames': True,
         }
+
+        # ✅ CORRECCIÓN DINÁMICA: Extraer audio respetando el formato original
+        if mode == "Solo Audio":
+            # 1. Determinar el formato de destino basado en el códec original
+            target_ext = 'mp3' # Fallback por compatibilidad
+            
+            if a_format_dict:
+                acodec = a_format_dict.get('acodec', '').lower()
+                
+                # Mapeo de códecs a extensiones para extracción sin pérdidas (Copy)
+                if 'aac' in acodec or 'mp4a' in acodec:
+                    target_ext = 'm4a'
+                elif 'opus' in acodec:
+                    target_ext = 'opus'
+                elif 'vorbis' in acodec:
+                    target_ext = 'ogg'
+                elif 'flac' in acodec:
+                    target_ext = 'flac'
+                elif 'mp3' in acodec:
+                    target_ext = 'mp3'
+                # Si es unknown, se queda en mp3 por seguridad
+            
+            print(f"DEBUG: Modo Solo Audio. Codec origen: {acodec if a_format_dict else '?'}. Extrayendo a: {target_ext}")
+            
+            ydl_opts['postprocessors'] = [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': target_ext,
+                'preferredquality': '192',
+            }]
         
         playlist_index = job.config.get('playlist_index')
         if playlist_index is not None:
@@ -819,8 +852,29 @@ class QueueManager:
             
             # Descargar miniatura si está habilitado
             if should_download_thumbnail:
-                # Capturar la ruta devuelta
                 thumbnail_path = self._download_thumbnail_alongside_video(job, final_filepath)
+
+            # ✅ CORRECCIÓN: Actualizar ruta final si cambió la extensión (Modo Solo Audio)
+            # Si yt-dlp convirtió el video a audio y borró el original, 'final_filepath' apunta a la nada.
+            if mode == "Solo Audio" and not os.path.exists(final_filepath):
+                # Obtener el nombre base sin extensión
+                base_path_no_ext = os.path.splitext(final_filepath)[0]
+                
+                # 1. Intentar con la extensión objetivo calculada antes (target_ext)
+                if 'target_ext' in locals():
+                    candidate = f"{base_path_no_ext}.{target_ext}"
+                    if os.path.exists(candidate):
+                        final_filepath = candidate
+                        print(f"DEBUG: Ruta corregida (Audio): {final_filepath}")
+                
+                # 2. Si sigue sin existir, buscar cualquier extensión de audio común
+                if not os.path.exists(final_filepath):
+                    for audio_ext in ['.m4a', '.mp3', '.opus', '.wav', '.flac', '.ogg']:
+                        candidate = f"{base_path_no_ext}{audio_ext}"
+                        if os.path.exists(candidate):
+                            final_filepath = candidate
+                            print(f"DEBUG: Ruta corregida por búsqueda (Audio): {final_filepath}")
+                            break
 
             # --- INICIO DE LA LÓGICA DE RECODIFICACIÓN ---
             
@@ -874,7 +928,7 @@ class QueueManager:
             # --- FIN DE LA LÓGICA DE RECODIFICACIÓN ---
 
             job.status = "COMPLETED"
-            job.final_filepath = final_filepath
+            job.final_filepath = final_filepath # ✅ Ahora apunta al archivo real (.m4a/.mp3)
             self.ui_callback(job.job_id, "COMPLETED", f"Completado: {os.path.basename(final_filepath)}")
 
             # --- LÓGICA DE IMPORTACIÓN AUTOMÁTICA ---
@@ -1359,7 +1413,25 @@ class QueueManager:
                     label += " ⚠️"
                 
                 job_audio_formats[label] = f
-        
+
+        # ✅ NUEVO: Generar opciones de "Extraer Audio" (Copia los videos a la lista de audios)
+        for label, video_data in job_video_formats.items():
+            if video_data.get('is_combined', False):
+                acodec = video_data.get('acodec', 'unknown')
+                if acodec == 'none': continue
+                
+                acodec_clean = acodec.split('.')[0]
+                # Limpiar la etiqueta para que quede bonita (ej: "1080p60")
+                res_part = label.split('|')[0].strip()
+                if '(' in res_part: res_part = res_part.split('(')[0].strip()
+                
+                audio_extract_label = f"Extraer de {res_part} ({acodec_clean})"
+                
+                # Agregarlo al mapa de audio.
+                # IMPORTANTE: Esto evita que job_audio_formats quede vacío en Twitch Clips
+                if audio_extract_label not in job_audio_formats:
+                    job_audio_formats[audio_extract_label] = video_data
+
         # 1. Convertir los dicts a listas de entradas (como en single_tab)
         video_entries = []
         for label, data in job_video_formats.items():
@@ -1610,6 +1682,10 @@ class QueueManager:
         """
         if not info:
             return info
+        
+        # ✅ INYECCIÓN DEL PARCHE (Igual que en single_tab y batch_tab)
+        # Asegura que el procesador vea códecs válidos y no falle al clasificar.
+        info = apply_site_specific_rules(info)
         
         formats = info.get('formats', [])
         
