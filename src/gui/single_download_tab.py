@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from src.core.downloader import get_video_info, download_media, apply_site_specific_rules
 from src.core.processor import FFmpegProcessor, CODEC_PROFILES
 from src.core.exceptions import UserCancelledError, LocalRecodeFailedError, PlaylistDownloadError # <-- MODIFICAR
-from src.core.processor import clean_and_convert_vtt_to_srt
+from src.core.processor import clean_and_convert_vtt_to_srt, slice_subtitle
 from .dialogs import ConflictDialog, LoadingWindow, CompromiseDialog, SimpleMessageDialog, SavePresetDialog, PlaylistErrorDialog, Tooltip
 from src.core.constants import (
     VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, SINGLE_STREAM_AUDIO_CONTAINERS,
@@ -379,8 +379,19 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.subtitle_type_menu.grid(row=1, column=1, pady=5, sticky="ew")
         self.save_subtitle_button = ctk.CTkButton(subtitle_options_frame, text="Descargar Subtítulos", state="disabled", command=self.save_subtitle)
         self.save_subtitle_button.pack(fill="x", padx=10, pady=5)
+        
         self.auto_download_subtitle_check = ctk.CTkCheckBox(subtitle_options_frame, text="Descargar subtítulos con el video", command=self.toggle_manual_subtitle_button)
         self.auto_download_subtitle_check.pack(padx=10, pady=5, anchor="w")
+
+        # --- CÓDIGO DEL NUEVO CHECKBOX (Asegúrate que esté aquí) ---
+        self.keep_full_subtitle_check = ctk.CTkCheckBox(
+            subtitle_options_frame, 
+            text="No cortar subtítulos (Mantener completos)",
+            text_color="orange"
+        )
+        # NO usamos .pack() aquí. Se hará en _toggle_fragment_panel
+        # ----------------------------------------------------------
+
         self.clean_subtitle_check = ctk.CTkCheckBox(subtitle_options_frame, text="Convertir y estandarizar a formato SRT")
         self.clean_subtitle_check.pack(padx=10, pady=(0, 5), anchor="w")
 
@@ -1407,8 +1418,32 @@ class SingleDownloadTab(ctk.CTkFrame):
         """Muestra u oculta las opciones para cortar fragmentos."""
         if self.fragment_checkbox.get() == 1:
             self.fragment_options_frame.pack(fill="x", padx=10, pady=(0,5))
+            
+            # --- CORRECCIÓN DE VISIBILIDAD ---
+            if hasattr(self, 'keep_full_subtitle_check'):
+                # Truco: Ocultamos el checkbox de limpiar SRT momentáneamente
+                if self.clean_subtitle_check.winfo_ismapped():
+                    self.clean_subtitle_check.pack_forget()
+                    was_mapped = True
+                else:
+                    was_mapped = False
+                
+                # Empaquetamos el nuevo checkbox (quedará debajo del de auto-descarga)
+                self.keep_full_subtitle_check.pack(padx=10, pady=(0, 5), anchor="w")
+                
+                # Volvemos a poner el de limpiar SRT debajo si estaba visible
+                if was_mapped:
+                    self.clean_subtitle_check.pack(padx=10, pady=(0, 5), anchor="w")
+            # ---------------------------------
+            
         else:
             self.fragment_options_frame.pack_forget()
+            
+            # --- OCULTAR CHECKBOX ---
+            if hasattr(self, 'keep_full_subtitle_check'):
+                self.keep_full_subtitle_check.pack_forget()
+                self.keep_full_subtitle_check.deselect()
+            # ------------------------
 
     # --- NUEVOS MÉTODOS DE EXCLUSIVIDAD CON BLOQUEO VISUAL ---
     def _on_precise_clip_toggle(self):
@@ -3716,7 +3751,7 @@ class SingleDownloadTab(ctk.CTkFrame):
                 self.on_process_finished(True, f"Miniatura guardada en {os.path.basename(save_path)}", save_path)
             except Exception as e: self.on_process_finished(False, f"Error al guardar miniatura: {e}", None)
 
-    def _execute_subtitle_download_subprocess(self, url, subtitle_info, save_path):
+    def _execute_subtitle_download_subprocess(self, url, subtitle_info, save_path, cut_options=None):
         try:
             output_dir = os.path.dirname(save_path)
             files_before = set(os.listdir(output_dir))
@@ -3811,11 +3846,9 @@ class SingleDownloadTab(ctk.CTkFrame):
             print(f"DEBUG: Subtítulo descargado: {downloaded_subtitle_path}")
             
             # 🔧 OPCIÓN 1: Mantener el código de idioma en el nombre
-            # Extraer el nombre base del archivo descargado (sin el código de idioma)
             downloaded_name = os.path.basename(downloaded_subtitle_path)
             downloaded_ext = os.path.splitext(downloaded_name)[1]
             
-            # Construir el nuevo nombre: usar el nombre elegido por el usuario + código de idioma + extensión
             user_chosen_name = os.path.splitext(os.path.basename(save_path))[0]
             final_filename = f"{user_chosen_name}.{lang_code}{downloaded_ext}"
             final_output_path = os.path.join(output_dir, final_filename)
@@ -3827,11 +3860,40 @@ class SingleDownloadTab(ctk.CTkFrame):
                 os.rename(downloaded_subtitle_path, final_output_path)
                 print(f"DEBUG: Subtítulo renombrado a: {final_output_path}")
             
-            # 🔧 CORREGIDO: Limpiar/convertir SIEMPRE que sea .srt (ya sea que venga así o fue convertido)
+            # 🔧 CORREGIDO: Limpiar/convertir SIEMPRE que sea .srt
             if final_output_path.lower().endswith('.srt'):
                 self.app.after(0, self.update_progress, 90, "Limpiando y estandarizando formato SRT...")
                 final_output_path = clean_and_convert_vtt_to_srt(final_output_path)
                 print(f"DEBUG: Subtítulo limpiado: {final_output_path}")
+
+            # --- NUEVO: APLICAR CORTE MANUAL ---
+            if cut_options and cut_options['enabled'] and not cut_options['keep_full']:
+                start_t = cut_options['start']
+                end_t = cut_options['end']
+                
+                if start_t or end_t:
+                    print(f"DEBUG: ✂️ Cortando subtítulo manual ({start_t} - {end_t})")
+                    self.app.after(0, self.update_progress, 99, "Recortando subtítulo...")
+                    
+                    cut_sub_path = os.path.splitext(final_output_path)[0] + "_cut.srt"
+                    
+                    # Usamos la nueva función de FFmpeg con Input Seeking
+                    success_cut = slice_subtitle(
+                        self.ffmpeg_processor.ffmpeg_path,
+                        final_output_path,
+                        cut_sub_path,
+                        start_time=start_t or "00:00:00",
+                        end_time=end_t
+                    )
+                    
+                    if success_cut and os.path.exists(cut_sub_path):
+                        try:
+                            os.remove(final_output_path)
+                            os.rename(cut_sub_path, final_output_path)
+                            print("DEBUG: ✅ Subtítulo manual cortado exitosamente.")
+                        except Exception as e:
+                            print(f"ADVERTENCIA: No se pudo reemplazar el subtítulo cortado: {e}")
+            # -----------------------------------
             
             self.app.after(0, self.on_process_finished, True, 
                         f"Subtítulo guardado en {os.path.basename(final_output_path)}", 
@@ -3843,27 +3905,42 @@ class SingleDownloadTab(ctk.CTkFrame):
 
     def save_subtitle(self):
         """
-        Guarda el subtítulo seleccionado invocando a yt-dlp en un subproceso.
+        Guarda el subtítulo seleccionado, aplicando recorte si es necesario.
         """
         subtitle_info = self.selected_subtitle_info
         if not subtitle_info:
             self.update_progress(0, "Error: No hay subtítulo seleccionado.")
             return
+            
         subtitle_ext = subtitle_info.get('ext', 'txt')
         clean_title = self.sanitize_filename(self.title_entry.get() or "subtitle")
         initial_filename = f"{clean_title}.{subtitle_ext}"
+        
         save_path = filedialog.asksaveasfilename(
             defaultextension=f".{subtitle_ext}",
             filetypes=[(f"{subtitle_ext.upper()} Subtitle", f"*.{subtitle_ext}"), ("All files", "*.*")],
             initialfile=initial_filename
         )
+        
         if save_path:
             video_url = self.url_entry.get()
+            
+            # --- NUEVO: RECOLECTAR OPCIONES DE CORTE ---
+            cut_options = {
+                'enabled': self.fragment_checkbox.get() == 1,
+                'start': self._get_formatted_time(self.start_h, self.start_m, self.start_s),
+                'end': self._get_formatted_time(self.end_h, self.end_m, self.end_s),
+                'keep_full': getattr(self, 'keep_full_subtitle_check', None) and self.keep_full_subtitle_check.get() == 1
+            }
+            # -------------------------------------------
+
             self.download_button.configure(state="disabled")
             self.analyze_button.configure(state="disabled")
+            
+            # Pasamos cut_options como argumento extra
             threading.Thread(
                 target=self._execute_subtitle_download_subprocess, 
-                args=(video_url, subtitle_info, save_path), 
+                args=(video_url, subtitle_info, save_path, cut_options), 
                 daemon=True
             ).start()
 
@@ -3982,8 +4059,9 @@ class SingleDownloadTab(ctk.CTkFrame):
             "start_time": self._get_formatted_time(self.start_h, self.start_m, self.start_s),
             "end_time": self._get_formatted_time(self.end_h, self.end_m, self.end_s),
             "precise_clip_enabled": self.precise_clip_check.get() == 1,
-            "force_full_download": self.force_full_download_check.get() == 1, # <-- NUEVO
-            "keep_original_on_clip": self.keep_original_on_clip_check.get() == 1 
+            "force_full_download": self.force_full_download_check.get() == 1,
+            "keep_original_on_clip": self.keep_original_on_clip_check.get() == 1,
+            "keep_full_subtitle": getattr(self, 'keep_full_subtitle_check', None) and self.keep_full_subtitle_check.get() == 1
         }
 
         # --- EL NUEVO "ROUTER" LÓGICO ---
@@ -4072,6 +4150,10 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.active_operation_thread.start()
 
     def _execute_download_and_recode(self, options):
+        # 1. Guardar tiempos de corte originales (porque se limpian durante el proceso)
+        meta_start_time = options.get("start_time")
+        meta_end_time = options.get("end_time")
+        
         process_successful = False
         downloaded_filepath = None
         recode_phase_started = False
@@ -4201,12 +4283,43 @@ class SingleDownloadTab(ctk.CTkFrame):
                                 found_subtitle_path = converted_path
                                 print(f"DEBUG: Subtítulo convertido a: {found_subtitle_path}")
                             
-                            # Limpiar/estandarizar si es SRT (siempre, sin importar si fue convertido o ya era SRT)
+                            # Limpiar/estandarizar si es SRT (siempre...)
                             if found_subtitle_path.lower().endswith('.srt'):
                                 self.app.after(0, self.update_progress, 99, "Estandarizando formato SRT...")
                                 print(f"DEBUG: Limpiando subtítulo SRT: {found_subtitle_path}")
                                 found_subtitle_path = clean_and_convert_vtt_to_srt(found_subtitle_path)
                                 print(f"DEBUG: Subtítulo limpiado: {found_subtitle_path}")
+
+                                # --- LÓGICA DE CORTE DE SUBTÍTULOS CORREGIDA ---
+                                # Cortamos si:
+                                # 1. El usuario NO pidió mantenerlo completo.
+                                # 2. Hay tiempos de inicio o fin definidos (meta_start_time / meta_end_time).
+                                # 3. ELIMINAMOS la restricción de "is_local_cut_mode".
+                                
+                                needs_cut = (not options.get("keep_full_subtitle")) and (meta_start_time or meta_end_time)
+
+                                if needs_cut:
+                                    print(f"DEBUG: ✂️ Iniciando corte de subtítulo ({meta_start_time} - {meta_end_time})")
+                                    self.app.after(0, self.update_progress, 99, "Sincronizando subtítulo con fragmento...")
+                                    
+                                    cut_sub_path = os.path.splitext(found_subtitle_path)[0] + "_cut.srt"
+                                    
+                                    success_cut = slice_subtitle(
+                                        self.ffmpeg_processor.ffmpeg_path,
+                                        found_subtitle_path,
+                                        cut_sub_path,
+                                        start_time=meta_start_time or "00:00:00",
+                                        end_time=meta_end_time
+                                    )
+                                    
+                                    if success_cut and os.path.exists(cut_sub_path):
+                                        try:
+                                            os.remove(found_subtitle_path) # Borrar el completo
+                                            os.rename(cut_sub_path, found_subtitle_path) # Reemplazar con el cortado
+                                            print("DEBUG: ✅ Subtítulo cortado y reemplazado exitosamente.")
+                                        except Exception as e:
+                                            print(f"ADVERTENCIA: No se pudo reemplazar el subtítulo cortado: {e}")
+                                # -----------------------------------------------
                         else:
                             print(f"ADVERTENCIA: No se encontró el archivo de subtítulo para '{base_name}' con idioma '{lang_code}'")
                             

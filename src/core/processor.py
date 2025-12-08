@@ -875,3 +875,61 @@ def clean_and_convert_vtt_to_srt(input_path):
         print(f"ERROR al limpiar subtítulo: {e}")
         return input_path
     
+def slice_subtitle(ffmpeg_path, input_path, output_path, start_time, end_time=None):
+    """
+    Corta el subtítulo usando FFmpeg con 'Input Seeking'.
+    Esto fuerza a FFmpeg a resetear los timestamps a 00:00:00 y maneja
+    la deriva de tiempo (drift) automáticamente.
+    """
+    import subprocess
+    import os
+
+    # Helper simple para calcular duración (necesario para -t)
+    def parse_time_to_seconds(t_str):
+        if not t_str: return 0.0
+        try:
+            parts = str(t_str).split(':')
+            if len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+            elif len(parts) == 2:
+                return int(parts[0]) * 60 + float(parts[1])
+            return 0.0
+        except: return 0.0
+
+    # Construir comando FFmpeg
+    cmd = [ffmpeg_path, '-y']
+    
+    # 1. CRÍTICO: -ss ANTES del input (-i)
+    # Esto le dice a FFmpeg: "Salta a este punto y finge que es el inicio (00:00:00)"
+    if start_time:
+        cmd.extend(['-ss', str(start_time)])
+    
+    cmd.extend(['-i', input_path])
+
+    # 2. Calcular duración para el corte final
+    # Al usar Input Seeking, -to ya no funciona igual, debemos usar -t (duración)
+    if end_time:
+        s_sec = parse_time_to_seconds(start_time)
+        e_sec = parse_time_to_seconds(end_time)
+        duration = e_sec - s_sec
+        if duration > 0:
+            cmd.extend(['-t', str(duration)])
+
+    # 3. Forzar codificación UTF-8 para evitar errores de caracteres
+    # (Especialmente útil con acentos en español)
+    cmd.append(output_path)
+    
+    try:
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        subprocess.run(
+            cmd, 
+            check=True, 
+            stdout=subprocess.DEVNULL, 
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags
+        )
+        return True
+    except Exception as e:
+        print(f"ERROR cortando subtítulo con FFmpeg: {e}")
+        return False
+    

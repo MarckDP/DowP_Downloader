@@ -4647,7 +4647,7 @@ class ImageToolsTab(ctk.CTkFrame):
                     
                     with self.thumbnail_lock:
                         # 1. Limpieza: Si el caché es muy grande, borrar el más antiguo
-                        if len(self.thumbnail_cache) > 50: # Límite de 50 imágenes
+                        if len(self.thumbnail_cache) > 30: # Límite de 50 imágenes
                             # Borrar el primer elemento (el más viejo insertado)
                             oldest_key = next(iter(self.thumbnail_cache))
                             del self.thumbnail_cache[oldest_key]

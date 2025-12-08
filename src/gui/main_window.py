@@ -71,7 +71,7 @@ def resource_path(relative_path):
 from main import PROJECT_ROOT, BIN_DIR
 
 flask_app = Flask(__name__)
-socketio = SocketIO(flask_app, async_mode='gevent', cors_allowed_origins='*')
+socketio = SocketIO(flask_app, async_mode='threading', cors_allowed_origins='*')
 main_app_instance = None
 
 LATEST_FILE_PATH = None
@@ -584,6 +584,7 @@ class MainWindow(TkBase):
         self._last_clipboard_check = "" 
         self.bind("<FocusIn>", self._on_app_focus)
         self.after(100, self._show_window_when_ready)
+        self._start_memory_cleaner()
 
     def _process_ui_queue(self):
         """Revisa la cola de actualizaciones y ejecuta las acciones en el hilo principal."""
@@ -1419,29 +1420,77 @@ class MainWindow(TkBase):
             self.save_settings() 
             self.destroy()
 
-    # --- AÑADIR ESTA NUEVA FUNCIÓN (disparador con retraso) ---
     def _on_app_focus(self, event=None):
         """
-        Se llama cuando la ventana de la aplicación gana el foco.
-        Espera 50ms para que la UI (como el cambio de pestaña) se estabilice
-        antes de comprobar el portapapeles.
+        Se llama cuando la ventana gana el foco.
+        Protegido para no congelar si el portapapeles está ocupado.
         """
-        self.after(50, self._check_clipboard_and_paste)
+        # Solo chequear si la app no está ocupada procesando
+        if self.single_tab.active_operation_thread and self.single_tab.active_operation_thread.is_alive():
+            return
+            
+        # Esperar 200ms para asegurar que Windows ha terminado de pintar la ventana
+        self.after(200, self._check_clipboard_and_paste)
+
+    def _start_memory_cleaner(self):
+        """
+        (NUEVO) Ejecuta recolección de basura cada 60 segundos para liberar RAM
+        y evitar que Windows mande la app al archivo de paginación.
+        """
+        import gc
+        try:
+            # Forzar recolección de objetos no usados
+            gc.collect()
+            # En Windows, esto a veces ayuda a reducir el "Working Set"
+            if os.name == 'nt':
+                try:
+                    # ctypes magic para liberar memoria no usada al sistema
+                    import ctypes
+                    ctypes.windll.psapi.EmptyWorkingSet(ctypes.windll.kernel32.GetCurrentProcess())
+                except:
+                    pass
+        except Exception:
+            pass
+        
+        # Repetir cada 1 minuto (60000 ms)
+        self.after(60000, self._start_memory_cleaner)
 
     # --- ESTA ES LA FUNCIÓN ANTERIOR RENOMBRADA ---
     def _check_clipboard_and_paste(self):
         """
         Comprueba el portapapeles y pega automáticamente si es una URL.
+        Incluye lógica de reintentos para evitar bloqueos del sistema.
         """
-        try:
-            clipboard_content = self.clipboard_get()
-        except (tkinter.TclError, Exception):
-            clipboard_content = "" # Portapapeles vacío o con datos no-texto
+        clipboard_content = ""
+        max_retries = 4  # Intentaremos 4 veces antes de rendirnos
+        
+        for attempt in range(max_retries):
+            try:
+                # Intentamos leer
+                clipboard_content = self.clipboard_get()
+                # Si llegamos aquí, fue exitoso, salimos del bucle
+                break 
+                
+            except tkinter.TclError:
+                # TclError suele significar que está vacío o no es texto. 
+                # No vale la pena reintentar.
+                clipboard_content = ""
+                break
+                
+            except Exception as e:
+                # Cualquier otro error (ej: bloqueo de Windows).
+                # Si es el último intento, imprimimos error y nos rendimos.
+                if attempt == max_retries - 1:
+                    print(f"DEBUG: Portapapeles bloqueado o inaccesible: {e}")
+                    clipboard_content = ""
+                else:
+                    # Esperamos un momento breve (10ms, 20ms...) para dejar que se libere
+                    time.sleep(0.01 * (attempt + 1))
 
         # 1. Evitar re-pegar si el contenido no ha cambiado
         if not clipboard_content or clipboard_content == self._last_clipboard_check:
             return
-        
+
         # 2. Actualizar el contenido "visto"
         self._last_clipboard_check = clipboard_content
 

@@ -119,6 +119,8 @@ class BatchDownloadTab(ctk.CTkFrame):
         self._create_widgets()
         self._initialize_ui_settings()
 
+        self._save_timer = None
+
     def _create_widgets(self):
         """Crea los componentes visuales de la pestaña."""
         
@@ -740,7 +742,18 @@ class BatchDownloadTab(ctk.CTkFrame):
                         display_image.thumbnail((160, 90), Image.Resampling.LANCZOS)
                         ctk_image = ctk.CTkImage(light_image=display_image, dark_image=display_image, size=display_image.size)
                         
-                        # Guardar en caché (formato dict como en ImageTools)
+                        # --- CAMBIO AQUÍ: LIMPIEZA DE CACHÉ ---
+                        # Guardar en caché (formato dict)
+                        # Si el caché es muy grande (>40 imágenes), borrar las viejas
+                        if len(self.thumbnail_cache) > 40:
+                            # Borrar el 20% más antiguo para hacer espacio
+                            keys_to_remove = list(self.thumbnail_cache.keys())[:10]
+                            for k in keys_to_remove:
+                                del self.thumbnail_cache[k]
+                            import gc
+                            gc.collect() # Forzar limpieza inmediata de esas imágenes
+                            print("DEBUG: 🧹 Caché de miniaturas limpiado (rotación automática)")
+
                         self.thumbnail_cache[path_or_url] = {
                             'ctk': ctk_image,
                             'raw': img_data
@@ -1305,7 +1318,10 @@ class BatchDownloadTab(ctk.CTkFrame):
         """
         MODIFICADO: Usa el flag _updating_ui para prevenir eventos recursivos.
         """
-        # ACTIVAR FLAG para prevenir actualizaciones durante la población
+        if self._updating_ui: 
+            return
+
+        # ACTIVAR FLAG: "Estoy tocando la UI, no disparen eventos de guardado"
         self._updating_ui = True
         
         try:
@@ -2018,7 +2034,6 @@ class BatchDownloadTab(ctk.CTkFrame):
                 if thumbnail_url:
                      self.thumb_queue.put((job.job_id, thumbnail_url, False))
             
-
         finally:
             # DESACTIVAR FLAG al terminar
             self._updating_ui = False
@@ -3700,18 +3715,34 @@ class BatchDownloadTab(ctk.CTkFrame):
             self.auto_import_checkbox.deselect()
         self.is_initializing = False
 
-    def save_settings(self):
+    def save_settings(self, event=None):
         """
-        Guarda la configuración de la pestaña de lotes en la app principal.
-        La app principal se encargará de escribir el archivo JSON.
+        Guarda la configuración con un retraso (Debounce) para evitar
+        congelamientos por escritura excesiva en disco.
         """
-        if not hasattr(self, 'app') or self.is_initializing: # Prevenir error si se llama antes de tiempo
+        if not hasattr(self, 'app') or self.is_initializing:
             return
-            
+
+        # Si ya había un guardado pendiente, cancélalo (reinicia el contador)
+        if self._save_timer is not None:
+            self.after_cancel(self._save_timer)
+        
+        # Programa el guardado real para dentro de 1 segundo
+        self._save_timer = self.after(1000, self._perform_save_settings_real)
+
+    def _perform_save_settings_real(self):
+        """Ejecuta la escritura en disco real."""
+        self._save_timer = None # Limpiar timer
+        
+        # --- AQUÍ VA TU CÓDIGO ORIGINAL DE SAVE_SETTINGS ---
         self.app.batch_download_path = self.output_path_entry.get() 
         self.app.batch_playlist_analysis_saved = self.playlist_analysis_check.get() == 1
         self.app.batch_auto_import_saved = self.auto_import_checkbox.get() == 1
         self.app.batch_fast_mode_saved = self.fast_mode_check.get() == 1
+        
+        # Llamar al guardado principal
+        self.app.save_settings()
+        # ---------------------------------------------------
 
     def _on_batch_quick_recode_toggle(self):
         """
