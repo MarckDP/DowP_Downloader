@@ -71,7 +71,7 @@ def resource_path(relative_path):
 from main import PROJECT_ROOT, BIN_DIR
 
 flask_app = Flask(__name__)
-socketio = SocketIO(flask_app, async_mode='threading', cors_allowed_origins='*')
+socketio = SocketIO(flask_app, cors_allowed_origins='*')
 main_app_instance = None
 
 LATEST_FILE_PATH = None
