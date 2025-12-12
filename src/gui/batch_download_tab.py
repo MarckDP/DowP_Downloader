@@ -1409,10 +1409,7 @@ class BatchDownloadTab(ctk.CTkFrame):
                 
                 self._populate_batch_preset_menu()
                 
-                # Restaurar preset guardado
-                saved_preset = job.config.get('recode_preset_name')
-                if saved_preset:
-                    self.batch_recode_preset_menu.set(saved_preset)
+
 
                 # Actualizar visibilidad de los controles dependientes
                 self._on_batch_quick_recode_toggle()
@@ -3795,25 +3792,17 @@ class BatchDownloadTab(ctk.CTkFrame):
 
     def _populate_batch_preset_menu(self):
         """
-        Lee los presets disponibles y filtra por el modo (Video+Audio o Solo Audio).
-        CORREGIDO: Ahora detecta el modo específico de la Playlist seleccionada.
+        Lee los presets disponibles y filtra por el modo.
+        CORREGIDO: Respeta el estado del checkbox al actualizar el menú.
         """
         
-        # 1. Determinar el modo del ítem actual
-        current_item_mode = "Video+Audio" # Default
+        # 1. Determinar el modo visual actual
+        current_item_mode = self.mode_selector.get() 
         
         if self.selected_job_id:
             job = self.queue_manager.get_job_by_id(self.selected_job_id)
-            if job:
-                if job.job_type == "PLAYLIST":
-                    # Si es playlist, usar su configuración interna
-                    current_item_mode = job.config.get('playlist_mode', 'Video+Audio')
-                elif job.job_type == "LOCAL_RECODE":
-                    # Si es local, usar lo que diga el selector
-                    current_item_mode = self.mode_selector.get()
-                else:
-                    # Si es descarga normal, usar su config o el selector global
-                    current_item_mode = job.config.get('mode', self.mode_selector.get())
+            if job and job.job_type == "PLAYLIST":
+                current_item_mode = job.config.get('playlist_mode', 'Video+Audio')
 
         print(f"DEBUG: Poblando presets para modo: {current_item_mode}")
 
@@ -3836,20 +3825,26 @@ class BatchDownloadTab(ctk.CTkFrame):
 
         # 4. Actualizar el menú
         if compatible_presets:
-            self.batch_recode_preset_menu.configure(values=compatible_presets, state="normal")
+            # --- CORRECCIÓN AQUÍ ---
+            # NO forzamos state="normal". Solo actualizamos los valores.
+            self.batch_recode_preset_menu.configure(values=compatible_presets)
             
-            # Intentar restaurar la selección guardada del job
+            # Restaurar selección
             job = self.queue_manager.get_job_by_id(self.selected_job_id) if self.selected_job_id else None
+            preset_to_select = compatible_presets[0]
             
             if job:
                 saved_preset = job.config.get("recode_preset_name")
                 if saved_preset and saved_preset in compatible_presets:
-                    self.batch_recode_preset_menu.set(saved_preset)
-                else:
-                    self.batch_recode_preset_menu.set(compatible_presets[0])
-            else:
-                 self.batch_recode_preset_menu.set(compatible_presets[0])
+                    preset_to_select = saved_preset
+            
+            self.batch_recode_preset_menu.set(preset_to_select)
+
+            # Sincronizar el estado (Habilitado/Deshabilitado) con el checkbox
+            self._on_batch_quick_recode_toggle()
+
         else:
+            # Si no hay presets, forzamos disabled sin importar el checkbox
             self.batch_recode_preset_menu.configure(values=["- No hay presets para este modo -"], state="disabled")
             self.batch_recode_preset_menu.set("- No hay presets para este modo -")
 

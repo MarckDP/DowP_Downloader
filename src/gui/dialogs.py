@@ -338,9 +338,18 @@ class PlaylistErrorDialog(ctk.CTkToplevel):
 class Tooltip:
     """
     Crea un tooltip emergente.
-    CORREGIDO v2: Robusto para Multi-Monitor, DPI Scaling y Coordenadas Negativas.
-    Usa la geometría de la ventana principal como referencia segura.
+    CORREGIDO v3: Incluye gestor global para evitar tooltips congelados.
     """
+    # ✅ NUEVO: Lista global para rastrear tooltips abiertos
+    _active_tooltips = []
+
+    @staticmethod
+    def hide_all():
+        """Cierra forzosamente todos los tooltips activos en la aplicación."""
+        for tooltip in Tooltip._active_tooltips:
+            tooltip.hide_tooltip()
+        Tooltip._active_tooltips.clear()
+
     def __init__(self, widget, text, delay_ms=500, wraplength=300):
         self.widget = widget
         self.text = text
@@ -348,6 +357,9 @@ class Tooltip:
         self.wraplength = wraplength
         self.tooltip_window = None
         self.timer_id = None
+        
+        # ✅ NUEVO: Registrar esta instancia
+        Tooltip._active_tooltips.append(self)
 
         # Vincular eventos
         self.widget.bind("<Enter>", self.on_enter)

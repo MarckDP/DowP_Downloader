@@ -10,7 +10,7 @@ import pillow_avif
 from tkinter import messagebox
 from PIL import Image, ImageTk
 
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.4"
 
 if getattr(sys, 'frozen', False):
     PROJECT_ROOT = os.path.dirname(sys.executable)

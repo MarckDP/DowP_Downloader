@@ -242,9 +242,16 @@ class InteractiveImageViewer(ctk.CTkCanvas):
             try:
                 region = self.original_image.crop(crop_box)
                 
-                # 2. Redimensionar solo esa parte (Rápido)
-                # Usamos NEAREST si está muy cerca (pixel art look) o BILINEAR para suavidad
-                resample_method = Image.Resampling.NEAREST if self.scale > 3.0 else Image.Resampling.BILINEAR
+                # 2. Redimensionar solo esa parte (OPTIMIZADO)
+                # ✅ CAMBIO: Usar BILINEAR siempre para velocidad. 
+                # LANCZOS es demasiado pesado para redibujar 60 veces por segundo al arrastrar.
+                # NEAREST se usa solo si hacemos mucho zoom para ver los píxeles reales.
+                
+                if self.scale > 2.0:
+                    resample_method = Image.Resampling.NEAREST # Ver píxeles reales al acercar
+                else:
+                    resample_method = Image.Resampling.BILINEAR # Suave y RÁPIDO para vista general
+                
                 resized_region = region.resize((display_w, display_h), resample_method)
                 
                 # 3. Convertir a Tkinter y dibujar
@@ -261,7 +268,7 @@ class ComparisonViewer(ctk.CTkCanvas):
     Visor de comparación avanzado (Antes/Después) con Zoom y Paneo.
     - Rueda: Zoom
     - Clic en línea blanca: Mover Slider
-    - Clic derecho (o Espacio + Clic): Paneo (Mover imagen)
+    - Clic derecho: Paneo (Mover imagen)
     """
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
@@ -420,8 +427,10 @@ class ComparisonViewer(ctk.CTkCanvas):
             disp_h_l = int((vis_bottom - vis_top) * self.scale)
             
             if disp_w_l > 0 and disp_h_l > 0:
-                # Usar Nearest para zoom muy cercano (ver píxeles)
-                method = Image.Resampling.NEAREST if self.scale > 2.0 else Image.Resampling.BILINEAR
+                # ✅ OPTIMIZACIÓN: BILINEAR es 10x más rápido que LANCZOS/BICUBIC para renderizado en tiempo real
+                # Mantiene la calidad visual suficiente para inspección sin congelar la app.
+                method = Image.Resampling.NEAREST if self.scale > 3.0 else Image.Resampling.BILINEAR
+                
                 region_l = region_l.resize((disp_w_l, disp_h_l), method)
                 
                 self.tk_image_left = ImageTk.PhotoImage(region_l)
@@ -619,6 +628,7 @@ class ImageToolsTab(ctk.CTkFrame):
         
         # ⭐ Sistema de caché de miniaturas
         self.thumbnail_cache = {}
+        self.comparison_cache = {}
         self.thumbnail_queue = queue.Queue()
         self.active_thumbnail_thread = None
         self.thumbnail_lock = threading.Lock()
@@ -661,8 +671,8 @@ class ImageToolsTab(ctk.CTkFrame):
         self.left_panel = ctk.CTkFrame(self)
         self.left_panel.grid(row=0, column=0, padx=(10, 5), pady=(10, 5), sticky="nsew")
         
-        # Expandir la fila 2 (donde va la lista) para que ocupe el espacio vertical
-        self.left_panel.grid_rowconfigure(2, weight=1) 
+        # Expandir la fila 3 (AHORA donde va la lista) para que ocupe el espacio vertical
+        self.left_panel.grid_rowconfigure(3, weight=1)
         self.left_panel.grid_columnconfigure(0, weight=1)
 
         # --- 1. Zona de URL (Fila 0) ---
@@ -726,10 +736,22 @@ class ImageToolsTab(ctk.CTkFrame):
         )
         self.delete_button.grid(row=0, column=3, padx=(3, 0), sticky="ew")
 
-        # --- 3. Zona de Lista de Archivos (Fila 2) ---
+        # ✅ NUEVO: Checkbox "Omitir completados" (Fila 2)
+        self.process_only_new_checkbox = ctk.CTkCheckBox(
+            self.left_panel, 
+            text="Omitir completados",
+            font=ctk.CTkFont(size=12)
+        )
+        self.process_only_new_checkbox.grid(row=2, column=0, padx=15, pady=(5, 0), sticky="w")
+        self.process_only_new_checkbox.select() # Activado por defecto
+
+        # --- 3. Zona de Lista de Archivos (AHORA Fila 3) ---
         # Frame contenedor que se expande
         self.list_frame = ctk.CTkFrame(self.left_panel)
-        self.list_frame.grid(row=2, column=0, padx=10, pady=5, sticky="nsew")
+        
+        # ⚠️ IMPORTANTE: Cambiamos row=2 a row=3
+        self.list_frame.grid(row=3, column=0, padx=10, pady=5, sticky="nsew")
+        
         self.list_frame.grid_columnconfigure(0, weight=1)
         self.list_frame.grid_rowconfigure(0, weight=1)
 
@@ -800,9 +822,9 @@ class ImageToolsTab(ctk.CTkFrame):
         self.file_list_box.bind("<Delete>", self._on_delete_selected)
         self.file_list_box.bind("<BackSpace>", self._on_delete_selected)
 
-        # --- 4. Etiqueta de Conteo (Fila 3) ---
+        # --- 4. Etiqueta de Conteo (AHORA Fila 4) ---
         self.list_status_label = ctk.CTkLabel(self.left_panel, text="0 archivos", font=ctk.CTkFont(size=11), text_color="gray")
-        self.list_status_label.grid(row=3, column=0, padx=10, pady=(0, 5), sticky="w")
+        self.list_status_label.grid(row=4, column=0, padx=10, pady=(0, 5), sticky="w") # <--- CAMBIAR 3 POR 4
 
     def _create_right_panel(self):
         """Crea el panel derecho (60%) para el visor y las opciones."""
@@ -2071,6 +2093,7 @@ class ImageToolsTab(ctk.CTkFrame):
 
             # --- Lógica de Descarga Automática (Solo si NO es silencioso) ---
             if not silent:
+                Tooltip.hide_all()
                 # Importaciones locales para evitar ciclos
                 from src.core.setup import get_remote_file_size, format_size, check_and_download_upscaling_tools
                 from src.core.constants import UPSCALING_TOOLS
@@ -3117,6 +3140,11 @@ class ImageToolsTab(ctk.CTkFrame):
         # Limpiar caché de miniaturas
         with self.thumbnail_lock:
             self.thumbnail_cache.clear()
+            
+        # ✅ NUEVO: Limpiar caché de comparación (liberar RAM)
+        self.comparison_cache.clear()
+        import gc
+        gc.collect()
         
         # Limpiar el visor (recrear el placeholder)
         for widget in self.viewer_frame.winfo_children():
@@ -3644,6 +3672,13 @@ class ImageToolsTab(ctk.CTkFrame):
         
         # Lista de archivos exitosos
         successfully_processed_paths = []
+
+        # ✅ RESETEAR COLORES A BLANCO AL INICIAR
+        # Solo si NO estamos en modo "Procesar solo nuevos", 
+        # o si quieres dar feedback de que el proceso reinició.
+        if not self.process_only_new_checkbox.get():
+             for idx in range(total_files):
+                 self._set_item_status_color(idx, "pending")
         
         try:
             for i, item_data in enumerate(self.file_list_data):
@@ -3658,7 +3693,22 @@ class ImageToolsTab(ctk.CTkFrame):
                 # item_data ahora tiene 4 elementos: [input, page, output, title]
                 input_path = item_data[0]
                 page_num = item_data[1]
-                # Ignoramos el resto aquí si no se usan inmediatamente
+                
+                # ✅ NUEVO: Lógica de "Omitir completados"
+                # Verificamos si ya tiene un output_path guardado (índice 2)
+                existing_output = item_data[2] if len(item_data) > 2 else None
+                
+                if self.process_only_new_checkbox.get() == 1 and existing_output and os.path.exists(existing_output):
+                    print(f"INFO: Saltando {os.path.basename(input_path)} (ya procesado).")
+                    # Contamos como 'skipped' para el resumen final
+                    skipped += 1
+                    
+                    # Añadir a la lista de completados para que funcione "Import Adobe" y "Combinar PDF"
+                    successfully_processed_paths.append(existing_output)
+                    if options["format"] == "PDF" and options.get("pdf_combine", False):
+                        generated_pdfs.append(existing_output)
+                        
+                    continue # Salta a la siguiente iteración del bucle
                 
                 # Lógica para título personalizado (ya la pusimos antes, pero verifica)
                 custom_title = item_data[3] if len(item_data) > 3 else None
@@ -3696,6 +3746,7 @@ class ImageToolsTab(ctk.CTkFrame):
                     if action == "skip":
                         print(f"INFO: Omitiendo {filename} (ya existe)")
                         skipped += 1
+                        self._set_item_status_color(i, "skipped")
                         continue
                     elif action == "rename":
                         output_path = self._get_unique_filename(output_path)
@@ -3714,6 +3765,7 @@ class ImageToolsTab(ctk.CTkFrame):
                     if success:
                         processed += 1
                         print(f"✅ Convertido: {filename} → {os.path.basename(output_path)}")
+                        self._set_item_status_color(i, "success")
                         
                         # --- CORRECCIÓN: Actualizar solo el output sin romper la estructura ---
                         # La estructura es [input, page, output, title]
@@ -3738,11 +3790,13 @@ class ImageToolsTab(ctk.CTkFrame):
                             generated_pdfs.append(output_path)
                     else:
                         errors += 1
+                        self._set_item_status_color(i, "error")
                         error_details.append((filename, "Error desconocido durante la conversión"))
                         print(f"❌ Error al convertir: {filename}")
                 
                 except Exception as e:
                     errors += 1
+                    self._set_item_status_color(i, "error")
                     error_message = str(e)
                     
                     # 🔧 NUEVO: Categorizar errores comunes
@@ -4280,6 +4334,25 @@ class ImageToolsTab(ctk.CTkFrame):
         else:
             self.delete_button.configure(state="disabled")
 
+    def _set_item_status_color(self, index, status):
+        """
+        Cambia el color del texto de un ítem en la lista según su estado.
+        Colores optimizados para fondo oscuro (#1D1D1D).
+        """
+        colors = {
+            "success": "#76E068", # Verde brillante
+            "skipped": "#FFD700", # Amarillo/Dorado
+            "error":   "#FF5252", # Rojo suave
+            "pending": "white"    # Blanco normal
+        }
+        color = colors.get(status, "white")
+        
+        # Usar after para asegurar thread-safety (ya que esto se llama desde el worker)
+        try:
+            self.app.after(0, lambda: self.file_list_box.itemconfig(index, {'fg': color}))
+        except Exception:
+            pass # Evitar errores si la app se cierra mientras procesa
+
     def _create_list_context_menu(self, event):
         """Crea el menú de clic derecho para la lista de archivos."""
         menu = Menu(self, tearoff=0)
@@ -4711,10 +4784,19 @@ class ImageToolsTab(ctk.CTkFrame):
                      pil_image_to_show = stored['pil']
             
              if pil_image_to_show:
-                 print(f"DEBUG: Cargando vector desde memoria (PIL): {real_path}")
+                 # ✅ OPTIMIZACIÓN DE ENTRADA: Límite 4K
+                 # Si la imagen es absurdamente grande solo para "verla" antes de procesar,
+                 # la bajamos a 4K. Se sigue viendo perfecta, pero no explota la RAM.
+                 MAX_PREVIEW_SIZE = 1080 
+                 
+                 w, h = pil_image_to_show.size
+                 if w > MAX_PREVIEW_SIZE or h > MAX_PREVIEW_SIZE:
+                     print(f"DEBUG: Optimizando vista previa de entrada ({w}x{h} -> Limitado a 4K)")
+                     pil_image_to_show = pil_image_to_show.copy() # Copia para no tocar el original
+                     pil_image_to_show.thumbnail((MAX_PREVIEW_SIZE, MAX_PREVIEW_SIZE), Image.Resampling.BILINEAR)
+
+                 print(f"DEBUG: Cargando imagen en visor: {real_path}")
                  self.image_viewer.load_image(pil_image_to_show)
-             else:
-                 print("ERROR: No se encontraron datos de imagen en la caché.")
 
     def import_folder_from_path(self, folder_path):
         """
@@ -4997,6 +5079,7 @@ class ImageToolsTab(ctk.CTkFrame):
 
             # 3. Lógica de Descarga (Solo si NO es silencioso)
             if not silent:
+                Tooltip.hide_all()
                 # Caso especial: Descarga Manual Obligatoria (RMBG 2.0 privado)
                 if family == "RMBG 2.0 (BriaAI)" and "danielgatis" not in model_info["url"]:
                     # ... (Tu lógica de diálogo manual existente se mantiene aquí) ...
@@ -5156,122 +5239,150 @@ class ImageToolsTab(ctk.CTkFrame):
         return img
 
     def _start_comparison_viewer(self, input_path, output_path, page_num):
-        """Inicia el modo de comparación con Zoom y Paneo real."""
+        """
+        Inicia el modo de comparación con Zoom y Paneo real.
+        - Cachea la imagen ORIGINAL ("Antes") en RAM para velocidad.
+        - Carga la imagen RESULTADO ("Después") siempre del disco.
+        """
         
         # 1. Limpiar el frame
         for widget in self.viewer_frame.winfo_children():
             widget.destroy()
 
         try:
-            ext = os.path.splitext(input_path)[1].lower()
-            vector_exts = (".pdf", ".ai", ".eps", ".svg", ".ps")
-            is_vector = ext in vector_exts
+            # === PARTE 1: OBTENER IMAGEN ORIGINAL ("ANTES") ===
             
-            # 🔥 NUEVO: Detectar si es RAW
-            raw_exts = tuple(f.lower() for f in IMAGE_RAW_FORMATS)
-            is_raw = ext in raw_exts
-            
+            # Generar clave única para el caché
+            cache_key = f"{input_path}::{page_num}"
             img_before = None
-            
-            # --- CASO 1: Archivos RAW ---
-            if is_raw:
-                print(f"DEBUG: Cargando RAW para comparación: {os.path.basename(input_path)}")
-                try:
-                    import rawpy
-                    import numpy as np
-                    
-                    with rawpy.imread(input_path) as raw:
-                        rgb = raw.postprocess(
-                            use_camera_wb=True,
-                            half_size=True,
-                            no_auto_bright=False,
-                            output_bps=8,
-                            output_color=rawpy.ColorSpace.sRGB,
-                            demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD
-                        )
-                    
-                    img_before = Image.fromarray(rgb).convert("RGBA")
-                    
-                    try:
-                        from PIL import ImageOps
-                        img_before = ImageOps.exif_transpose(img_before)
-                    except:
-                        pass
-                        
-                except ImportError:
-                    print("⚠️ rawpy no disponible para vista previa RAW")
-                    img_before = None
-                except Exception as e:
-                    print(f"❌ Error cargando RAW para comparación: {e}")
-                    img_before = None
-            
-            # --- CASO 2: Vectoriales ---
-            elif is_vector:
-                print("DEBUG: Renderizando vector a alta resolución para comparación...")
-                try:
-                    img_before = self.image_processor.generate_thumbnail(
-                        input_path, size=(3000, 3000), page_number=page_num
-                    )
-                except Exception as e:
-                    print(f"ADVERTENCIA: Falló renderizado HQ vector: {e}")
-            
-            # --- CASO 3: Raster normal ---
-            if img_before is None and not is_raw:
-                print("DEBUG: Cargando imagen original directa (Raster o Fallback)")
-                img_before = Image.open(input_path).convert("RGBA")
 
-            # Cargar Resultado
-            img_after = Image.open(output_path).convert("RGBA")
+            # A) ¿Está en caché? (Velocidad instantánea)
+            if cache_key in self.comparison_cache:
+                print(f"DEBUG: ⚡ Usando imagen 'Antes' desde memoria RAM: {os.path.basename(input_path)}")
+                img_before = self.comparison_cache[cache_key]
             
-            # ✅ Validación: Si no hay imagen "antes", usar la de salida
+            # B) Si NO está en caché, generarla o cargarla
             if not img_before:
-                print("⚠️ No se pudo cargar original, mostrando solo resultado")
+                ext = os.path.splitext(input_path)[1].lower()
+                
+                # Definir tipos
+                from src.core.constants import IMAGE_RAW_FORMATS, IMAGE_RASTER_FORMATS
+                vector_exts = (".pdf", ".ai", ".eps", ".svg", ".ps")
+                raw_exts = tuple(f.lower() for f in IMAGE_RAW_FORMATS)
+                
+                is_vector = ext in vector_exts
+                is_raw = ext in raw_exts
+                is_raster = ext.upper().replace(".", "") in IMAGE_RASTER_FORMATS or ext == ".JPG"
+
+                # --- Caso Vectorial (Lento -> Renderizar) ---
+                if is_vector:
+                    print("DEBUG: 🎨 Renderizando vector para comparación (Lento)...")
+                    try:
+                        # Generar a alta resolución (3000px) para poder hacer zoom
+                        img_before = self.image_processor.generate_thumbnail(
+                            input_path, size=(3000, 3000), page_number=page_num
+                        )
+                    except Exception as e:
+                        print(f"ADVERTENCIA: Falló renderizado HQ vector: {e}")
+
+                # --- Caso RAW (Lento -> Revelar) ---
+                elif is_raw:
+                    print(f"DEBUG: 📸 Revelando RAW para comparación: {os.path.basename(input_path)}")
+                    try:
+                        import rawpy
+                        import numpy as np
+                        with rawpy.imread(input_path) as raw:
+                            rgb = raw.postprocess(use_camera_wb=True, no_auto_bright=False)
+                            img_before = Image.fromarray(rgb).convert("RGBA")
+                            # Rotación EXIF
+                            try:
+                                from PIL import ImageOps
+                                img_before = ImageOps.exif_transpose(img_before)
+                            except: pass
+                    except Exception as e:
+                        print(f"❌ Error cargando RAW: {e}")
+
+                # --- Caso Raster JPG/PNG (Rápido -> Cargar) ---
+                elif is_raster:
+                    print("DEBUG: 📂 Cargando imagen original del disco...")
+                    try:
+                        img_before = Image.open(input_path).convert("RGBA")
+                    except Exception:
+                        pass
+                
+                # Fallback genérico
+                if img_before is None:
+                     try: img_before = Image.open(input_path).convert("RGBA")
+                     except: pass
+
+                # ✅ GUARDAR EN CACHÉ (Si se generó correctamente)
+                if img_before:
+                    # Optimización: Si es absurdamente grande (>4K), reducirla un poco para la RAM
+                    # (El archivo original no se toca, esto es solo para verla en pantalla)
+                    if img_before.width > 4000 or img_before.height > 4000:
+                        img_before.thumbnail((4000, 4000), Image.Resampling.BILINEAR)
+                        print("DEBUG: Imagen 'Antes' optimizada a 4K para caché RAM.")
+
+                    # Gestión de memoria: Borrar antiguas si hay muchas
+                    if len(self.comparison_cache) > 5:
+                        oldest_key = next(iter(self.comparison_cache))
+                        del self.comparison_cache[oldest_key]
+                        
+                    self.comparison_cache[cache_key] = img_before
+
+
+            # === PARTE 2: CARGAR IMAGEN RESULTADO ("DESPUÉS") ===
+            # Esta NO se cachea para asegurar que leemos el archivo real del disco.
+            
+            img_after = None
+            if os.path.exists(output_path):
+                try:
+                    img_after = Image.open(output_path).convert("RGBA")
+                except Exception as e:
+                    print(f"ERROR: El archivo de resultado existe pero no se puede leer: {e}")
+
+            # Validación final
+            if not img_before and img_after:
+                print("⚠️ No se pudo cargar original, usando copia del resultado")
                 img_before = img_after.copy()
             
-            if not img_after: 
-                print("ERROR: No se pudieron cargar las imágenes para comparar")
+            if not img_after:
+                print("ERROR: No hay imagen de resultado para mostrar.")
                 return
 
-            # ✅ CORRECCIÓN: Ajustar la imagen BEFORE al tamaño de AFTER manteniendo aspecto
-            # Esto evita el estiramiento forzado
+            # === PARTE 3: SINCRONIZAR TAMAÑOS ===
+            # Ajustar la imagen "Antes" al tamaño de la "Después" para que el slider coincida
             if img_before.size != img_after.size:
-                print(f"DEBUG: Redimensionando 'antes' de {img_before.size} a {img_after.size} (manteniendo aspecto)")
-                
-                # Crear un canvas transparente del tamaño del resultado
+                # Crear canvas transparente del tamaño del resultado
                 canvas_before = Image.new("RGBA", img_after.size, (0, 0, 0, 0))
                 
-                # Calcular el tamaño que debería tener la imagen original para caber
                 original_w, original_h = img_before.size
                 target_w, target_h = img_after.size
                 
-                # Calcular escala manteniendo proporción (fit)
+                # Escalar manteniendo proporción (Fit)
                 scale_w = target_w / original_w
                 scale_h = target_h / original_h
-                scale = min(scale_w, scale_h)  # Usar el menor para que quepa completamente
+                scale = min(scale_w, scale_h)
                 
                 new_w = int(original_w * scale)
                 new_h = int(original_h * scale)
                 
-                # Redimensionar manteniendo calidad
-                img_before_resized = img_before.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                # Usar BILINEAR es suficiente para previsualización y mucho más rápido que LANCZOS
+                img_before_resized = img_before.resize((new_w, new_h), Image.Resampling.BILINEAR)
                 
-                # Centrar en el canvas
+                # Centrar
                 x = (target_w - new_w) // 2
                 y = (target_h - new_h) // 2
                 
-                canvas_before.paste(img_before_resized, (x, y), img_before_resized if img_before_resized.mode == 'RGBA' else None)
-                
+                canvas_before.paste(img_before_resized, (x, y), img_before_resized)
                 img_before = canvas_before
-                print(f"✅ Imagen 'antes' ajustada correctamente: {img_before.size}")
 
-            # 3. Instanciar nuestro visor avanzado
+            # === PARTE 4: MOSTRAR EN VISOR ===
             self.compare_viewer = ComparisonViewer(self.viewer_frame)
             self.compare_viewer.place(relx=0, rely=0, relwidth=1, relheight=1)
             
-            # 4. Cargar las imágenes en el visor
             self.compare_viewer.load_images(img_before, img_after)
             
-            # 5. Mostrar instrucciones flotantes
             self._show_comparison_instructions()
 
         except Exception as e:
@@ -5283,7 +5394,7 @@ class ImageToolsTab(ctk.CTkFrame):
         """Muestra una etiqueta temporal sobre cómo usar el visor."""
         info_label = ctk.CTkLabel(
             self.viewer_frame, 
-            text="🔍 Rueda: Zoom  |  🖱️ Clic + Arrastre: Mover Imagen  |  📏 Línea Blanca: Slider",
+            text="Rueda: Zoom | Clic + Arrastre: Mover Imagen | Línea Blanca: Slider",
             fg_color="#333333", text_color="white", corner_radius=5,
             font=ctk.CTkFont(size=11)
         )

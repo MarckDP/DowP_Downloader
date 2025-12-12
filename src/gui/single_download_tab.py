@@ -1740,7 +1740,10 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.url_entry.delete(0, 'end')
         self.title_entry.delete(0, 'end')
         self.create_placeholder_label("Miniatura")
+        
+        self.auto_save_thumbnail_check.pack(padx=10, pady=(0, 5), anchor="w")
         self.auto_save_thumbnail_check.configure(state="normal")
+        
         self.video_formats, self.audio_formats = {}, {}
         self.video_quality_menu.configure(values=["-"], state="disabled")
         self.audio_quality_menu.configure(values=["-"], state="disabled")

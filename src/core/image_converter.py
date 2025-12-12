@@ -379,14 +379,29 @@ class ImageConverter:
                 size = (1024, 1024) 
             
             # 5. Ejecutar inferencia MANUAL
-            output_image = self._process_onnx_manual(pil_image, session, target_size=size)
-            
-            return output_image
+            try:
+                output_image = self._process_onnx_manual(pil_image, session, target_size=size)
+                return output_image
+
+            except Exception as run_error:
+                # Convertir el error a string de forma segura (evita el UnicodeDecodeError)
+                error_msg = repr(run_error)
+
+                # Detectar si fue un fallo de GPU (DirectML)
+                if use_gpu and ("DmlFusedNode" in error_msg or "887A0007" in error_msg or "Non-zero status" in error_msg):
+                    print(f"⚠️ ADVERTENCIA: La GPU falló o se agotó el tiempo. Reintentando con CPU...")
+                    
+                    # 🔥 FALLBACK: Llamada recursiva forzando CPU
+                    # Esto cargará una sesión nueva solo en CPU y procesará la imagen
+                    return self.remove_background(pil_image, model_filename, progress_callback, use_gpu=False)
+                
+                # Si no es error de GPU o ya estamos en CPU, lanzar el error hacia abajo
+                raise run_error
             
         except Exception as e:
-            print(f"ERROR CRÍTICO al procesar IA ({model_filename}): {e}")
-            import traceback
-            traceback.print_exc()
+            # ✅ LOG SEGURO: Usamos 'repr(e)' en lugar de 'e' directamente
+            # Esto imprime el objeto error crudo y evita el crash por tildes/caracteres raros
+            print(f"ERROR CRÍTICO al procesar IA ({model_filename}): {repr(e)}")
             return pil_image
     
     def convert_file(self, input_path, output_path, options, page_number=None, progress_callback=None, cancellation_event=None):

@@ -1,7 +1,27 @@
 import os
 import io
-import re  # Moved to top-level for better performance
+import re
+import subprocess
 from PIL import Image, ImageChops
+
+class HideCmdWindow:
+    """
+    Context Manager que fuerza a todos los subprocesos (Popen) creados dentro
+    de su bloque a ejecutarse sin ventana (CREATE_NO_WINDOW) en Windows.
+    """
+    def __enter__(self):
+        if os.name == 'nt':
+            self._orig_popen = subprocess.Popen
+            def new_popen(*args, **kwargs):
+                # 0x08000000 es el flag CREATE_NO_WINDOW
+                kwargs.setdefault('creationflags', 0x08000000)
+                return self._orig_popen(*args, **kwargs)
+            subprocess.Popen = new_popen
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if os.name == 'nt':
+            subprocess.Popen = self._orig_popen
 
 # Import conversion libraries
 try:
@@ -138,7 +158,9 @@ class ImageProcessor:
             # --- CASO 1: Archivos PDF (Usar Poppler) ---
             if ext == ".pdf":
                 try:
-                    info = pdfinfo_from_path(filepath, poppler_path=self.poppler_path)
+                    # ✅ ENVOLVER CON HideCmdWindow
+                    with HideCmdWindow():
+                        info = pdfinfo_from_path(filepath, poppler_path=self.poppler_path)
                     count = int(info.get('Pages', 1))
                 except Exception as e:
                     print(f"ADVERTENCIA: Poppler falló leyendo PDF {filepath}: {e}")
@@ -158,7 +180,9 @@ class ImageProcessor:
                         # Si es un .ai moderno (PDF), intentar Poppler si la cabecera falla o es ambigua
                         if ext == ".ai" and b"%PDF" in header.encode('latin-1'):
                             try:
-                                info = pdfinfo_from_path(filepath, poppler_path=self.poppler_path)
+                                # ✅ ENVOLVER CON HideCmdWindow
+                                with HideCmdWindow():
+                                    info = pdfinfo_from_path(filepath, poppler_path=self.poppler_path)
                                 count = int(info.get('Pages', 1))
                                 print(f"DEBUG: Archivo .ai detectado como PDF con {count} página(s)")
                             except Exception as e:
@@ -256,48 +280,59 @@ class ImageProcessor:
                 if page_number is None: page_number = 1
                 
                 # --- LÓGICA DIFERENCIADA ---
-                if ext == ".ai":
-                    # MODO DISEÑO: Alta calidad, PNG, Transparencia
-                    render_dpi = 300
-                    render_fmt = "png"
-                    use_transparent = True
-                    print(f"DEBUG: Generando miniatura AI (Alta Calidad, Transparente)...")
-                else:
-                    # MODO DOCUMENTO (PDF): Velocidad, JPEG, Fondo Blanco (Opaco)
-                    render_dpi = 110  # 110 DPI es suficiente para miniaturas y muy rápido
-                    render_fmt = "jpeg" # JPEG es más rápido de decodificar y fuerza fondo opaco
-                    use_transparent = False
-                    print(f"DEBUG: Generando miniatura PDF (Velocidad, Fondo Blanco)...")
+                # Aumentamos a 300 DPI (Estándar de impresión) para nitidez total
+                render_dpi = 300  
+                render_fmt = "png"
+                use_transparent = (ext == ".ai") # Solo transparente para .ai
+                
+                print(f"DEBUG: Renderizando {ext} a {render_dpi} DPI para máxima nitidez...")
 
                 try:
-                    images = convert_from_path(
-                        filepath, 
-                        first_page=page_number,
-                        last_page=page_number,
-                        dpi=render_dpi,
-                        fmt=render_fmt, 
-                        transparent=use_transparent,
-                        poppler_path=self.poppler_path
-                    )
+                    with HideCmdWindow():
+                        images = convert_from_path(
+                            filepath, 
+                            first_page=page_number,
+                            last_page=page_number,
+                            dpi=render_dpi,
+                            fmt=render_fmt, 
+                            transparent=use_transparent,
+                            poppler_path=self.poppler_path
+                        )
                     
                     if images:
                         pil_image = images[0]
                         
-                        # Convertir a RGBA para consistencia en la UI (aunque venga como RGB/JPEG)
                         if pil_image.mode != 'RGBA':
                             pil_image = pil_image.convert('RGBA')
                         
-                        # Redimensionar
-                        pil_image.thumbnail(size, Image.Resampling.LANCZOS)
+                        # ✅ LÓGICA DE CALIDAD CORREGIDA:
+                        # Si la imagen es para el visor principal (size grande), NO la reducimos.
+                        # Devolvemos la imagen completa (ej: 2480x3508) para permitir zoom real.
                         
+                        req_w, req_h = size
+                        
+                        # Si la solicitud es pequeña (ej: <200px para la lista lateral), sí reducimos.
+                        if req_w < 250:
+                            pil_image.thumbnail(size, Image.Resampling.LANCZOS)
+                        
+                        # Protección de RAM: Solo reducir si es monstruosa (> 4000px)
+                        # De lo contrario, devolver la imagen RAW de 300 DPI tal cual.
+                        elif pil_image.width > 4000 or pil_image.height > 4000:
+                            pil_image.thumbnail((4000, 4000), Image.Resampling.LANCZOS)
+                            print("DEBUG: Imagen limitada a 4K para proteger RAM")
+                        
+                        # (Si no entra en los 'if' anteriores, se devuelve la imagen gigante original)
+                        
+                        return pil_image
+
                 except Exception as e:
-                    # Fallback genérico si falla la configuración específica
                     print(f"ADVERTENCIA: Error optimizado Poppler ({e}). Reintentando modo seguro...")
                     try:
-                        images = convert_from_path(
-                            filepath, first_page=page_number, last_page=page_number,
-                            poppler_path=self.poppler_path
-                        )
+                        with HideCmdWindow():
+                            images = convert_from_path(
+                                filepath, first_page=page_number, last_page=page_number,
+                                poppler_path=self.poppler_path
+                            )
                         if images:
                             pil_image = images[0].convert("RGBA")
                             pil_image.thumbnail(size, Image.Resampling.LANCZOS)
@@ -314,12 +349,14 @@ class ImageProcessor:
                 # Es mucho más rápido para generar vistas previas.
                 try:
                     print(f"DEBUG: Intentando EPS con Ghostscript (Pillow) para velocidad...")
-                    pil_image = Image.open(filepath)
                     
-                    # ✅ TRUCO 1: Escala x10. 
-                    # Ghostscript renderiza vectores. Al pedirle x10, generamos una imagen gigante.
-                    # Esto elimina COMPLETAMENTE los dientes de sierra al reducirla después.
-                    pil_image.load(scale=5)
+                    # ✅ ENVOLVER CON HideCmdWindow (Pillow llama a gs.exe aquí)
+                    with HideCmdWindow():
+                        pil_image = Image.open(filepath)
+                        
+                        # ✅ TRUCO 1: Escala x10. 
+                        # Ghostscript renderiza vectores. Al pedirle x10, generamos una imagen gigante.
+                        pil_image.load(scale=5)
                     
                     # Asegurar modo RGB para poder detectar el blanco
                     if pil_image.mode not in ('RGB', 'RGBA'):
