@@ -9,7 +9,7 @@ import requests
 from PIL import Image
 from io import BytesIO
 
-from src.core.downloader import download_media, apply_site_specific_rules
+from src.core.downloader import download_media, apply_site_specific_rules, apply_yt_patch
 from src.core.exceptions import UserCancelledError
 
 from src.core.constants import (
@@ -491,6 +491,8 @@ class QueueManager:
         # Cookies (Importante heredar esto)
         single_tab = self.main_app.single_tab
         cookie_mode = single_tab.cookie_mode_menu.get()
+        using_cookies = False
+
         if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
             ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
         elif cookie_mode != "No usar":
@@ -500,6 +502,11 @@ class QueueManager:
                 ydl_opts['cookiesfrombrowser'] = (f"{browser}:{profile}",)
             else:
                 ydl_opts['cookiesfrombrowser'] = (browser,)
+            using_cookies = False
+
+        # Aplicar parche SOLO con cookies
+        if using_cookies:
+            ydl_opts = apply_yt_patch(ydl_opts)
 
         # Hook de progreso
         def hook(d):
@@ -585,8 +592,10 @@ class QueueManager:
                     'no_warnings': True,
                     'noplaylist': True,
                 }
-                
+
+                using_cookies = False               
                 cookie_mode = single_tab.cookie_mode_menu.get()
+
                 if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
                     ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
                 elif cookie_mode != "No usar":
@@ -598,6 +607,10 @@ class QueueManager:
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     job.analysis_data = ydl.extract_info(url, download=False)
+
+                # Aplicar parche SOLO con cookies
+                if using_cookies:
+                    ydl_opts = apply_yt_patch(ydl_opts)
                 
                 # ✅ INYECCIÓN DEL PARCHE
                 if job.analysis_data:
@@ -754,6 +767,8 @@ class QueueManager:
             'restrictfilenames': True,
         }
 
+        ydl_opts = apply_yt_patch(ydl_opts)
+
         # ✅ CORRECCIÓN DINÁMICA: Extraer audio respetando el formato original
         if mode == "Solo Audio":
             # 1. Determinar el formato de destino basado en el códec original
@@ -808,6 +823,10 @@ class QueueManager:
             if profile: 
                 browser_arg += f":{profile}"
             ydl_opts['cookiesfrombrowser'] = (browser_arg,)
+
+        # Aplicar parche SOLO con cookies
+        if using_cookies:
+            ydl_opts = apply_yt_patch(ydl_opts)
 
         # Definir el hook de progreso
         def download_hook(d):

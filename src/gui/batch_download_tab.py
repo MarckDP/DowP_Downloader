@@ -16,7 +16,7 @@ from customtkinter import filedialog
 from contextlib import redirect_stdout
 
 from src.core.exceptions import UserCancelledError 
-from src.core.downloader import get_video_info, apply_site_specific_rules
+from src.core.downloader import get_video_info, apply_site_specific_rules, apply_yt_patch
 from src.core.batch_processor import Job
 from .dialogs import Tooltip, messagebox, PlaylistSelectionDialog
 
@@ -3284,6 +3284,7 @@ class BatchDownloadTab(ctk.CTkFrame):
             # ----------------------------------------------------
 
             cookie_mode = single_tab.cookie_mode_menu.get()
+            using_cookies = False
             browser_arg = None
             profile = None
             
@@ -3297,6 +3298,13 @@ class BatchDownloadTab(ctk.CTkFrame):
                     ydl_opts['cookiesfrombrowser'] = (browser_arg_with_profile,)
                 else:
                     ydl_opts['cookiesfrombrowser'] = (browser_arg,)
+
+            # Aplicar parche SOLO si se usan cookies
+            if using_cookies:
+                ydl_opts = apply_yt_patch(ydl_opts)
+                print(f"🔧 Batch: Parche aplicado (cookies habilitadas)")
+            else:
+                print(f"📝 Batch: Sin cookies - configuración predeterminada")
 
             info_dict = None
             

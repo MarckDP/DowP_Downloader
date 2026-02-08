@@ -24,7 +24,7 @@ import io
 from datetime import datetime, timedelta
 
 # Importar nuestros otros módulos
-from src.core.downloader import get_video_info, download_media, apply_site_specific_rules
+from src.core.downloader import get_video_info, download_media, apply_site_specific_rules, apply_yt_patch
 from src.core.processor import FFmpegProcessor, CODEC_PROFILES
 from src.core.exceptions import UserCancelledError, LocalRecodeFailedError, PlaylistDownloadError # <-- MODIFICAR
 from src.core.processor import clean_and_convert_vtt_to_srt, slice_subtitle
@@ -4736,6 +4736,8 @@ class SingleDownloadTab(ctk.CTkFrame):
             'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'referer': options["url"],
         }
+
+        using_cookies = False
         
         # 🆕 CORRECCIÓN CRÍTICA: Manejo correcto de fragmentos
         want_fragment = options.get("fragment_enabled") and (options.get("start_time") or options.get("end_time"))
@@ -4851,6 +4853,10 @@ class SingleDownloadTab(ctk.CTkFrame):
             if options["browser_profile"]: 
                 browser_arg += f":{options['browser_profile']}"
             ydl_opts['cookiesfrombrowser'] = (browser_arg,)
+
+        # Aplicar parche SOLO con cookies
+        if using_cookies:
+            ydl_opts = apply_yt_patch(ydl_opts)
         
         # 🆕 Logging detallado de opciones
         print(f"DEBUG: 📋 Opciones de yt-dlp:")
@@ -5554,12 +5560,26 @@ class SingleDownloadTab(ctk.CTkFrame):
         """
         Ejecuta el análisis usando la API de yt-dlp y captura la salida de texto
         para preservar la lógica de análisis de subtítulos.
+        
+        ✅ MODIFICADO: Solución para YouTube + Cookies
         """
         try:
             self.app.after(0, self.update_progress, 0, "Iniciando análisis de URL...")
 
+            # ✅ PASO 1: Detectar YouTube y uso de cookies
+            is_youtube = 'youtube.com' in url.lower() or 'youtu.be' in url.lower()
+            cookie_mode = self.cookie_mode_menu.get()
+            using_cookies = cookie_mode != "No usar"
+            
+            # 🔍 DEBUG - Solo si quieres ver qué está pasando
+            if is_youtube and using_cookies:
+                print(f"\n{'='*60}")
+                print(f"⚠️ YOUTUBE + COOKIES DETECTADO")
+                print(f"   Aplicando configuración especial...")
+                print(f"{'='*60}\n")
+
+            # ✅ PASO 2: Configurar opciones base de yt-dlp
             ydl_opts = {
-                'no_warnings': True,
                 'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
                 'referer': url,
                 'noplaylist': True,
@@ -5567,8 +5587,8 @@ class SingleDownloadTab(ctk.CTkFrame):
                 'listsubtitles': True,
                 'progress_hooks': [lambda d: self.cancellation_event.is_set() and (_ for _ in ()).throw(UserCancelledError("Análisis cancelado."))],
             }
-
-            cookie_mode = self.cookie_mode_menu.get()
+            
+            # ✅ PASO 2b: Configurar cookies PRIMERO
             if cookie_mode == "Archivo Manual..." and self.cookie_path_entry.get():
                 ydl_opts['cookiefile'] = self.cookie_path_entry.get()
             elif cookie_mode != "No usar":
@@ -5578,6 +5598,31 @@ class SingleDownloadTab(ctk.CTkFrame):
                     browser_arg += f":{profile}"
                 ydl_opts['cookiesfrombrowser'] = (browser_arg,)
 
+            # ✅ PASO 3: Aplicar parche SOLO si se usan cookies
+            if using_cookies:
+                ydl_opts = apply_yt_patch(ydl_opts)
+                print("🔧 Parche de YouTube aplicado (cookies habilitadas)")
+                
+                # Configuración ADICIONAL para YouTube + Cookies
+                if is_youtube:
+                    print(f"\n{'='*60}")
+                    print(f"🔧 Ajustando configuración para YouTube + Cookies")
+                    print(f"{'='*60}")
+                    
+                    # Asegurar que skip está vacío (no omitir formatos)
+                    if 'extractor_args' in ydl_opts and 'youtube' in ydl_opts['extractor_args']:
+                        ydl_opts['extractor_args']['youtube']['skip'] = []
+                        
+                        # Verificar configuración final
+                        youtube_config = ydl_opts['extractor_args']['youtube']
+                        print(f"✅ player_client: {youtube_config.get('player_client')}")
+                        print(f"✅ n_client: {youtube_config.get('n_client')}")
+                        print(f"✅ skip: {youtube_config.get('skip')}")
+                    print(f"{'='*60}\n")
+            else:
+                print("📝 Modo sin cookies - usando configuración predeterminada de yt-dlp")
+
+            # ✅ PASO 5: Resto del código (sin cambios)
             text_capture = io.StringIO()
             info = None
 
@@ -5602,17 +5647,48 @@ class SingleDownloadTab(ctk.CTkFrame):
             
             formats_raw = info.get('formats', [])
             print(f"\n🔍 DEBUG: Formatos RAW recibidos de yt-dlp: {len(formats_raw)}")
-            for idx, f in enumerate(formats_raw):
+            
+            # ✅ PASO 6: FILTRO DE SEGURIDAD - Eliminar storyboards si hay formatos reales
+            storyboard_formats = [f for f in formats_raw if f.get('format_id', '').startswith('sb')]
+            non_storyboard_formats = [f for f in formats_raw if not f.get('format_id', '').startswith('sb')]
+            
+            if storyboard_formats:
+                print(f"   ⚠️ {len(storyboard_formats)} storyboards detectados")
+            
+            if non_storyboard_formats:
+                print(f"   ✅ {len(non_storyboard_formats)} formatos reales encontrados")
+                # Usar solo los formatos reales, ignorar storyboards
+                info['formats'] = non_storyboard_formats
+                formats_raw = non_storyboard_formats
+            elif storyboard_formats and is_youtube and using_cookies:
+                # ❌ PROBLEMA CRÍTICO: Solo hay storyboards con YouTube + Cookies
+                print(f"\n{'='*60}")
+                print(f"❌ ERROR: YouTube devolvió SOLO storyboards")
+                print(f"{'='*60}")
+                print(f"Posibles causas:")
+                print(f"1. Las cookies están expiradas o inválidas")
+                print(f"2. El navegador debe estar cerrado al usar cookies")
+                print(f"3. Las cookies no coinciden con la cuenta/región")
+                print(f"\nSoluciones:")
+                print(f"• Actualizar cookies (volver a iniciar sesión)")
+                print(f"• Cerrar completamente el navegador")
+                print(f"• Probar sin cookies temporalmente")
+                print(f"{'='*60}\n")
+            
+            # Mostrar primeros formatos para debug
+            for idx, f in enumerate(formats_raw[:10]):
                 print(f"  [{idx}] id={f.get('format_id')}, ext={f.get('ext')}, "
                     f"vcodec={f.get('vcodec')}, acodec={f.get('acodec')}, "
                     f"resolution={f.get('resolution')}")
+            
+            if len(formats_raw) > 10:
+                print(f"  ... y {len(formats_raw) - 10} formatos más")
 
             if 'subtitles' not in info and 'automatic_captions' not in info:
                 info['subtitles'], info['automatic_captions'] = self._parse_subtitle_lines_from_text(other_lines)
 
             if info.get('is_live'):
                 self.app.after(0, lambda: self.on_analysis_complete(None, "AVISO: La URL apunta a una transmisión en vivo."))
-
                 return
                 
             self.app.after(0, self.on_analysis_complete, info)
