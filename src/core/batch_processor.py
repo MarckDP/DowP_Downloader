@@ -495,14 +495,16 @@ class QueueManager:
 
         if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
             ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
+            using_cookies = True
         elif cookie_mode != "No usar":
             browser = single_tab.browser_var.get()
             profile = single_tab.browser_profile_entry.get()
             if profile:
                 ydl_opts['cookiesfrombrowser'] = (f"{browser}:{profile}",)
+                using_cookies = True
             else:
                 ydl_opts['cookiesfrombrowser'] = (browser,)
-            using_cookies = False
+                using_cookies = True
 
         # Aplicar parche SOLO con cookies
         if using_cookies:
@@ -598,12 +600,14 @@ class QueueManager:
 
                 if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
                     ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
+                    using_cookies = True
                 elif cookie_mode != "No usar":
                     browser_arg = single_tab.browser_var.get()
                     profile = single_tab.browser_profile_entry.get()
                     if profile:
                         browser_arg += f":{profile}"
                     ydl_opts['cookiesfrombrowser'] = (browser_arg,)
+                    using_cookies = True
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     job.analysis_data = ydl.extract_info(url, download=False)
@@ -767,8 +771,6 @@ class QueueManager:
             'restrictfilenames': True,
         }
 
-        ydl_opts = apply_yt_patch(ydl_opts)
-
         # ✅ CORRECCIÓN DINÁMICA: Extraer audio respetando el formato original
         if mode == "Solo Audio":
             # 1. Determinar el formato de destino basado en el códec original
@@ -814,15 +816,18 @@ class QueueManager:
             except ValueError: 
                 pass
 
+        using_cookies = False
         cookie_mode = single_tab.cookie_mode_menu.get()
         if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
             ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
+            using_cookies = True
         elif cookie_mode != "No usar":
             browser_arg = single_tab.browser_var.get()
             profile = single_tab.browser_profile_entry.get()
             if profile: 
                 browser_arg += f":{profile}"
             ydl_opts['cookiesfrombrowser'] = (browser_arg,)
+            using_cookies = True
 
         # Aplicar parche SOLO con cookies
         if using_cookies:
