@@ -3290,14 +3290,17 @@ class BatchDownloadTab(ctk.CTkFrame):
             
             if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
                 ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
+                using_cookies = True
             elif cookie_mode != "No usar":
                 browser_arg = single_tab.browser_var.get()
                 profile = single_tab.browser_profile_entry.get()
                 if profile:
                     browser_arg_with_profile = f"{browser_arg}:{profile}"
                     ydl_opts['cookiesfrombrowser'] = (browser_arg_with_profile,)
+                    using_cookies = True
                 else:
                     ydl_opts['cookiesfrombrowser'] = (browser_arg,)
+                    using_cookies = True
 
             # Aplicar parche SOLO si se usan cookies
             if using_cookies:
