@@ -1183,6 +1183,58 @@ class ImageToolsTab(ctk.CTkFrame):
         self.rembg_delete_btn.grid(row=0, column=1, padx=(5, 0), sticky="ew")
         # --------------------------------------------------
 
+        # --- SEPARADOR POST-PROCESADO ---
+        ctk.CTkFrame(self.rembg_options_frame, height=1, fg_color=("gray75", "gray35")).grid(
+            row=5, column=0, columnspan=2, sticky="ew", padx=10, pady=(8, 4)
+        )
+
+        # --- FILA 6: Suavizado de bordes ---
+        smooth_row = ctk.CTkFrame(self.rembg_options_frame, fg_color="transparent")
+        smooth_row.grid(row=6, column=0, columnspan=2, sticky="ew", padx=10, pady=(2, 2))
+        smooth_row.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(smooth_row, text="Suavizado:", width=90, anchor="w").grid(row=0, column=0, sticky="w")
+        self.rembg_smooth_var = ctk.IntVar(value=0)
+        self.rembg_smooth_label = ctk.CTkLabel(smooth_row, text="0 px", width=40, anchor="e")
+        self.rembg_smooth_label.grid(row=0, column=2, sticky="e")
+
+        def _on_smooth_change(val):
+            v = int(float(val))
+            self.rembg_smooth_var.set(v)
+            self.rembg_smooth_label.configure(text=f"{v} px")
+
+        self.rembg_smooth_slider = ctk.CTkSlider(
+            smooth_row, from_=0, to=20, number_of_steps=20,
+            command=_on_smooth_change
+        )
+        self.rembg_smooth_slider.set(0)
+        self.rembg_smooth_slider.grid(row=0, column=1, sticky="ew", padx=(5, 8))
+        Tooltip(self.rembg_smooth_slider, "Difumina el borde del recorte para una transición más suave.\n0 = sin suavizado, 20 = máximo difuminado.", delay_ms=800)
+
+        # --- FILA 7: Expandir / Contraer ---
+        expand_row = ctk.CTkFrame(self.rembg_options_frame, fg_color="transparent")
+        expand_row.grid(row=7, column=0, columnspan=2, sticky="ew", padx=10, pady=(2, 8))
+        expand_row.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(expand_row, text="Exp/Contr:", width=90, anchor="w").grid(row=0, column=0, sticky="w")
+        self.rembg_expand_var = ctk.IntVar(value=0)
+        self.rembg_expand_label = ctk.CTkLabel(expand_row, text="0 px", width=40, anchor="e")
+        self.rembg_expand_label.grid(row=0, column=2, sticky="e")
+
+        def _on_expand_change(val):
+            v = int(float(val))
+            self.rembg_expand_var.set(v)
+            sign = "+" if v > 0 else ""
+            self.rembg_expand_label.configure(text=f"{sign}{v} px")
+
+        self.rembg_expand_slider = ctk.CTkSlider(
+            expand_row, from_=-10, to=10, number_of_steps=20,
+            command=_on_expand_change
+        )
+        self.rembg_expand_slider.set(0)
+        self.rembg_expand_slider.grid(row=0, column=1, sticky="ew", padx=(5, 8))
+        Tooltip(self.rembg_expand_slider, "Valores negativos contraen el recorte (elimina halos).\nValores positivos expanden el recorte (recupera bordes cortados).", delay_ms=800)
+
         self.rembg_options_frame.pack_forget()
         
         # Inicializar menús con el default
@@ -2785,14 +2837,13 @@ class ImageToolsTab(ctk.CTkFrame):
         # Re-usar la lógica de cookies de la pestaña de descarga única
         # (Esto es crucial para videos privados o con restricción de edad)
         try:
-            single_tab = self.app.single_tab
-            cookie_mode = single_tab.cookie_mode_menu.get()
+            cookie_mode = self.app.cookies_mode_saved
             
-            if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
-                ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
+            if cookie_mode == "Archivo Manual..." and self.app.cookies_path:
+                ydl_opts['cookiefile'] = self.app.cookies_path
             elif cookie_mode != "No usar":
-                browser_arg = single_tab.browser_var.get()
-                profile = single_tab.browser_profile_entry.get()
+                browser_arg = self.app.selected_browser_saved
+                profile = self.app.browser_profile_saved
                 if profile:
                     browser_arg += f":{profile}"
                 ydl_opts['cookiesfrombrowser'] = (browser_arg,)
@@ -4075,8 +4126,10 @@ class ImageToolsTab(ctk.CTkFrame):
             "video_fit_mode": self.video_fit_mode_menu.get() if hasattr(self, 'video_fit_mode_menu') else "Mantener Tamaño Original",
             # Opciones de rembg
             "rembg_enabled": self.rembg_checkbox.get() == 1,
-            "rembg_gpu": self.rembg_gpu_checkbox.get() == 1, # <--- NUEVO: Enviar opción
+            "rembg_gpu": self.rembg_gpu_checkbox.get() == 1,
             "rembg_model": real_model_name,
+            "rembg_edge_smooth": self.rembg_smooth_var.get() if hasattr(self, 'rembg_smooth_var') else 0,
+            "rembg_edge_expand": self.rembg_expand_var.get() if hasattr(self, 'rembg_expand_var') else 0,
             
             # --- NUEVAS OPCIONES DE REESCALADO ---
             "upscale_enabled": self.upscale_checkbox.get() == 1,

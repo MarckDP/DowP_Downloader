@@ -11,6 +11,8 @@ from io import BytesIO
 
 from src.core.downloader import download_media, apply_site_specific_rules, apply_yt_patch
 from src.core.exceptions import UserCancelledError
+from src.core.video_upscaler import VideoUpscaler
+from main import UPSCALING_DIR
 
 from src.core.constants import (
     EDITOR_FRIENDLY_CRITERIA, LANGUAGE_ORDER, DEFAULT_PRIORITY,
@@ -263,6 +265,7 @@ class QueueManager:
         # Verificar modo de miniaturas global (Radial Checks)
         batch_tab = self.main_app.batch_tab
         thumbnail_mode = batch_tab.thumbnail_mode_var.get() # 'normal', 'with_thumbnail', 'only_thumbnail'
+        conflict_policy = batch_tab.conflict_policy_menu.get() if hasattr(batch_tab, 'conflict_policy_menu') else "Renombrar"
         
         # Directorio base y subcarpeta
         base_output_dir = batch_tab.output_path_entry.get()
@@ -345,7 +348,7 @@ class QueueManager:
                 'title': video_title,
                 'output_path': playlist_dir,
                 'mode': mode,
-                'cookie_mode': self.main_app.single_tab.cookie_mode_menu.get(),
+                'cookie_mode': self.main_app.cookies_mode_saved,
             }
             
             self._apply_playlist_quality(child_options, mode, quality_setting)
@@ -357,6 +360,16 @@ class QueueManager:
             try:
                 # 1. Descargar Video/Audio
                 downloaded_path = self._download_single_video_in_playlist(child_options, playlist_progress_callback, job.job_id)
+                
+                # ✅ ROBUSTEZ: Corregir ruta si cambió la extensión (ej: Solo Audio)
+                if downloaded_path and not os.path.exists(downloaded_path):
+                    base_path_no_ext = os.path.splitext(downloaded_path)[0]
+                    for ext in ['.m4a', '.mp3', '.mp4', '.webm', '.opus', '.wav']:
+                        candidate = f"{base_path_no_ext}{ext}"
+                        if os.path.exists(candidate):
+                            downloaded_path = candidate
+                            break
+
                 final_path_for_import = downloaded_path # Por defecto, es el descargado
                 
                 # ✅ LÓGICA DE HERENCIA DE RECODIFICACIÓN
@@ -366,35 +379,94 @@ class QueueManager:
                     preset_params = self._find_preset_params(preset_name)
                     
                     if preset_params:
-                        self.ui_callback(job.job_id, "RUNNING", f"[{i+1}/{total_videos}] Recodificando: {video_title}...")
-                        
                         output_dir = os.path.dirname(downloaded_path)
                         base_name = os.path.splitext(os.path.basename(downloaded_path))[0]
-                        recoded_base_name = f"{base_name}_recoded"
                         
                         # ✅ CORRECCIÓN: Inyectar el modo de la playlist en las opciones
-                        # Creamos una copia para no ensuciar el preset original
                         recode_options = preset_params.copy()
-                        recode_options['mode'] = mode  # 'mode' viene de job.config.get('playlist_mode')
-                        
-                        print(f"DEBUG: Recodificando hijo con modo: {mode}")
+                        recode_options['mode'] = mode 
 
-                        # Ejecutar recodificación
-                        recoded_path = self._execute_recode_master(
-                            job=job,
-                            input_file=downloaded_path,
-                            output_dir=output_dir,
-                            base_filename=recoded_base_name,
-                            recode_options=recode_options
-                        )
+                        # --- INTERCEPCIÓN DE EXTRAS ---
+                        is_extraction = preset_params.get('extract_frames_enabled', False)
+                        is_upscaling = preset_params.get('upscale_video_enabled', False)
+                        processed_by_extra = False
+
+                        # Solo aplicar extras si NO es modo Solo Audio
+                        if mode != "Solo Audio" and (is_extraction or is_upscaling):
+                            if is_extraction:
+                                self.ui_callback(job.job_id, "RUNNING", f"[{i+1}/{total_videos}] Fotogramas: {video_title}...")
+                                folder_name = f"{base_name}_frames"
+                                final_output_directory = os.path.join(output_dir, folder_name)
+                                
+                                extraction_options = {
+                                    'input_file': downloaded_path,
+                                    'output_folder': final_output_directory,
+                                    'image_format': preset_params.get('extract_format', 'png'),
+                                    'fps': preset_params.get('extract_fps'),
+                                    'jpg_quality': preset_params.get('extract_jpg_quality', '2'),
+                                    'duration': self._get_job_media_duration(job, downloaded_path),
+                                    'pre_params': []
+                                }
+                                
+                                output_folder = self.main_app.ffmpeg_processor.execute_video_to_images(
+                                    extraction_options,
+                                    lambda p, m: self.ui_callback(job.job_id, "RUNNING", f"[{i+1}/{total_videos}] Extraer {p:.1f}%"),
+                                    self.pause_event
+                                )
+                                
+                                if not preset_params.get('keep_original_file', True):
+                                    try: os.remove(downloaded_path)
+                                    except OSError: pass
+                                
+                                final_path_for_import = output_folder
+                                processed_by_extra = True
+
+                            elif is_upscaling:
+                                self.ui_callback(job.job_id, "RUNNING", f"[{i+1}/{total_videos}] Reescalando: {video_title}...")
+                                scale_str = str(preset_params.get("upscale_scale", "2")).replace("x", "")
+                                out_stem = f"{base_name}_upscaled_x{scale_str}"
+                                desired_out_path = os.path.join(output_dir, out_stem + ".mp4")
+                                
+                                # Resolución de conflictos
+                                out_path, _ = self._resolve_batch_conflict(desired_out_path, conflict_policy)
+                                
+                                if out_path:
+                                    ffmpeg_dir = os.path.dirname(self.main_app.ffmpeg_processor.ffmpeg_path)
+                                    upscaler = VideoUpscaler(
+                                        ffmpeg_dir=ffmpeg_dir,
+                                        upscaling_dir=UPSCALING_DIR,
+                                        cancellation_event=self.pause_event,
+                                        progress_callback=lambda p, m: self.ui_callback(job.job_id, "RUNNING", f"[{i+1}/{total_videos}] {m} ({p:.1f}%)" if isinstance(p, float) and p >= 0 else f"[{i+1}/{total_videos}] {m}")
+                                    )
+                                    final_path = upscaler.upscale_video(downloaded_path, out_path, preset_params)
+                                    
+                                    if not preset_params.get('keep_originals', True):
+                                        try: os.remove(downloaded_path)
+                                        except OSError: pass
+                                        
+                                    final_path_for_import = final_path
+                                    processed_by_extra = True
+                                else:
+                                    print(f"INFO: Item {i+1} omitido (upscale ya existe).")
+                                    # Si se omite el upscale, final_path_for_import sigue siendo el descargado
                         
-                        final_path_for_import = recoded_path
-                        
-                        # Manejar archivo original
-                        if not job.config.get('recode_keep_original', True):
-                            try:
-                                os.remove(downloaded_path)
-                            except: pass
+                        # Si no se procesó por extra, ejecutar recodificación normal
+                        if not processed_by_extra:
+                            self.ui_callback(job.job_id, "RUNNING", f"[{i+1}/{total_videos}] Recodificando: {video_title}...")
+                            recoded_base_name = f"{base_name}_recoded"
+                            
+                            recoded_path = self._execute_recode_master(
+                                job=job,
+                                input_file=downloaded_path,
+                                output_dir=output_dir,
+                                base_filename=recoded_base_name,
+                                recode_options=recode_options
+                            )
+                            final_path_for_import = recoded_path
+                            
+                            if not job.config.get('recode_keep_original', True):
+                                try: os.remove(downloaded_path)
+                                except: pass
                 
                 # 3. Descargar Miniatura (Si el modo es "con video/audio" o "manual" activado)
                 if thumbnail_mode == "with_thumbnail":
@@ -489,16 +561,15 @@ class QueueManager:
         }
         
         # Cookies (Importante heredar esto)
-        single_tab = self.main_app.single_tab
-        cookie_mode = single_tab.cookie_mode_menu.get()
+        cookie_mode = self.main_app.cookies_mode_saved
         using_cookies = False
 
-        if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
-            ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
+        if cookie_mode == "Archivo Manual..." and self.main_app.cookies_path:
+            ydl_opts['cookiefile'] = self.main_app.cookies_path
             using_cookies = True
         elif cookie_mode != "No usar":
-            browser = single_tab.browser_var.get()
-            profile = single_tab.browser_profile_entry.get()
+            browser = self.main_app.selected_browser_saved
+            profile = self.main_app.browser_profile_saved
             if profile:
                 ydl_opts['cookiesfrombrowser'] = (f"{browser}:{profile}",)
                 using_cookies = True
@@ -596,14 +667,14 @@ class QueueManager:
                 }
 
                 using_cookies = False               
-                cookie_mode = single_tab.cookie_mode_menu.get()
+                cookie_mode = self.main_app.cookies_mode_saved
 
-                if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
-                    ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
+                if cookie_mode == "Archivo Manual..." and self.main_app.cookies_path:
+                    ydl_opts['cookiefile'] = self.main_app.cookies_path
                     using_cookies = True
                 elif cookie_mode != "No usar":
-                    browser_arg = single_tab.browser_var.get()
-                    profile = single_tab.browser_profile_entry.get()
+                    browser_arg = self.main_app.selected_browser_saved
+                    profile = self.main_app.browser_profile_saved
                     if profile:
                         browser_arg += f":{profile}"
                     ydl_opts['cookiesfrombrowser'] = (browser_arg,)
@@ -817,13 +888,13 @@ class QueueManager:
                 pass
 
         using_cookies = False
-        cookie_mode = single_tab.cookie_mode_menu.get()
-        if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
-            ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
+        cookie_mode = self.main_app.cookies_mode_saved
+        if cookie_mode == "Archivo Manual..." and self.main_app.cookies_path:
+            ydl_opts['cookiefile'] = self.main_app.cookies_path
             using_cookies = True
         elif cookie_mode != "No usar":
-            browser_arg = single_tab.browser_var.get()
-            profile = single_tab.browser_profile_entry.get()
+            browser_arg = self.main_app.selected_browser_saved
+            profile = self.main_app.browser_profile_saved
             if profile: 
                 browser_arg += f":{profile}"
             ydl_opts['cookiesfrombrowser'] = (browser_arg,)
@@ -916,6 +987,79 @@ class QueueManager:
                 # Obtener el directorio y nombre base del archivo descargado
                 output_dir = os.path.dirname(final_filepath)
                 base_name = os.path.splitext(os.path.basename(final_filepath))[0]
+
+                # --- INTERCEPCIÓN DE EXTRAS ---
+                is_extraction = preset_params.get('extract_frames_enabled', False)
+                is_upscaling = preset_params.get('upscale_video_enabled', False)
+                
+                if mode != "Solo Audio" and (is_extraction or is_upscaling):
+                    if is_extraction:
+                        self.ui_callback(job.job_id, "RUNNING", "Extrayendo fotogramas...")
+                        folder_name = f"{base_name}_frames"
+                        final_output_directory = os.path.join(output_dir, folder_name)
+                        
+                        extraction_options = {
+                            'input_file': final_filepath,
+                            'output_folder': final_output_directory,
+                            'image_format': preset_params.get('extract_format', 'png'),
+                            'fps': preset_params.get('extract_fps'),
+                            'jpg_quality': preset_params.get('extract_jpg_quality', '2'),
+                            'duration': self._get_job_media_duration(job, final_filepath),
+                            'pre_params': []
+                        }
+                        
+                        # Usa execute_video_to_images que ya está disponible en ffmpeg_processor
+                        output_folder = self.main_app.ffmpeg_processor.execute_video_to_images(
+                            extraction_options,
+                            lambda p, m: self.ui_callback(job.job_id, "RUNNING", f"Extrayendo... {p:.1f}%"),
+                            self.pause_event
+                        )
+                        
+                        if not preset_params.get('keep_original_file', True):
+                            try:
+                                os.remove(final_filepath)
+                            except OSError:
+                                pass
+                        
+                        job.status = "COMPLETED"
+                        job.final_filepath = output_folder
+                        self.ui_callback(job.job_id, "COMPLETED", f"Completado (Fotogramas): {folder_name}")
+                        return
+                    
+                    elif is_upscaling:
+                        self.ui_callback(job.job_id, "RUNNING", "Reescalando video (IA)...")
+                        scale_str = str(preset_params.get("upscale_scale", "2")).replace("x", "")
+                        out_stem = f"{base_name}_upscaled_x{scale_str}"
+                        desired_out_path = os.path.join(output_dir, out_stem + ".mp4")
+                        
+                        # Resolución de conflictos
+                        out_path, _ = self._resolve_batch_conflict(desired_out_path, conflict_policy)
+                        if out_path is None:
+                            job.status = "SKIPPED"
+                            self.ui_callback(job.job_id, "SKIPPED", "Omitido: El archivo reescalado ya existe")
+                            return
+                        
+                        ffmpeg_dir = os.path.dirname(self.main_app.ffmpeg_processor.ffmpeg_path)
+                        
+                        upscaler = VideoUpscaler(
+                            ffmpeg_dir=ffmpeg_dir,
+                            upscaling_dir=UPSCALING_DIR,
+                            cancellation_event=self.pause_event,
+                            progress_callback=lambda p, m: self.ui_callback(job.job_id, "RUNNING", f"({p:.1f}%) {m}" if isinstance(p, float) and p >= 0 else f"{m}")
+                        )
+                        
+                        final_path = upscaler.upscale_video(final_filepath, out_path, preset_params)
+                        
+                        if not preset_params.get('keep_originals', True):
+                            try: os.remove(final_filepath)
+                            except OSError: pass
+                            
+                        job.status = "COMPLETED"
+                        job.final_filepath = final_path
+                        self.ui_callback(job.job_id, "COMPLETED", f"Completado (Upscaled): {os.path.basename(final_path)}")
+                        return
+                # --- FIN INTERCEPCIÓN DE EXTRAS ---
+
                 recoded_base_name = f"{base_name}_recoded"
 
                 # Ejecutar la recodificación
@@ -1040,6 +1184,91 @@ class QueueManager:
 
             # 5. Determinar el nombre del archivo de salida
             base_name = os.path.splitext(os.path.basename(input_file))[0]
+
+            # --- INTERCEPCIÓN DE EXTRAS (LOCAL) ---
+            is_extraction = preset_params.get('extract_frames_enabled', False)
+            is_upscaling = preset_params.get('upscale_video_enabled', False)
+            
+            if is_extraction:
+                self.ui_callback(job.job_id, "RUNNING", "Extrayendo fotogramas...")
+                folder_name = f"{base_name}_frames"
+                final_output_directory = os.path.join(output_dir, folder_name)
+                
+                # Conflicto: si la carpeta ya existe, respetar politica
+                conflict_policy = batch_tab.conflict_policy_menu.get() if hasattr(batch_tab, 'conflict_policy_menu') else "Renombrar"
+                if os.path.exists(final_output_directory):
+                    if conflict_policy == "Omitir":
+                        job.status = "SKIPPED"
+                        self.ui_callback(job.job_id, "SKIPPED", "Omitido: La carpeta de fotogramas ya existe.")
+                        return
+                    elif conflict_policy == "Renombrar":
+                        idx = 1
+                        while os.path.exists(final_output_directory):
+                            final_output_directory = os.path.join(output_dir, f"{folder_name} ({idx})")
+                            idx += 1
+                
+                extraction_options = {
+                    'input_file': input_file,
+                    'output_folder': final_output_directory,
+                    'image_format': preset_params.get('extract_format', 'png'),
+                    'fps': preset_params.get('extract_fps'),
+                    'jpg_quality': preset_params.get('extract_jpg_quality', '2'),
+                    'duration': self._get_job_media_duration(job, input_file),
+                    'pre_params': []
+                }
+                
+                output_folder = self.main_app.ffmpeg_processor.execute_video_to_images(
+                    extraction_options,
+                    lambda p, m: self.ui_callback(job.job_id, "RUNNING", f"Extrayendo... {p:.1f}%"),
+                    self.pause_event
+                )
+                
+                if not preset_params.get('keep_original_file', True):
+                    try:
+                        os.remove(input_file)
+                    except OSError:
+                        pass
+                
+                job.status = "COMPLETED"
+                job.final_filepath = output_folder
+                self.ui_callback(job.job_id, "COMPLETED", f"Completado (Fotogramas): {os.path.basename(final_output_directory)}")
+                return
+            
+            elif is_upscaling:
+                self.ui_callback(job.job_id, "RUNNING", "Reescalando video (IA)...")
+                scale_str = str(preset_params.get("upscale_scale", "2")).replace("x", "")
+                out_stem = f"{base_name}_upscaled_x{scale_str}"
+                desired_out_path = os.path.join(output_dir, out_stem + ".mp4")
+                
+                # Resolución de conflictos
+                conflict_policy = batch_tab.conflict_policy_menu.get() if hasattr(batch_tab, 'conflict_policy_menu') else "Renombrar"
+                out_path, _ = self._resolve_batch_conflict(desired_out_path, conflict_policy)
+                if out_path is None:
+                    job.status = "SKIPPED"
+                    self.ui_callback(job.job_id, "SKIPPED", "Omitido: El archivo reescalado ya existe")
+                    return
+                
+                ffmpeg_dir = os.path.dirname(self.main_app.ffmpeg_processor.ffmpeg_path)
+                
+                upscaler = VideoUpscaler(
+                    ffmpeg_dir=ffmpeg_dir,
+                    upscaling_dir=UPSCALING_DIR,
+                    cancellation_event=self.pause_event,
+                    progress_callback=lambda p, m: self.ui_callback(job.job_id, "RUNNING", f"({p:.1f}%) {m}" if isinstance(p, float) and p >= 0 else f"{m}")
+                )
+                
+                final_path = upscaler.upscale_video(input_file, out_path, preset_params)
+                
+                if not preset_params.get('keep_originals', True):
+                    try: os.remove(input_file)
+                    except OSError: pass
+                    
+                job.status = "COMPLETED"
+                job.final_filepath = final_path
+                self.ui_callback(job.job_id, "COMPLETED", f"Completado (Upscaled): {os.path.basename(final_path)}")
+                return
+            # --- FIN INTERCEPCIÓN DE EXTRAS ---
+
             recoded_base_name = f"{base_name}_recoded"
 
             # 6. Ejecutar la recodificación (usando la misma función maestra)
@@ -1822,7 +2051,9 @@ class QueueManager:
             pre_params = []
 
             # --- INICIO DE CORRECCIÓN (Muxer vs Contenedor) ---
-            container_ext = recode_options['recode_container']
+            container_ext = recode_options.get('recode_container', '.mp4')
+            if container_ext == "-":
+                container_ext = ".mp4"
             
             # Buscar un muxer específico en el mapa (ej: .m4a -> mp4)
             # Usamos self.main_app.FORMAT_MUXER_MAP

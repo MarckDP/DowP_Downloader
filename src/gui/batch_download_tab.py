@@ -3283,17 +3283,17 @@ class BatchDownloadTab(ctk.CTkFrame):
                 ydl_opts['extract_flat'] = 'in_playlist' # La clave de la velocidad
             # ----------------------------------------------------
 
-            cookie_mode = single_tab.cookie_mode_menu.get()
+            cookie_mode = self.app.cookies_mode_saved
             using_cookies = False
             browser_arg = None
             profile = None
             
-            if cookie_mode == "Archivo Manual..." and single_tab.cookie_path_entry.get():
-                ydl_opts['cookiefile'] = single_tab.cookie_path_entry.get()
+            if cookie_mode == "Archivo Manual..." and self.app.cookies_path:
+                ydl_opts['cookiefile'] = self.app.cookies_path
                 using_cookies = True
             elif cookie_mode != "No usar":
-                browser_arg = single_tab.browser_var.get()
-                profile = single_tab.browser_profile_entry.get()
+                browser_arg = self.app.selected_browser_saved
+                profile = self.app.browser_profile_saved
                 if profile:
                     browser_arg_with_profile = f"{browser_arg}:{profile}"
                     ydl_opts['cookiesfrombrowser'] = (browser_arg_with_profile,)

@@ -404,6 +404,40 @@ class ImageConverter:
             print(f"ERROR CRÍTICO al procesar IA ({model_filename}): {repr(e)}")
             return pil_image
     
+    def _apply_alpha_postprocess(self, pil_image, smooth_px=0, expand_px=0):
+        """
+        Aplica post-procesado al canal alfa de una imagen RGBA:
+          - smooth_px: radio de GaussianBlur sobre el alpha (suaviza bordes).
+          - expand_px: positivo = expande (dilata), negativo = contrae (erosiona).
+        Solo usa Pillow, sin dependencias extra.
+        """
+        from PIL import ImageFilter
+        try:
+            if pil_image.mode != "RGBA":
+                pil_image = pil_image.convert("RGBA")
+
+            r, g, b, alpha = pil_image.split()
+
+            # 1. Expandir / Contraer (morfología con MaxFilter / MinFilter)
+            if expand_px != 0:
+                # Pillow solo acepta tamaño impar
+                size = abs(expand_px) * 2 + 1
+                if expand_px > 0:
+                    alpha = alpha.filter(ImageFilter.MaxFilter(size))
+                else:
+                    alpha = alpha.filter(ImageFilter.MinFilter(size))
+
+            # 2. Suavizado (Gaussian blur del canal alfa)
+            if smooth_px > 0:
+                alpha = alpha.filter(ImageFilter.GaussianBlur(radius=smooth_px))
+
+            pil_image = Image.merge("RGBA", (r, g, b, alpha))
+            return pil_image
+
+        except Exception as e:
+            print(f"ADVERTENCIA: Error en post-procesado de bordes: {e}")
+            return pil_image
+
     def convert_file(self, input_path, output_path, options, page_number=None, progress_callback=None, cancellation_event=None):
         """
         Convierte un archivo de imagen al formato especificado.
@@ -499,6 +533,12 @@ class ImageConverter:
                 
                 # Pasamos el callback y la opción use_gpu
                 pil_image = self.remove_background(pil_image, model_name, progress_callback, use_gpu=use_gpu)
+
+                # Post-procesado de bordes (suavizado + expandir/contraer)
+                edge_smooth = options.get("rembg_edge_smooth", 0)
+                edge_expand = options.get("rembg_edge_expand", 0)
+                if edge_smooth != 0 or edge_expand != 0:
+                    pil_image = self._apply_alpha_postprocess(pil_image, edge_smooth, edge_expand)
                 
                 # Reporte: IA Terminada (80%)
                 if progress_callback: progress_callback(80)

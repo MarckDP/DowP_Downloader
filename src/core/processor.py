@@ -456,16 +456,16 @@ class FFmpegProcessor:
             command.extend(['-i', input_file])
             if mode == "Video+Audio":
                 if video_idx is not None:
-                    command.extend(['-map', f'0:{video_idx}'])
+                    command.extend(['-map', f'0:{video_idx}?'])
                 if audio_idx == "all":
-                    command.extend(['-map', '0:a'])
+                    command.extend(['-map', '0:a?'])
                 elif audio_idx is not None:
-                    command.extend(['-map', f'0:{audio_idx}'])
+                    command.extend(['-map', f'0:{audio_idx}?'])
             elif mode == "Solo Audio":
                 if audio_idx == "all":
-                    command.extend(['-map', '0:a'])
+                    command.extend(['-map', '0:a?'])
                 elif audio_idx is not None:
-                    command.extend(['-map', f'0:{audio_idx}'])
+                    command.extend(['-map', f'0:{audio_idx}?'])
             command.extend(final_params)
             command.append(output_file)
             print("--- Comando FFmpeg a ejecutar ---")

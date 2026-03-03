@@ -60,27 +60,25 @@ def check_and_install_python_dependencies(progress_callback):
         return False
 
 def get_latest_ffmpeg_info(progress_callback):
-    """Consulta la API de GitHub para la última versión de FFMPEG."""
-    progress_callback("Consultando la última versión de FFmpeg...", 5)
+    """Consulta la API de GitHub para la última versión ESTABLE de FFMPEG (GyanD)."""
+    progress_callback("Consultando la última versión de FFmpeg (Estable)...", 5)
     try:
-        api_url = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases"
+        # Se cambia de BtbN (Nightly) a GyanD (Releases estables)
+        api_url = "https://api.github.com/repos/GyanD/codexffmpeg/releases/latest"
         response = requests.get(api_url, timeout=15)
         response.raise_for_status()
-        releases = response.json()
-        latest_release_data = next((r for r in releases if r['tag_name'] != 'latest'), None)
-        if not latest_release_data:
-            return None, None
-        tag_name = latest_release_data["tag_name"]
-        system = platform.system()
-        file_identifier = ""
-        if system == "Windows": file_identifier = "win64-gpl.zip"
-        elif system == "Linux": file_identifier = "linux64-gpl.tar.xz"
-        elif system == "Darwin": file_identifier = "osx64-gpl.zip"
-        else: return None, None
-        for asset in latest_release_data["assets"]:
+        latest_release = response.json()
+        
+        tag_name = latest_release["tag_name"]
+        
+        # GyanD ofrece versiones estables para Windows. Buscamos el ZIP full.
+        file_identifier = "full_build.zip"
+        
+        for asset in latest_release.get("assets", []):
             if file_identifier in asset["name"] and "shared" not in asset["name"]:
-                progress_callback("Información de FFmpeg encontrada.", 10)
+                progress_callback("Información de FFmpeg estable encontrada.", 10)
                 return tag_name, asset["browser_download_url"]
+                
         return tag_name, None
     except requests.RequestException as e:
         progress_callback(f"Error de red al buscar FFmpeg: {e}", -1)
@@ -119,7 +117,16 @@ def download_and_install_ffmpeg(tag, url, progress_callback):
             with tarfile.open(archive_name, 'r:xz') as tar_ref: tar_ref.extractall(temp_extract_path)
 
         os.makedirs(FFMPEG_BIN_DIR, exist_ok=True)
-        bin_content_path = os.path.join(temp_extract_path, os.listdir(temp_extract_path)[0], 'bin')
+        
+        # Buscar dinámicamente la carpeta 'bin/' dentro de lo extraído
+        bin_content_path = None
+        for root, dirs, files in os.walk(temp_extract_path):
+            if "ffmpeg.exe" in files:
+                bin_content_path = root
+                break
+
+        if not bin_content_path:
+            raise Exception("No se encontró ffmpeg.exe dentro del archivo descargado.")
 
         # Mover archivos a FFMPEG_BIN_DIR
         for item in os.listdir(bin_content_path):

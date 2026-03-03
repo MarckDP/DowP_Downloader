@@ -32,7 +32,9 @@ from .dialogs import ConflictDialog, LoadingWindow, CompromiseDialog, SimpleMess
 from src.core.constants import (
     VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, SINGLE_STREAM_AUDIO_CONTAINERS,
     FORMAT_MUXER_MAP, LANG_CODE_MAP, LANGUAGE_ORDER,
-    DEFAULT_PRIORITY, EDITOR_FRIENDLY_CRITERIA, COMPATIBILITY_RULES
+    DEFAULT_PRIORITY, EDITOR_FRIENDLY_CRITERIA, COMPATIBILITY_RULES,
+    REALESRGAN_MODELS, WAIFU2X_MODELS, REALSR_MODELS, SRMD_MODELS,
+    UPSCALING_TOOLS,
 )
 from contextlib import redirect_stdout
 def resource_path(relative_path):
@@ -41,7 +43,8 @@ def resource_path(relative_path):
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
-from main import PROJECT_ROOT, MODELS_DIR
+from main import PROJECT_ROOT, MODELS_DIR, UPSCALING_DIR
+from src.core.video_upscaler import VideoUpscaler
 # -------------------------------------------------
 
 class SingleDownloadTab(ctk.CTkFrame):
@@ -172,15 +175,7 @@ class SingleDownloadTab(ctk.CTkFrame):
                 print(f"No se pudo establecer la carpeta de descargas por defecto: {e}")
         # --- FIN DE LA MODIFICACIÓN ---
 
-        self.cookie_mode_menu.set(self.app.cookies_mode_saved)
 
-        if self.app.cookies_path: 
-            self.cookie_path_entry.insert(0, self.app.cookies_path) 
-        
-        # ESTAS LÍNEAS VAN AQUÍ (fuera del if)
-        self.browser_var.set(self.app.selected_browser_saved) 
-        self.browser_profile_entry.insert(0, self.app.browser_profile_saved)
-        self.on_cookie_mode_change(self.app.cookies_mode_saved)
 
         self.auto_download_subtitle_check.deselect()
 
@@ -395,47 +390,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.clean_subtitle_check = ctk.CTkCheckBox(subtitle_options_frame, text="Convertir y estandarizar a formato SRT")
         self.clean_subtitle_check.pack(padx=10, pady=(0, 5), anchor="w")
 
-        cookies_label = ctk.CTkLabel(options_scroll_frame, text="Cookies", font=ctk.CTkFont(weight="bold"))
-        cookies_label.pack(fill="x", padx=10, pady=(5, 2))
-        
-        # --- AÑADIR ESTAS LÍNEAS (TOOLTIP 6) ---
-        cookies_tooltip_text = "Configura las cookies para acceder a contenido protegido.\n\nÚtil para:\n• Videos con restricción de edad\n• Videos privados o solo para suscriptores\n• Contenido que requiere iniciar sesión"
-        Tooltip(cookies_label, cookies_tooltip_text, delay_ms=1000)
-        # --- FIN DEL TOOLTIP ---
 
-        cookie_options_frame = ctk.CTkFrame(options_scroll_frame)
-        cookie_options_frame.pack(fill="x", padx=5, pady=(0, 10))
-
-        # 🔧 MODIFICADO: Agregar opción de ayuda al menú
-        self.cookie_mode_menu = ctk.CTkOptionMenu(
-            cookie_options_frame, 
-            values=["No usar", "Archivo Manual...", "Desde Navegador", "¿Cómo obtener cookies?"], 
-            command=self.on_cookie_mode_change
-        )
-        self.cookie_mode_menu.pack(fill="x", padx=10, pady=(0, 5))
-
-        self.manual_cookie_frame = ctk.CTkFrame(cookie_options_frame, fg_color="transparent")
-        self.cookie_path_entry = ctk.CTkEntry(self.manual_cookie_frame, placeholder_text="Ruta al archivo cookies.txt...")
-        self.cookie_path_entry.pack(fill="x")
-        self.cookie_path_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.cookie_path_entry))
-        self.cookie_path_entry.bind("<KeyRelease>", self._on_cookie_detail_change)
-        self.select_cookie_file_button = ctk.CTkButton(self.manual_cookie_frame, text="Elegir Archivo...", command=lambda: self.select_cookie_file())
-        self.select_cookie_file_button.pack(fill="x", pady=(5,0))
-
-        self.browser_options_frame = ctk.CTkFrame(cookie_options_frame, fg_color="transparent")
-        ctk.CTkLabel(self.browser_options_frame, text="Navegador:").pack(padx=10, pady=(5,0), anchor="w")
-        self.browser_var = ctk.StringVar(value=self.app.selected_browser_saved) # <--- ¡CORREGIDO!
-        self.browser_menu = ctk.CTkOptionMenu(self.browser_options_frame, values=["chrome", "firefox", "edge", "opera", "vivaldi", "brave"], variable=self.browser_var, command=self._on_cookie_detail_change)
-        self.browser_menu.pack(fill="x", padx=10)
-
-
-        ctk.CTkLabel(self.browser_options_frame, text="Perfil (Opcional):").pack(padx=10, pady=(5,0), anchor="w")
-        self.browser_profile_entry = ctk.CTkEntry(self.browser_options_frame, placeholder_text="Ej: Default, Profile 1")
-        self.browser_profile_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.browser_profile_entry))
-        self.browser_profile_entry.pack(fill="x", padx=10)
-        self.browser_profile_entry.bind("<KeyRelease>", self._on_cookie_detail_change)
-        cookie_advice_label = ctk.CTkLabel(self.browser_options_frame, text=" ⓘ Si falla, cierre el navegador por completo. \n ⓘ Para Chrome/Edge/Brave,\n se recomienda usar la opción 'Archivo Manual'", font=ctk.CTkFont(size=11), text_color="orange", justify="left")
-        cookie_advice_label.pack(pady=(10, 5), padx=10, fill="x", anchor="w")
 
         ctk.CTkLabel(options_scroll_frame, text="Mantenimiento", font=ctk.CTkFont(weight="bold")).pack(fill="x", padx=10, pady=(5, 2))
         maintenance_frame = ctk.CTkFrame(options_scroll_frame)
@@ -448,54 +403,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.update_app_button = ctk.CTkButton(maintenance_frame, text="Buscar Actualización", state="disabled", command=self._open_release_page)
         self.update_app_button.grid(row=1, column=0, padx=10, pady=(0, 15), sticky="ew")
 
-        self.ffmpeg_status_label = ctk.CTkLabel(maintenance_frame, text="FFmpeg: Verificando...", wraplength=280, justify="left")
-        self.ffmpeg_status_label.grid(row=2, column=0, padx=10, pady=(5,5), sticky="ew") 
-        self.update_ffmpeg_button = ctk.CTkButton(maintenance_frame, text="Buscar Actualizaciones de FFmpeg", command=self.manual_ffmpeg_update_check)
-        self.update_ffmpeg_button.grid(row=3, column=0, padx=10, pady=(0, 10), sticky="ew")
 
-        self.deno_status_label = ctk.CTkLabel(maintenance_frame, text="Deno: Verificando...", wraplength=280, justify="left")
-        self.deno_status_label.grid(row=4, column=0, padx=10, pady=(5,5), sticky="ew") 
-        self.update_deno_button = ctk.CTkButton(maintenance_frame, text="Buscar Actualizaciones de Deno", command=self.manual_deno_update_check)
-        self.update_deno_button.grid(row=5, column=0, padx=10, pady=(0, 10), sticky="ew")
-
-        # --- SECCIÓN POPPLER ---
-        self.poppler_status_label = ctk.CTkLabel(maintenance_frame, text="Poppler: Verificando...", wraplength=280, justify="left")
-        self.poppler_status_label.grid(row=6, column=0, padx=10, pady=(5,5), sticky="ew") 
-        self.update_poppler_button = ctk.CTkButton(maintenance_frame, text="Buscar Actualizaciones de Poppler", command=self.manual_poppler_update_check)
-        self.update_poppler_button.grid(row=7, column=0, padx=10, pady=(0, 10), sticky="ew")
-
-        # --- SECCIÓN INKSCAPE ---
-        self.inkscape_status_label = ctk.CTkLabel(
-            maintenance_frame, 
-            text="Inkscape: Verificando...", 
-            wraplength=280, 
-            justify="left"
-        )
-        self.inkscape_status_label.grid(row=8, column=0, padx=10, pady=(5,5), sticky="ew") 
-        
-        # Botón "Recargar" por si metes los archivos con la app abierta
-        self.check_inkscape_button = ctk.CTkButton(
-            maintenance_frame, 
-            text="Verificar Inkscape", 
-            command=self.manual_inkscape_check
-        )
-        self.check_inkscape_button.grid(row=9, column=0, padx=10, pady=(0, 10), sticky="ew")
-
-        # --- SECCIÓN GHOSTSCRIPT (NUEVO) ---
-        self.ghostscript_status_label = ctk.CTkLabel(
-            maintenance_frame, 
-            text="Ghostscript: Verificando...", 
-            wraplength=280, 
-            justify="left"
-        )
-        self.ghostscript_status_label.grid(row=10, column=0, padx=10, pady=(5,5), sticky="ew") 
-        
-        self.check_ghostscript_button = ctk.CTkButton(
-            maintenance_frame, 
-            text="Verificar Ghostscript", 
-            command=self.manual_ghostscript_check
-        )
-        self.check_ghostscript_button.grid(row=11, column=0, padx=10, pady=(0, 10), sticky="ew")
 
         # --- SECCIÓN MODELOS IA (rembg) ---
         # --- SECCIÓN MODELOS IA (rembg) ---
@@ -576,7 +484,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         recode_mode_frame = ctk.CTkFrame(self.recode_main_frame, fg_color="transparent")
         recode_mode_frame.pack(fill="x", padx=10, pady=(0, 10))
         ctk.CTkLabel(recode_mode_frame, text="Modo:").pack(side="left", padx=(0, 10))
-        self.recode_mode_selector = ctk.CTkSegmentedButton(recode_mode_frame, values=["Modo Rápido", "Modo Manual", "Modo Extraer"], command=self._on_recode_mode_change)
+        self.recode_mode_selector = ctk.CTkSegmentedButton(recode_mode_frame, values=["Modo Rápido", "Modo Manual", "Extras"], command=self._on_recode_mode_change)
         self.recode_mode_selector.pack(side="left", expand=True, fill="x")
 
         self.recode_quick_frame = ctk.CTkFrame(self.recode_main_frame)
@@ -805,85 +713,249 @@ class SingleDownloadTab(ctk.CTkFrame):
         
         self.recode_extract_frame = ctk.CTkFrame(self.recode_main_frame, fg_color="transparent")
 
-        # --- NUEVA UI DE EXTRACCIÓN ---
+        # --- UI DEL MODO EXTRAS ---
         self.extract_options_frame = ctk.CTkFrame(self.recode_extract_frame)
-        self.extract_options_frame.pack(fill="x", padx=10, pady=5)
+        self.extract_options_frame.pack(fill="x", padx=0, pady=0)
         self.extract_options_frame.grid_columnconfigure(1, weight=1)
 
-        # 🆕 0. Checkbox "Mantener original" (PRIMERO, como en otros modos)
+        # 0. Checkbox "Mantener original" - SIEMPRE VISIBLE
         self.keep_original_extract_checkbox = ctk.CTkCheckBox(
-            self.extract_options_frame, 
+            self.extract_options_frame,
             text="Mantener el video original",
+            font=ctk.CTkFont(size=12),
             command=self.save_settings
         )
-        self.keep_original_extract_checkbox.grid(row=0, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="w")
-        self.keep_original_extract_checkbox.select()  # Seleccionado por defecto
+        self.keep_original_extract_checkbox.grid(row=0, column=0, columnspan=2, padx=10, pady=(5, 3), sticky="w")
+        self.keep_original_extract_checkbox.select()
 
-        # 1. Tipo de Extracción
-        ctk.CTkLabel(self.extract_options_frame, text="Tipo:").grid(row=1, column=0, padx=(10, 5), pady=5, sticky="w")
-        self.extract_type_menu = ctk.CTkOptionMenu(
+        # 1. Checkbox "Extraer fotogramas del video" - toggle del sub-panel
+        self.extract_frames_checkbox = ctk.CTkCheckBox(
             self.extract_options_frame,
-            values=["Video a Secuencia de Imágenes"],
-            state="disabled" # Por ahora solo hay 1 opción
+            text="Extraer fotogramas del video",
+            font=ctk.CTkFont(size=12),
+            command=self._on_extract_frames_toggle
         )
-        self.extract_type_menu.grid(row=1, column=1, padx=(0, 10), pady=5, sticky="ew")
+        self.extract_frames_checkbox.grid(row=1, column=0, columnspan=2, padx=10, pady=(3, 5), sticky="w")
 
-        # 2. Formato de Imagen
-        ctk.CTkLabel(self.extract_options_frame, text="Formato:").grid(row=2, column=0, padx=(10, 5), pady=5, sticky="w")
+        # 2. Sub-panel de opciones de extracción (oculto por defecto)
+        self.extract_frames_subpanel = ctk.CTkFrame(self.extract_options_frame, fg_color="transparent")
+        self.extract_frames_subpanel.grid(row=2, column=0, columnspan=2, sticky="ew")
+        self.extract_frames_subpanel.grid_columnconfigure(1, weight=1)
+        self.extract_frames_subpanel.grid_remove()  # Oculto por defecto
+
+        # 2a. Tipo de Extraccion
+        ctk.CTkLabel(self.extract_frames_subpanel, text="Tipo:", font=ctk.CTkFont(size=12)).grid(row=0, column=0, padx=(10, 5), pady=(5, 3), sticky="w")
+        self.extract_type_menu = ctk.CTkOptionMenu(
+            self.extract_frames_subpanel,
+            values=["Video a Secuencia de Imagenes"],
+            font=ctk.CTkFont(size=12),
+            state="disabled"
+        )
+        self.extract_type_menu.grid(row=0, column=1, padx=(0, 10), pady=(5, 3), sticky="ew")
+
+        # 2b. Formato de Imagen
+        ctk.CTkLabel(self.extract_frames_subpanel, text="Formato:", font=ctk.CTkFont(size=12)).grid(row=1, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
         self.extract_format_menu = ctk.CTkOptionMenu(
-            self.extract_options_frame,
-            values=["PNG (calidad alta)", "JPG (tamaño reducido)"],
+            self.extract_frames_subpanel,
+            values=["PNG (calidad alta)", "JPG (tamano reducido)"],
+            font=ctk.CTkFont(size=12),
             command=self._toggle_extract_options
         )
-        self.extract_format_menu.grid(row=2, column=1, padx=(0, 10), pady=5, sticky="ew")
+        self.extract_format_menu.grid(row=1, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
 
-        # 3. Opciones de Calidad JPG (ocultas por defecto)
-        self.extract_jpg_quality_frame = ctk.CTkFrame(self.extract_options_frame, fg_color="transparent")
-        self.extract_jpg_quality_frame.grid(row=3, column=0, columnspan=2, sticky="ew")
+        # 2c. Opciones de Calidad JPG (ocultas hasta que se elija JPG)
+        self.extract_jpg_quality_frame = ctk.CTkFrame(self.extract_frames_subpanel, fg_color="transparent")
+        self.extract_jpg_quality_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
         self.extract_jpg_quality_frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(self.extract_jpg_quality_frame, text="Calidad JPG (1-5):").grid(row=0, column=0, padx=(10, 5), pady=5, sticky="w")
-        self.extract_jpg_quality_entry = ctk.CTkEntry(self.extract_jpg_quality_frame, placeholder_text="2 (Muy Alta)")
-        self.extract_jpg_quality_entry.grid(row=0, column=1, padx=(0, 10), pady=5, sticky="ew")
-        Tooltip(self.extract_jpg_quality_entry, "Calidad de FFmpeg (-q:v). Rango: 1 (mejor) a 31 (peor). Se recomienda 2-5.", delay_ms=1000)
-        self.extract_jpg_quality_frame.grid_forget()
+        ctk.CTkLabel(self.extract_jpg_quality_frame, text="Calidad JPG:", font=ctk.CTkFont(size=12)).grid(row=0, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
 
-        # 4. FPS
-        ctk.CTkLabel(self.extract_options_frame, text="FPS:").grid(row=4, column=0, padx=(10, 5), pady=5, sticky="w")
-        self.extract_fps_entry = ctk.CTkEntry(self.extract_options_frame, placeholder_text="Vacío = Todos los fotogramas")
-        self.extract_fps_entry.grid(row=4, column=1, padx=(0, 10), pady=5, sticky="ew")
-        Tooltip(self.extract_fps_entry, "Ej: '10' para 10 FPS.\nDéjalo vacío para extraer CADA fotograma (¡puede generar miles de archivos!)", delay_ms=1000)
+        self.extract_jpg_quality_value_label = ctk.CTkLabel(self.extract_jpg_quality_frame, text="9", width=30, anchor="e", font=ctk.CTkFont(size=12))
+        self.extract_jpg_quality_value_label.grid(row=0, column=2, padx=(5, 10), pady=(3, 3), sticky="e")
 
-        # 5. Nombre de la carpeta de salida
-        ctk.CTkLabel(self.extract_options_frame, text="Nombre de carpeta:").grid(row=5, column=0, padx=(10, 5), pady=5, sticky="w")
-        self.extract_folder_name_entry = ctk.CTkEntry(self.extract_options_frame, placeholder_text="Nombre del video + '_frames'")
-        self.extract_folder_name_entry.grid(row=5, column=1, padx=(0, 10), pady=5, sticky="ew")
-        Tooltip(self.extract_folder_name_entry, "Personaliza el nombre de la carpeta donde se guardarán las imágenes.\nSi lo dejas vacío, se usará el nombre del video.", delay_ms=1000)
+        def _on_jpg_quality_slide(value):
+            self.extract_jpg_quality_value_label.configure(text=str(int(value)))
 
-        # 6. Frame de resultados (SIEMPRE VISIBLE)
-        self.extract_results_frame = ctk.CTkFrame(self.extract_options_frame, fg_color="transparent")
-        self.extract_results_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(15, 5))
-        self.extract_results_frame.grid_columnconfigure(0, weight=1)
+        self.extract_jpg_quality_slider = ctk.CTkSlider(
+            self.extract_jpg_quality_frame,
+            from_=1, to=10,
+            number_of_steps=9,
+            command=_on_jpg_quality_slide
+        )
+        self.extract_jpg_quality_slider.set(9)
+        self.extract_jpg_quality_slider.grid(row=0, column=1, padx=(0, 5), pady=(3, 3), sticky="ew")
+        Tooltip(self.extract_jpg_quality_slider, "Calidad de la imagen JPG.\nEscala de 1 (minima) a 10 (maxima).\nSe recomienda dejar en 9 o superior.", delay_ms=1000)
+        self.extract_jpg_quality_frame.grid_remove()
 
-        # Etiqueta de éxito (inicialmente con texto vacío)
+        # 2d. FPS
+        ctk.CTkLabel(self.extract_frames_subpanel, text="FPS:", font=ctk.CTkFont(size=12)).grid(row=3, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
+        self.extract_fps_entry = ctk.CTkEntry(self.extract_frames_subpanel, placeholder_text="Vacio = Todos los fotogramas", font=ctk.CTkFont(size=12))
+        self.extract_fps_entry.grid(row=3, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
+        Tooltip(self.extract_fps_entry, "Ej: '10' para 10 FPS.\nDejalo vacio para extraer CADA fotograma (puede generar miles de archivos)", delay_ms=1000)
+
+        # 2e. Nombre de carpeta de salida
+        ctk.CTkLabel(self.extract_frames_subpanel, text="Nombre de carpeta:", font=ctk.CTkFont(size=12)).grid(row=4, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
+        self.extract_folder_name_entry = ctk.CTkEntry(self.extract_frames_subpanel, placeholder_text="Nombre del video + '_frames'", font=ctk.CTkFont(size=12))
+        self.extract_folder_name_entry.grid(row=4, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
+        Tooltip(self.extract_folder_name_entry, "Personaliza el nombre de la carpeta donde se guardaran las imagenes.\nSi lo dejas vacio, se usara el nombre del video.", delay_ms=1000)
+
+        # 2f. Frame de resultados
+        self.extract_results_frame = ctk.CTkFrame(self.extract_frames_subpanel, fg_color="transparent")
+        self.extract_results_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(5, 3))
+        self.extract_results_frame.grid_columnconfigure((0, 1), weight=1)
+
         self.extract_success_label = ctk.CTkLabel(
-            self.extract_results_frame, 
-            text="",  # ✅ Vacío por defecto
+            self.extract_results_frame,
+            text="",
             font=ctk.CTkFont(weight="bold"),
             text_color="#28A745"
         )
-        self.extract_success_label.grid(row=0, column=0, pady=(5, 10), sticky="ew")
+        self.extract_success_label.grid(row=0, column=0, columnspan=2, pady=(5, 5), sticky="ew")
 
-        # Botón para enviar a Herramientas de Imagen - SIEMPRE VISIBLE
         self.send_to_imagetools_button = ctk.CTkButton(
             self.extract_results_frame,
-            text="Enviar a Herramientas de Imagen",
+            text="Enviar a H.I",
             command=self._send_folder_to_image_tools,
             height=32,
-            state="disabled"  # ✅ Deshabilitado por defecto
+            state="disabled"
         )
-        self.send_to_imagetools_button.grid(row=1, column=0, padx=10, pady=(0, 5), sticky="ew")
-        # --- FIN DE LA NUEVA UI DE EXTRACCIÓN ---
+        self.send_to_imagetools_button.grid(row=1, column=0, padx=(10, 5), pady=(0, 5), sticky="ew")
+
+        self.extract_save_preset_btn = ctk.CTkButton(
+            self.extract_results_frame,
+            text="Guardar Preset",
+            command=self.open_save_preset_dialog,
+            height=32
+        )
+        self.extract_save_preset_btn.grid(row=1, column=1, padx=(5, 10), pady=(0, 5), sticky="ew")
+
+        # ── 3. Checkbox "Reescalar video" ──────────────────────────────────────
+        self.upscale_video_checkbox = ctk.CTkCheckBox(
+            self.extract_options_frame,
+            text="Reescalar video",
+            font=ctk.CTkFont(size=12),
+            command=self._on_upscale_video_toggle
+        )
+        self.upscale_video_checkbox.grid(row=3, column=0, columnspan=2, padx=10, pady=(3, 5), sticky="w")
+
+        # Sub-panel de reescalado (oculto por defecto)
+        self.upscale_video_subpanel = ctk.CTkFrame(self.extract_options_frame, fg_color="transparent")
+        self.upscale_video_subpanel.grid(row=4, column=0, columnspan=2, sticky="ew")
+        self.upscale_video_subpanel.grid_columnconfigure(1, weight=1)
+        self.upscale_video_subpanel.grid_remove()
+
+        # 3a. Motor
+        ctk.CTkLabel(self.upscale_video_subpanel, text="Motor:", font=ctk.CTkFont(size=12)).grid(
+            row=0, column=0, padx=(10, 5), pady=(5, 3), sticky="w")
+        self.upscale_engine_menu = ctk.CTkOptionMenu(
+            self.upscale_video_subpanel,
+            values=["Real-ESRGAN", "Waifu2x", "RealSR", "SRMD"],
+            font=ctk.CTkFont(size=12),
+            command=self._on_upscale_engine_change
+        )
+        self.upscale_engine_menu.grid(row=0, column=1, padx=(0, 10), pady=(5, 3), sticky="ew")
+        Tooltip(self.upscale_engine_menu, "Motor de IA para reescalado.\nReal-ESRGAN es el mas recomendado para video.", delay_ms=1000)
+
+        # 3b. Modelo
+        ctk.CTkLabel(self.upscale_video_subpanel, text="Modelo:", font=ctk.CTkFont(size=12)).grid(
+            row=1, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
+        self.upscale_model_menu = ctk.CTkOptionMenu(
+            self.upscale_video_subpanel,
+            values=list(REALESRGAN_MODELS.keys()),
+            font=ctk.CTkFont(size=12),
+            command=self._on_upscale_model_change
+        )
+        self.upscale_model_menu.grid(row=1, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
+        Tooltip(self.upscale_model_menu, "Modelo dentro del motor seleccionado.", delay_ms=1000)
+
+        # 3c. Escala
+        ctk.CTkLabel(self.upscale_video_subpanel, text="Escala:", font=ctk.CTkFont(size=12)).grid(
+            row=2, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
+        # Escalas iniciales del primer modelo de Real-ESRGAN
+        _initial_scales = list(REALESRGAN_MODELS.values())[0].get("scales", ["2x", "4x"])
+        self.upscale_scale_menu = ctk.CTkOptionMenu(
+            self.upscale_video_subpanel,
+            values=_initial_scales,
+            font=ctk.CTkFont(size=12)
+        )
+        self.upscale_scale_menu.grid(row=2, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
+        Tooltip(self.upscale_scale_menu, "Factor de reescalado.\nx2 duplica la resolucion, x4 la cuadruplica.", delay_ms=1000)
+
+        # 3c-2. Tile Size (Para evitar Crashes/Hangs por VRAM) - AHORA DEBAJO
+        ctk.CTkLabel(self.upscale_video_subpanel, text="Tile Size:", font=ctk.CTkFont(size=12)).grid(
+            row=3, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
+        self.upscale_tile_entry = ctk.CTkEntry(self.upscale_video_subpanel, placeholder_text="0", font=ctk.CTkFont(size=12))
+        self.upscale_tile_entry.insert(0, "0")
+        self.upscale_tile_entry.grid(row=3, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
+        Tooltip(self.upscale_tile_entry, "Tamaño del bloque de procesamiento.\n0 = Auto.\nUsa 100 o 200 si el proceso se detiene o la app se cierra.", delay_ms=1000)
+
+        # 3c-3. Reducción de Ruido (Solo Waifu2x/SRMD)
+        self.upscale_denoise_label = ctk.CTkLabel(self.upscale_video_subpanel, text="Reducir Ruido:", font=ctk.CTkFont(size=12))
+        self.upscale_denoise_label.grid(row=4, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
+        self.upscale_denoise_menu = ctk.CTkOptionMenu(
+            self.upscale_video_subpanel,
+            values=["-1 (Ninguna)", "0 (Baja)", "1 (Media)", "2 (Alta)", "3 (Máxima)"],
+            font=ctk.CTkFont(size=12)
+        )
+        self.upscale_denoise_menu.set("2 (Alta)")
+        self.upscale_denoise_menu.grid(row=4, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
+        Tooltip(self.upscale_denoise_menu, "Nivel de reducción de ruido (Solo compatible con Waifu2x y SRMD).", delay_ms=1000)
+
+        # 3d. Contenedor de salida
+        ctk.CTkLabel(self.upscale_video_subpanel, text="Contenedor:", font=ctk.CTkFont(size=12)).grid(
+            row=5, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
+        self.upscale_container_menu = ctk.CTkOptionMenu(
+            self.upscale_video_subpanel,
+            values=["Mismo que el original", "MP4", "MKV", "MOV", "AVI"],
+            font=ctk.CTkFont(size=12)
+        )
+        self.upscale_container_menu.grid(row=5, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
+        Tooltip(self.upscale_container_menu, "Formato del video de salida.\n'Mismo que el original' conserva la extension del archivo de entrada.", delay_ms=1000)
+
+        # 3e. Nombre del archivo de salida
+        ctk.CTkLabel(self.upscale_video_subpanel, text="Nombre de salida:", font=ctk.CTkFont(size=12)).grid(
+            row=6, column=0, padx=(10, 5), pady=(3, 5), sticky="w")
+        self.upscale_output_name_entry = ctk.CTkEntry(
+            self.upscale_video_subpanel,
+            placeholder_text="Nombre del video + '_upscaled'",
+            font=ctk.CTkFont(size=12)
+        )
+        self.upscale_output_name_entry.grid(row=6, column=1, padx=(0, 10), pady=(3, 5), sticky="ew")
+        Tooltip(self.upscale_output_name_entry, "Nombre personalizado para el archivo de salida.\nDejalo vacio para usar el nombre original con sufijo '_upscaled'.", delay_ms=1000)
+
+        # 3f. Estado del Motor (Instalado/No)
+        self.upscale_status_label = ctk.CTkLabel(self.upscale_video_subpanel, text="", font=ctk.CTkFont(size=10))
+        self.upscale_status_label.grid(row=7, column=0, columnspan=2, padx=10, pady=(2, 2), sticky="ew")
+
+        # 3g. Botones de Gestión (Abrir/Borrar/Guardar Preset)
+        self.upscale_mgmt_frame = ctk.CTkFrame(self.upscale_video_subpanel, fg_color="transparent")
+        self.upscale_mgmt_frame.grid(row=8, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
+        self.upscale_mgmt_frame.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self.upscale_open_btn = ctk.CTkButton(
+            self.upscale_mgmt_frame, text="Abrir", height=22, font=ctk.CTkFont(size=11),
+            fg_color="#555555", hover_color="#444444",
+            command=lambda: self._open_model_folder("upscale")
+        )
+        self.upscale_open_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+
+        self.upscale_delete_btn = ctk.CTkButton(
+            self.upscale_mgmt_frame, text="Borrar", height=22, font=ctk.CTkFont(size=11),
+            fg_color="#DC3545", hover_color="#C82333",
+            command=lambda: self._delete_current_model("upscale")
+        )
+        self.upscale_delete_btn.grid(row=0, column=1, padx=(5, 5), sticky="ew")
+
+        self.upscale_save_preset_btn = ctk.CTkButton(
+            self.upscale_mgmt_frame, text="Guardar Preset", height=22, font=ctk.CTkFont(size=11),
+            command=self.open_save_preset_dialog
+        )
+        self.upscale_save_preset_btn.grid(row=0, column=2, padx=(5, 0), sticky="ew")
+
+        # Inicializar estado del primer motor
+        self.app.after(500, lambda: self._on_upscale_engine_change("Real-ESRGAN", silent=True))
+
+        # --- FIN DE LA UI DEL MODO EXTRAS ---
 
         local_import_frame = ctk.CTkFrame(self.recode_main_frame)
         local_import_frame.pack(side="bottom", fill="x", padx=10, pady=(15, 5))
@@ -1283,8 +1355,22 @@ class SingleDownloadTab(ctk.CTkFrame):
         elif mode == "Modo Manual":
             self.recode_manual_frame.pack(side="top", fill="x", padx=0, pady=0)
         
-        elif mode == "Modo Extraer":
+        elif mode == "Extras":
             self.recode_extract_frame.pack(side="top", fill="x", padx=10, pady=0)
+            
+            # ✅ Asegurar que si estamos en Solo Audio, los extras sigan bloqueados
+            main_mode = self.mode_selector.get()
+            if main_mode == "Solo Audio":
+                self.upscale_video_checkbox.deselect()
+                self.upscale_video_checkbox.configure(state="disabled")
+                self.extract_frames_checkbox.deselect()
+                self.extract_frames_checkbox.configure(state="disabled")
+                self.upscale_video_subpanel.grid_remove()
+                self.extract_frames_subpanel.grid_remove()
+
+        # Actualizar el estado del botón al cambiar de modo
+        self.update_download_button_state()
+        self._toggle_recode_panels()
         
         self._validate_recode_compatibility()
         self._update_save_preset_visibility()
@@ -2083,45 +2169,7 @@ class SingleDownloadTab(ctk.CTkFrame):
                     container = available[codec_name].get("container", "-")
         self.recode_container_label.configure(text=container)
 
-    def manual_ffmpeg_update_check(self):
-        """Inicia una comprobación manual de la actualización de FFmpeg."""
-        self.update_ffmpeg_button.configure(state="disabled", text="Buscando...")
-        self.ffmpeg_status_label.configure(text="FFmpeg: Verificando...")
-        # Limpiar estado del otro para que no se crucen mensajes
-        self.active_downloads_state["deno"] = {"text": "", "value": 0.0, "active": False}
 
-        from src.core.setup import check_ffmpeg_status # <-- Llama a la nueva función
-
-        def check_task():
-            # Usar la nueva función de callback unificada
-            status_info = check_ffmpeg_status(
-                lambda text, val: self.update_setup_download_progress('ffmpeg', text, val)
-            )
-            # Llamar a un nuevo callback en main_window
-            self.app.after(0, self.app.on_ffmpeg_check_complete, status_info)
-
-        # Usar self.active_operation_thread para evitar conflictos
-        self.active_operation_thread = threading.Thread(target=check_task, daemon=True)
-        self.active_operation_thread.start()
-
-    def manual_deno_update_check(self):
-        """Inicia una comprobación manual de la actualización de Deno."""
-        self.update_deno_button.configure(state="disabled", text="Buscando...")
-        self.deno_status_label.configure(text="Deno: Verificando...")
-        # Limpiar estado del otro para que no se crucen mensajes
-        self.active_downloads_state["ffmpeg"] = {"text": "", "value": 0.0, "active": False}
-
-        from src.core.setup import check_deno_status # <-- Llama a la nueva función
-
-        def check_task():
-            status_info = check_deno_status(
-                lambda text, val: self.update_setup_download_progress('deno', text, val)
-            )
-            # Llamar a un nuevo callback en main_window
-            self.app.after(0, self.app.on_deno_check_complete, status_info)
-
-        self.active_operation_thread = threading.Thread(target=check_task, daemon=True)
-        self.active_operation_thread.start()
 
     def _clear_subtitle_menus(self):
         """Restablece TODOS los controles de subtítulos a su estado inicial e inactivo."""
@@ -2251,17 +2299,16 @@ class SingleDownloadTab(ctk.CTkFrame):
                     is_recode_on = self.apply_quick_preset_checkbox.get() == 1
                 elif current_recode_mode == "Modo Manual":
                     is_recode_on = self.recode_video_checkbox.get() == 1 or self.recode_audio_checkbox.get() == 1
-                elif current_recode_mode == "Modo Extraer":
-                    # 🆕 En modo extraer, siempre hay acción seleccionada
-                    is_recode_on = True
+                elif current_recode_mode == "Extras":
+                    is_recode_on = self.upscale_video_checkbox.get() == 1 or self.extract_frames_checkbox.get() == 1
                 else:
                     is_recode_on = False
                 
                 is_clip_on = self.fragment_checkbox.get() == 1
                 
-                # 🆕 Si está en Modo Extraer, no requiere otras acciones
-                if current_recode_mode == "Modo Extraer":
-                    action_is_selected_for_local_mode = True
+                # En modo Extras o Extraer, validamos si hay alguna opción activa
+                if current_recode_mode in ["Extras", "Modo Extraer"]:
+                    action_is_selected_for_local_mode = is_recode_on
                 elif not is_recode_on and not is_clip_on:
                     action_is_selected_for_local_mode = False
 
@@ -2316,11 +2363,7 @@ class SingleDownloadTab(ctk.CTkFrame):
 
         # --- Actualizar config general ---
         self.app.default_download_path = self.output_path_entry.get()
-        self.app.cookies_path = self.cookie_path_entry.get()
-        self.app.cookies_mode_saved = self.cookie_mode_menu.get()
-        self.app.selected_browser_saved = self.browser_var.get()
-        self.app.browser_profile_saved = self.browser_profile_entry.get()
-        
+
         # --- Actualizar config de Presets ---
         self.app.custom_presets = getattr(self, 'custom_presets', [])
         
@@ -2619,11 +2662,25 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.recode_video_checkbox.grid()
             self.recode_audio_checkbox.configure(text="Recodificar Audio")
             
+            # ✅ RE-HABILITAR EXTRAS
+            self.upscale_video_checkbox.configure(state="normal")
+            self.extract_frames_checkbox.configure(state="normal")
+            
             # 🆕 Solo llamar a on_video_quality_change si NO es modo local
             if not self.local_file_path:
                 self.on_video_quality_change(self.video_quality_menu.get())
             
         elif mode == "Solo Audio":
+            # ✅ BLOQUEAR EXTRAS EN AUDIO
+            self.upscale_video_checkbox.deselect()
+            self.upscale_video_checkbox.configure(state="disabled")
+            self.extract_frames_checkbox.deselect()
+            self.extract_frames_checkbox.configure(state="disabled")
+            
+            # Ocultar sub-paneles si estaban abiertos
+            self.upscale_video_subpanel.grid_remove()
+            self.extract_frames_subpanel.grid_remove()
+
             # 🆕 CRÍTICO: Verificar si REALMENTE hay audio disponible
             print("DEBUG: Cambiando a modo Solo Audio")
             
@@ -3320,6 +3377,12 @@ class SingleDownloadTab(ctk.CTkFrame):
         Guarda la configuración actual como un preset personalizado en presets.json
         """
         try:
+            recode_container_val = self.recode_container_label.cget("text")
+            if recode_container_val == "-":
+                # Si se guarda un preset desde Extras o antes de analizar un link, el contenedor puede estar vacío ("-").
+                # Forzamos un contenedor válido por defecto (ej: .mp4) para evitar fallos de inicialización del Muxer en lotes.
+                recode_container_val = ".mp4"
+                
             current_preset_data = {
                 "mode_compatibility": self.mode_selector.get(),
                 "recode_video_enabled": self.recode_video_checkbox.get() == 1,
@@ -3331,7 +3394,7 @@ class SingleDownloadTab(ctk.CTkFrame):
                 "custom_bitrate_value": self.custom_bitrate_entry.get(),
                 "custom_gif_fps": self.custom_gif_fps_entry.get(),
                 "custom_gif_width": self.custom_gif_width_entry.get(),
-                "recode_container": self.recode_container_label.cget("text"),
+                "recode_container": recode_container_val,
                 "recode_audio_codec_name": self.recode_audio_codec_menu.get(),
                 "recode_audio_profile_name": self.recode_audio_profile_menu.get(),
                 "fps_force_enabled": self.fps_checkbox.get() == 1,
@@ -3340,6 +3403,18 @@ class SingleDownloadTab(ctk.CTkFrame):
                 "res_width": self.width_entry.get(),
                 "res_height": self.height_entry.get(),
                 "no_upscaling_enabled": self.no_upscaling_checkbox.get() == 1,
+                "extract_frames_enabled": self.extract_frames_checkbox.get() == 1,
+                "extract_type": self.extract_type_menu.get(),
+                "extract_format": self.extract_format_menu.get(),
+                "extract_jpg_quality": self.extract_jpg_quality_slider.get(),
+                "extract_fps": self.extract_fps_entry.get(),
+                "upscale_video_enabled": self.upscale_video_checkbox.get() == 1,
+                "upscale_engine": self.upscale_engine_menu.get(),
+                "upscale_model": self.upscale_model_menu.get(),
+                "upscale_scale": self.upscale_scale_menu.get(),
+                "upscale_tile": self.upscale_tile_entry.get(),
+                "upscale_denoise": self.upscale_denoise_menu.get(),
+                "upscale_container": self.upscale_container_menu.get(),
             }
             
             presets_data = self._load_presets()
@@ -3532,46 +3607,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         
         self.dnd_overlay.lift()
 
-    def _on_cookie_detail_change(self, event=None):
-        """Callback for when specific cookie details (path, browser, profile) change."""
-        print("DEBUG: Cookie details changed. Clearing analysis cache.")
-        self.analysis_cache.clear()
-        self.save_settings()
 
-    def on_cookie_mode_change(self, mode):
-        """Muestra u oculta las opciones de cookies según el modo seleccionado."""
-        
-        # 🆕 NUEVO: Manejar la opción de ayuda
-        if mode == "¿Cómo obtener cookies?":
-            self._open_cookie_extension_link()
-            # Restaurar al modo anterior (o "No usar" si no había)
-            previous_mode = getattr(self, '_previous_cookie_mode', "No usar")
-            self.cookie_mode_menu.set(previous_mode)
-            return
-        
-        # Guardar el modo actual para poder volver después
-        self._previous_cookie_mode = mode
-        
-        print("DEBUG: Cookie mode changed. Clearing analysis cache.")
-        self.analysis_cache.clear()
-        
-        if mode == "Archivo Manual...":
-            self.manual_cookie_frame.pack(fill="x", padx=10, pady=(0, 10))
-            self.browser_options_frame.pack_forget()
-        elif mode == "Desde Navegador":
-            self.manual_cookie_frame.pack_forget()
-            self.browser_options_frame.pack(fill="x", padx=10, pady=(0, 10))
-        else:  # "No usar"
-            self.manual_cookie_frame.pack_forget()
-            self.browser_options_frame.pack_forget()
-        
-        self.save_settings()
-
-    def _open_cookie_extension_link(self):
-        """Abre la página de GitHub de la extensión Get cookies.txt LOCALLY"""
-        import webbrowser
-        webbrowser.open_new_tab("https://github.com/kairi003/Get-cookies.txt-LOCALLY")
-        print("DEBUG: Abriendo enlace de extensión de cookies en el navegador")
 
     def toggle_manual_thumbnail_button(self):
         is_checked = self.auto_save_thumbnail_check.get() == 1
@@ -3727,13 +3763,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         except Exception as e:
             print(f"Error al abrir carpeta: {e}")
 
-    def select_cookie_file(self):
-        filepath = filedialog.askopenfilename(title="Selecciona tu archivo cookies.txt", filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
-        if filepath:
-            self.cookie_path_entry.delete(0, 'end')
-            self.cookie_path_entry.insert(0, filepath)
-            self.app.cookies_path = filepath
-            self.save_settings()
+
 
     def save_thumbnail(self):
         if not self.pil_image: return
@@ -3782,12 +3812,12 @@ class SingleDownloadTab(ctk.CTkFrame):
             if subtitle_info.get('automatic', False):
                 command.append('--write-auto-sub')
                 
-            cookie_mode = self.cookie_mode_menu.get()
-            if cookie_mode == "Archivo Manual..." and self.cookie_path_entry.get():
-                command.extend(['--cookies', self.cookie_path_entry.get()])
+            cookie_mode = self.app.cookies_mode_saved
+            if cookie_mode == "Archivo Manual..." and self.app.cookies_path:
+                command.extend(['--cookies', self.app.cookies_path])
             elif cookie_mode != "No usar":
-                browser_arg = self.browser_var.get()
-                profile = self.browser_profile_entry.get()
+                browser_arg = self.app.selected_browser_saved
+                profile = self.app.browser_profile_saved
                 if profile: 
                     browser_arg += f":{profile}"
                 command.extend(['--cookies-from-browser', browser_arg])
@@ -4043,10 +4073,10 @@ class SingleDownloadTab(ctk.CTkFrame):
             "recode_audio_codec_name": self.recode_audio_codec_menu.get(),
             "recode_audio_profile_name": self.recode_audio_profile_menu.get(),
             "speed_limit": self.speed_limit_entry.get(),
-            "cookie_mode": self.cookie_mode_menu.get(),
-            "cookie_path": self.cookie_path_entry.get(),
-            "selected_browser": self.browser_var.get(),
-            "browser_profile": self.browser_profile_entry.get(),
+            "cookie_mode": self.app.cookies_mode_saved,
+            "cookie_path": self.app.cookies_path,
+            "selected_browser": self.app.selected_browser_saved,
+            "browser_profile": self.app.browser_profile_saved,
             "download_subtitles": self.auto_download_subtitle_check.get() == 1,
             "selected_subtitle_info": self.selected_subtitle_info,
             "fps_force_enabled": self.fps_checkbox.get() == 1,
@@ -4070,87 +4100,107 @@ class SingleDownloadTab(ctk.CTkFrame):
         # --- EL NUEVO "ROUTER" LÓGICO ---
         recode_mode = self.recode_mode_selector.get()
 
-        if recode_mode == "Modo Rápido" or recode_mode == "Modo Manual":
-            
-            # --- Lógica de Recodificación (tu código existente) ---
-            print("DEBUG: Iniciando Hilo de Recodificación/Descarga.")
-            
-            # Recolectar opciones de recodificación
-            if recode_mode == "Modo Rápido":
-                if self.apply_quick_preset_checkbox.get() == 1:
-                    selected_preset_name = self.recode_preset_menu.get()
-                    preset_params = self._find_preset_params(selected_preset_name)
-                    options.update(preset_params)
-                options["keep_original_file"] = self.keep_original_quick_checkbox.get() == 1
-                
-                # Llamar al hilo de trabajo
+        if recode_mode == "Modo Rápido":
+            if self.apply_quick_preset_checkbox.get() == 1:
+                selected_preset_name = self.recode_preset_menu.get()
+                preset_params = self._find_preset_params(selected_preset_name)
+                options.update(preset_params)
+            # La casilla de la UI siempre tiene prioridad sobre el valor guardado en el preset
+            options["keep_original_file"] = self.keep_original_quick_checkbox.get() == 1
+            options["keep_originals"] = self.keep_original_quick_checkbox.get() == 1  # Clave para upscaling
+
+            # Checks for Extra actions in preset
+            if options.get("extract_frames_enabled"):
+                print("DEBUG: Iniciando Hilo de Extraccion (desde Preset).")
+                self.active_operation_thread = threading.Thread(
+                    target=self._execute_extraction_thread, args=(options,), daemon=True)
+                self.active_operation_thread.start()
+            elif options.get("upscale_video_enabled"):
+                print("DEBUG: Iniciando Hilo de Reescalado (desde Preset).")
+                self.active_operation_thread = threading.Thread(
+                    target=self._execute_video_upscale_thread, args=(options,), daemon=True)
+                self.active_operation_thread.start()
+            else:
+                print("DEBUG: Iniciando Hilo de Recodificación/Descarga (Modo Rapido).")
                 self.active_operation_thread = threading.Thread(target=self._execute_download_and_recode, args=(options,), daemon=True)
                 self.active_operation_thread.start()
 
-            elif recode_mode == "Modo Manual":
-                manual_options = {
-                    "recode_video_enabled": self.recode_video_checkbox.get() == 1,
-                    "recode_audio_enabled": self.recode_audio_checkbox.get() == 1,
-                    "keep_original_file": self.keep_original_checkbox.get() == 1,
-                    "recode_proc": self.proc_type_var.get(),
-                    "recode_codec_name": self.recode_codec_menu.get(),
-                    "recode_profile_name": self.recode_profile_menu.get(),
-                    "custom_bitrate_value": self.custom_bitrate_entry.get(),
-                    "custom_gif_fps": self.custom_gif_fps_entry.get() or "15",
-                    "custom_gif_width": self.custom_gif_width_entry.get() or "480",
-                    "recode_container": self.recode_container_label.cget("text"),
-                    "recode_audio_codec_name": self.recode_audio_codec_menu.get(),
-                    "recode_audio_profile_name": self.recode_audio_profile_menu.get(),
-                    "fps_force_enabled": self.fps_checkbox.get() == 1,
-                    "fps_value": self.fps_entry.get(),
-                    "resolution_change_enabled": self.resolution_checkbox.get() == 1,
-                    "res_width": self.width_entry.get(),
-                    "res_height": self.height_entry.get(),
-                    "no_upscaling_enabled": self.no_upscaling_checkbox.get() == 1,
-                    "resolution_preset": self.resolution_preset_menu.get(),
-                    "original_width": self.original_video_width,
-                    "original_height": self.original_video_height,
-                }
-                options.update(manual_options)
-                
-                # Llamar al hilo de trabajo
-                self.active_operation_thread = threading.Thread(target=self._execute_download_and_recode, args=(options,), daemon=True)
-                self.active_operation_thread.start()
+        elif recode_mode == "Modo Manual":
+            print("DEBUG: Iniciando Hilo de Recodificación/Descarga (Modo Manual).")
+            manual_options = {
+                "recode_video_enabled": self.recode_video_checkbox.get() == 1,
+                "recode_audio_enabled": self.recode_audio_checkbox.get() == 1,
+                "keep_original_file": self.keep_original_checkbox.get() == 1,
+                "recode_proc": self.proc_type_var.get(),
+                "recode_codec_name": self.recode_codec_menu.get(),
+                "recode_profile_name": self.recode_profile_menu.get(),
+                "custom_bitrate_value": self.custom_bitrate_entry.get(),
+                "custom_gif_fps": self.custom_gif_fps_entry.get() or "15",
+                "custom_gif_width": self.custom_gif_width_entry.get() or "480",
+                "recode_container": self.recode_container_label.cget("text"),
+                "recode_audio_codec_name": self.recode_audio_codec_menu.get(),
+                "recode_audio_profile_name": self.recode_audio_profile_menu.get(),
+                "fps_force_enabled": self.fps_checkbox.get() == 1,
+                "fps_value": self.fps_entry.get(),
+                "resolution_change_enabled": self.resolution_checkbox.get() == 1,
+                "res_width": self.width_entry.get(),
+                "res_height": self.height_entry.get(),
+                "no_upscaling_enabled": self.no_upscaling_checkbox.get() == 1,
+                "resolution_preset": self.resolution_preset_menu.get(),
+                "original_width": self.original_video_width,
+                "original_height": self.original_video_height,
+            }
+            options.update(manual_options)
+            
+            # Llamar al hilo de trabajo
+            self.active_operation_thread = threading.Thread(target=self._execute_download_and_recode, args=(options,), daemon=True)
+            self.active_operation_thread.start()
 
-            elif recode_mode == "Modo Extraer":
-                # --- NUEVA Lógica de Extracción ---
-                print("DEBUG: Iniciando Hilo de Extracción.")
-                
-                # Recolectar opciones de EXTRACCIÓN
+        elif recode_mode == "Extras":
+            # --- Extras: extraccion o reescalado ---
+            extract_checked = self.extract_frames_checkbox.get() == 1
+            upscale_checked = self.upscale_video_checkbox.get() == 1
+
+            if not extract_checked and not upscale_checked:
+                self.progress_label.configure(text="Activa al menos una opcion en Extras.")
+                self._reset_download_button()
+                return
+
+            if extract_checked:
+                print("DEBUG: Iniciando Hilo de Extraccion.")
                 extract_options = {
                     "extract_type": self.extract_type_menu.get(),
-                    "extract_format": "jpg" if self.extract_format_menu.get() == "JPG (tamaño reducido)" else "png",
-                    "extract_jpg_quality": self.extract_jpg_quality_entry.get() or "2",
+                    "extract_format": "jpg" if self.extract_format_menu.get().startswith("JPG") else "png",
+                    "extract_jpg_quality": str(11 - int(self.extract_jpg_quality_slider.get())),
                     "extract_fps": self.extract_fps_entry.get() or None
                 }
                 options.update(extract_options)
-                
-                # Llamar al Hilo de trabajo NUEVO
-                self.active_operation_thread = threading.Thread(target=self._execute_extraction_thread, args=(options,), daemon=True)
+                self.active_operation_thread = threading.Thread(
+                    target=self._execute_extraction_thread, args=(options,), daemon=True)
                 self.active_operation_thread.start()
 
-        elif recode_mode == "Modo Extraer":
-            
-            # --- NUEVA Lógica de Extracción ---
-            print("DEBUG: Iniciando Hilo de Extracción.")
-            
-            # 1. Recolectar opciones de EXTRACCIÓN
-            extract_options = {
-                "extract_type": self.extract_type_menu.get(),
-                "extract_format": "jpg" if self.extract_format_menu.get() == "JPG (tamaño reducido)" else "png",
-                "extract_jpg_quality": self.extract_jpg_quality_entry.get() or "2",
-                "extract_fps": self.extract_fps_entry.get() or None
-            }
-            options.update(extract_options) # Añadirlas a las opciones base
-            
-            # 2. Llamar al Hilo de trabajo NUEVO
-            self.active_operation_thread = threading.Thread(target=self._execute_extraction_thread, args=(options,), daemon=True)
-            self.active_operation_thread.start()
+            elif upscale_checked:
+                print("DEBUG: Iniciando Hilo de Reescalado.")
+                container_raw = self.upscale_container_menu.get()
+                container_ext = (
+                    "" if container_raw == "Mismo que el original"
+                    else "." + container_raw.lower()
+                )
+                upscale_options = {
+                    "upscale_engine":          self.upscale_engine_menu.get(),
+                    "upscale_model_friendly":  self.upscale_model_menu.get(),
+                    "upscale_scale":           self.upscale_scale_menu.get(),
+                    "upscale_container":       container_ext,
+                    "upscale_output_name":     self.upscale_output_name_entry.get(),
+                    "upscale_tile":            self.upscale_tile_entry.get() or "0",
+                    "upscale_denoise":         self.upscale_denoise_menu.get().split(" ")[0], # "-1", "0", etc.
+                    "keep_originals":          self.keep_original_checkbox.get() == 1
+                }
+                options.update(upscale_options)
+                self.active_operation_thread = threading.Thread(
+                    target=self._execute_video_upscale_thread, args=(options,), daemon=True)
+                self.active_operation_thread.start()
+
 
     def _execute_download_and_recode(self, options):
         # 1. Guardar tiempos de corte originales (porque se limpian durante el proceso)
@@ -4663,7 +4713,7 @@ class SingleDownloadTab(ctk.CTkFrame):
             
             raise e
 
-    def _perform_download(self, options, user_facing_title, audio_extraction_fallback):
+    def _perform_download(self, options, user_facing_title, audio_extraction_fallback, override_output_dir=None):
         downloaded_filepath = None
         temp_video_for_extraction = None
         self.app.after(0, self.update_progress, 0, "Iniciando descarga...")
@@ -4671,7 +4721,8 @@ class SingleDownloadTab(ctk.CTkFrame):
         video_format_info = self.video_formats.get(options["video_format_label"], {})
         audio_format_info = self.audio_formats.get(options["audio_format_label"], {})
         mode = options["mode"]
-        output_template = os.path.join(options["output_path"], f"{user_facing_title}.%(ext)s")
+        effective_output_dir = override_output_dir if override_output_dir else options["output_path"]
+        output_template = os.path.join(effective_output_dir, f"{user_facing_title}.%(ext)s")
         
         # 🔧 PASO 1: Determinar los format_ids correctos
         video_format_id = video_format_info.get('format_id')
@@ -4882,7 +4933,17 @@ class SingleDownloadTab(ctk.CTkFrame):
                 if is_fragment_mode:
                     try:
                         print(f"DEBUG: 🎬 Intentando descarga directa de fragmento")
-                        downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                        
+                        # FIX: DowP's custom FFmpeg binary freezes when fetching YouTube HTTPS range requests.
+                        # We temporarily remove 'ffmpeg_location' to force yt-dlp to use the system FFmpeg.
+                        # If system FFmpeg doesn't exist, it will instantly raise a DownloadError and trigger the fallback dialog.
+                        original_ffmpeg = ydl_opts.pop('ffmpeg_location', None)
+                        try:
+                            downloaded_filepath = download_media(options["url"], ydl_opts, self.update_progress, self.cancellation_event)
+                        finally:
+                            if original_ffmpeg:
+                                ydl_opts['ffmpeg_location'] = original_ffmpeg
+                                
                         print(f"DEBUG: ✅ Fragmento descargado: {downloaded_filepath}")
                         
                         # Desactivar recorte post-descarga
@@ -5568,7 +5629,7 @@ class SingleDownloadTab(ctk.CTkFrame):
 
             # ✅ PASO 1: Detectar YouTube y uso de cookies
             is_youtube = 'youtube.com' in url.lower() or 'youtu.be' in url.lower()
-            cookie_mode = self.cookie_mode_menu.get()
+            cookie_mode = self.app.cookies_mode_saved
             using_cookies = cookie_mode != "No usar"
             
             # 🔍 DEBUG - Solo si quieres ver qué está pasando
@@ -5589,11 +5650,11 @@ class SingleDownloadTab(ctk.CTkFrame):
             }
             
             # ✅ PASO 2b: Configurar cookies PRIMERO
-            if cookie_mode == "Archivo Manual..." and self.cookie_path_entry.get():
-                ydl_opts['cookiefile'] = self.cookie_path_entry.get()
+            if cookie_mode == "Archivo Manual..." and self.app.cookies_path:
+                ydl_opts['cookiefile'] = self.app.cookies_path
             elif cookie_mode != "No usar":
-                browser_arg = self.browser_var.get()
-                profile = self.browser_profile_entry.get()
+                browser_arg = self.app.selected_browser_saved
+                profile = self.app.browser_profile_saved
                 if profile:
                     browser_arg += f":{profile}"
                 ydl_opts['cookiesfrombrowser'] = (browser_arg,)
@@ -6621,12 +6682,276 @@ class SingleDownloadTab(ctk.CTkFrame):
     #-- FUNCIONES PARA DESCOMPONER UN VIDEO EN FRAMES --#
 
     def _toggle_extract_options(self, *args):
-        """Muestra u oculta las opciones de calidad de JPG en el modo Extraer."""
+        """Muestra u oculta las opciones de calidad de JPG en el modo Extras."""
         selected_format = self.extract_format_menu.get()
-        if selected_format == "JPG (tamaño reducido)":
+        if selected_format.startswith("JPG"):
             self.extract_jpg_quality_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
         else:
-            self.extract_jpg_quality_frame.grid_forget()
+            self.extract_jpg_quality_frame.grid_remove()
+
+    def _on_extract_frames_toggle(self):
+        """Muestra u oculta el sub-panel de extraccion de fotogramas."""
+        if self.extract_frames_checkbox.get():
+            self.extract_frames_subpanel.grid()
+        else:
+            self.extract_frames_subpanel.grid_remove()
+        self.update_download_button_state()
+
+    # ─── Reescalar video — callbacks de UI ───────────────────────────────────
+
+    def _on_upscale_video_toggle(self):
+        """Muestra u oculta el sub-panel de reescalado de video."""
+        if self.upscale_video_checkbox.get():
+            self.upscale_video_subpanel.grid()
+        else:
+            self.upscale_video_subpanel.grid_remove()
+        self.update_download_button_state()
+
+    def _on_upscale_engine_change(self, engine: str, silent=False):
+        """Actualiza la lista de modelos segun el motor seleccionado."""
+        # Mapeo de motores a constantes de modelos
+        engine_map = {
+            "Real-ESRGAN": REALESRGAN_MODELS,
+            "Waifu2x":     WAIFU2X_MODELS,
+            "RealSR":      REALSR_MODELS,
+            "SRMD":        SRMD_MODELS,
+        }
+        
+        models_dict = engine_map.get(engine, REALESRGAN_MODELS)
+        model_names = list(models_dict.keys())
+        
+        self.upscale_model_menu.configure(values=model_names)
+        self.upscale_model_menu.set(model_names[0])
+        
+        # Mostrar/Ocultar Denoise según el motor
+        if engine in ["Waifu2x", "SRMD"]:
+            self.upscale_denoise_label.grid()
+            self.upscale_denoise_menu.grid()
+        else:
+            self.upscale_denoise_label.grid_remove()
+            self.upscale_denoise_menu.grid_remove()
+
+        # Disparar actualizacion de escalas y chequeo de instalacion
+        self._on_upscale_model_change(model_names[0], engine=engine, silent=silent)
+
+    def _on_upscale_model_change(self, selected_model_friendly: str, engine=None, silent=False):
+        """
+        Actualiza las escalas validas y verifica si el motor esta instalado.
+        Si no esta, ofrece descarga (a menos que silent=True).
+        """
+        if engine is None:
+            engine = self.upscale_engine_menu.get()
+            
+        # 1. PARTE A: VERIFICACIÓN DE INSTALACIÓN
+        engine_map = {
+            "Real-ESRGAN": ("realesrgan", "realesrgan-ncnn-vulkan.exe"),
+            "Waifu2x": ("waifu2x", "waifu2x-ncnn-vulkan.exe"),
+            "RealSR": ("realsr", "realsr-ncnn-vulkan.exe"),
+            "SRMD": ("srmd", "srmd-ncnn-vulkan.exe")
+        }
+        
+        engine_key = engine.split(" ")[0] # Por si tiene algun "(Fotos)" extra
+        folder, exe = engine_map.get(engine_key, ("realesrgan", ""))
+        
+        exe_path = os.path.join(UPSCALING_DIR, folder, exe)
+        is_installed = os.path.exists(exe_path)
+        
+        # Actualizar UI
+        if is_installed:
+            self.upscale_status_label.configure(text="✅ Motor listo", text_color="gray")
+            self.upscale_delete_btn.configure(state="normal")
+        else:
+            self.upscale_status_label.configure(text="⚠️ Motor no instalado", text_color="orange")
+            self.upscale_delete_btn.configure(state="disabled")
+            
+            # Lógica de Descarga Automática (si no es silencioso)
+            if not silent:
+                from src.core.setup import get_remote_file_size, format_size, check_and_download_upscaling_tools
+                
+                tool_info = UPSCALING_TOOLS.get(engine_key)
+                if tool_info:
+                    self.upscale_status_label.configure(text="Consultando tamaño...", text_color="#52a2f2")
+                    self.update()
+                    
+                    file_size = get_remote_file_size(tool_info["url"])
+                    size_str = format_size(file_size)
+                    
+                    user_response = messagebox.askyesno(
+                        "Descargar Motor IA",
+                        f"El motor '{engine_key}' no está instalado.\n\n"
+                        f"Tamaño de descarga: {size_str}\n\n"
+                        "¿Deseas descargarlo ahora?"
+                    )
+                    
+                    if user_response:
+                        self.upscale_status_label.configure(text="Iniciando descarga...", text_color="#52a2f2")
+                        
+                        def download_thread():
+                            def progress_cb(text, val):
+                                self.app.after(0, lambda t=text: self.upscale_status_label.configure(text=t))
+
+                            success = check_and_download_upscaling_tools(progress_cb, target_tool=engine_key)
+                            
+                            if success:
+                                self.app.after(0, lambda: self._on_upscale_model_change(selected_model_friendly, engine, silent=True))
+                            else:
+                                self.app.after(0, lambda: self.upscale_status_label.configure(text="❌ Error descarga", text_color="red"))
+
+                        threading.Thread(target=download_thread, daemon=True).start()
+                    else:
+                        self.upscale_status_label.configure(text="⚠️ Descarga cancelada", text_color="orange")
+
+        # 2. PARTE B: ACTUALIZAR MENÚ DE ESCALAS
+        engine_models_map = {
+            "Real-ESRGAN": REALESRGAN_MODELS,
+            "Waifu2x":     WAIFU2X_MODELS,
+            "RealSR":      REALSR_MODELS,
+            "SRMD":        SRMD_MODELS,
+        }
+        
+        models_dict = engine_models_map.get(engine_key, REALESRGAN_MODELS)
+        valid_scales = models_dict.get(selected_model_friendly, {}).get("scales", ["2x", "4x"])
+        
+        self.upscale_scale_menu.configure(values=valid_scales)
+        current_scale = self.upscale_scale_menu.get()
+        if current_scale not in valid_scales:
+            self.upscale_scale_menu.set(valid_scales[0])
+
+    def _open_model_folder(self, tool_type: str):
+        """Abre la carpeta de modelos en el explorador."""
+        engine_name = self.upscale_engine_menu.get().split(" ")[0]
+        engine_folder_map = {
+            "Real-ESRGAN": "realesrgan",
+            "Waifu2x": "waifu2x",
+            "RealSR": "realsr",
+            "SRMD": "srmd"
+        }
+        folder = engine_folder_map.get(engine_name, "realesrgan")
+        target_dir = os.path.join(UPSCALING_DIR, folder)
+        
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir, exist_ok=True)
+            
+        try:
+            os.startfile(target_dir)
+        except Exception as e:
+            print(f"Error abriendo carpeta: {e}")
+
+    def _delete_current_model(self, tool_type: str):
+        """Borra el motor de IA seleccionado tras confirmar."""
+        engine_name = self.upscale_engine_menu.get().split(" ")[0]
+        engine_folder_map = {
+            "Real-ESRGAN": "realesrgan",
+            "Waifu2x": "waifu2x",
+            "RealSR": "realsr",
+            "SRMD": "srmd"
+        }
+        folder = engine_folder_map.get(engine_name, "")
+        if not folder: return
+        
+        target_dir = os.path.join(UPSCALING_DIR, folder)
+        
+        if not os.path.exists(target_dir):
+            messagebox.showinfo("Borrar Motor", f"El motor '{engine_name}' no parece estar instalado.")
+            return
+
+        confirm = messagebox.askyesno(
+            "Confirmar Borrado",
+            f"¿Estás seguro de que deseas borrar el motor '{engine_name}'?\n\n"
+            "Se eliminarán todos los archivos del binario y modelos asociados."
+        )
+        
+        if confirm:
+            try:
+                import shutil
+                shutil.rmtree(target_dir)
+                messagebox.showinfo("Motor Borrado", f"El motor '{engine_name}' ha sido eliminado correctamente.")
+                self._on_upscale_engine_change(self.upscale_engine_menu.get(), silent=True)
+            except Exception as e:
+                messagebox.showerror("Error al borrar", f"No se pudo eliminar la carpeta:\n{e}")
+
+    # ─── Reescalar video — hilo de trabajo ───────────────────────────────────
+
+    def _execute_video_upscale_thread(self, options: dict):
+        """
+        Hilo de trabajo para reescalado de video.
+        Bridge delgado: prepara rutas, instancia VideoUpscaler, llama upscale_video().
+        """
+        downloaded_input_path = None  # Ruta del video descargado (solo en modo URL)
+        try:
+            output_dir = options.get("output_path", "")
+            title = options.get("title", "video")
+
+            # Determinar archivo de entrada
+            if self.local_file_path:
+                input_path = self.local_file_path
+                if not output_dir or self.save_in_same_folder_check.get() == 1:
+                    output_dir = os.path.dirname(input_path)
+            else:
+                # Modo URL: descargar a la carpeta normal del usuario con nombre limpio
+                self.app.after(0, self.update_progress, -1, "Descargando video para reescalar...")
+                base_filename = self.sanitize_filename(title)
+                downloaded_input_path, _ = self._perform_download(
+                    options, base_filename,
+                    audio_extraction_fallback=False
+                )
+                input_path = downloaded_input_path
+
+            if self.cancellation_event.is_set():
+                raise UserCancelledError("Cancelado por el usuario.")
+
+            # Determinar nombre de salida
+            custom_name = options.get("upscale_output_name", "").strip()
+            if custom_name:
+                out_stem = self.sanitize_filename(custom_name)
+            else:
+                orig_stem = os.path.splitext(os.path.basename(input_path))[0]
+                scale_label = str(options.get("upscale_scale", "2")).replace("x", "")
+                out_stem = f"{orig_stem}_upscaled_x{scale_label}"
+
+            # Placeholder de extension (VideoUpscaler lo ajusta segun contenedor)
+            desired_out_path = os.path.join(output_dir, out_stem + ".mp4")
+
+            # --- RESOLUCIÓN DE CONFLICTOS ---
+            try:
+                out_path, _ = self._resolve_output_path(desired_out_path)
+            except UserCancelledError:
+                raise UserCancelledError("Operación cancelada por el usuario (conflicto de archivo).")
+            # --- FIN RESOLUCIÓN ---
+
+            # Determinar carpeta de FFmpeg
+            ffmpeg_dir = os.path.dirname(self.ffmpeg_processor.ffmpeg_path)
+
+            upscaler = VideoUpscaler(
+                ffmpeg_dir=ffmpeg_dir,
+                upscaling_dir=UPSCALING_DIR,
+                cancellation_event=self.cancellation_event,
+                progress_callback=self.update_progress
+            )
+
+            final_path = upscaler.upscale_video(input_path, out_path, options)
+
+            # Si vino de URL: respetar la preferencia del usuario sobre conservar el original
+            keep_originals = options.get("keep_originals", False)
+            if downloaded_input_path and os.path.exists(downloaded_input_path):
+                if not keep_originals:
+                    try:
+                        os.remove(downloaded_input_path)
+                    except Exception:
+                        pass
+                else:
+                    print(f"DEBUG [VideoUpscale] Original descargado conservado en: {downloaded_input_path}")
+
+            # Finalizar exitosamente
+            self.app.after(0, self.on_process_finished, True, "Video reescalado correctamente.", final_path)
+
+        except UserCancelledError as e:
+            self.app.after(0, self.on_process_finished, False, str(e), None, False) # Sin dialogo para cancelacion
+        except Exception as e:
+            cleaned_message = self._clean_ansi_codes(str(e))
+            print(f"ERROR [VideoUpscale]: {cleaned_message}")
+            self.app.after(0, self.on_process_finished, False, cleaned_message, None, True) # Con dialogo para errores
+
 
     def _send_folder_to_image_tools(self):
         """
