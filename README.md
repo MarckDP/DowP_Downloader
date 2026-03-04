@@ -16,21 +16,27 @@ Es una interfaz gráfica para **`yt-dlp`** y **`ffmpeg`** desarrollada en **`Pyt
 - **Proceso por Lotes**: Gestión masiva de Playlists y listas de URLs.
 - **Herramientas de Imagen**: Procesamiento vectorial, RAW y eliminación de fondos con IA.
 - **Ajustes**: Configuración global de la aplicación y gestión de dependencias.
+## 💻 Cómo Usar o Compilar el Código Fuente
 
-## Instalación
-Solo descarga el [DowP.exe](https://github.com/MarckDP/DowP_Downloader/releases) y ya.
+Este repositorio contiene el **código fuente** de la aplicación.
+Si solo deseas instalar y usar el programa finalizado, dirígete al [Repositorio Principal de DowP (Releases)](https://github.com/MarckDP/DowP/releases) y descarga el setup `.exe`.
 
+Si eres desarrollador y deseas clonar, usar o compilar este código fuente en tu máquina:
 
-Pero si quieres en codigo: 
-
+1. **Clona el repositorio** e instala los requerimientos:
    ```bash
+   git clone https://github.com/MarckDP/DowP_Downloader.git
+   cd DowP_Downloader
    pip install -r requirements.txt
    ```
-
-3. **FFmpeg**: Se instala automáticamente (repositorio **gyanv** para máxima estabilidad). Si necesitas instalarlo manualmente:
-   - Descarga [FFmpeg](https://www.gyan.dev/ffmpeg/builds/)
-   - Instálalo en el **PATH** de tu sistema, o
-   - Copia la carpeta `bin` a la carpeta donde tengas el DowP.exe
+2. **Ejecutar desde el código**:
+   Simplemente ejecuta el archivo principal:
+   ```bash
+   python main.py
+   ```
+3. **Dependencias Externas**:
+   - **FFmpeg**: Se descarga automáticamente desde dentro de la app (repositorio **gyanv**).
+   - Opcionalmente puedes compilarlo a ejecutable usando PyInstaller u otras herramientas que prefieras.
 ## Características Principales
 
 DowP cuenta con dos modos principales: **Modo URL** y **Recodificación Local**. Las opciones de recodificación son las mismas en ambos casos.
@@ -250,8 +256,3 @@ Si DowP no puede descargar, intentará automáticamente:
 ### Problemas con Playlists
 
 Para URLs con playlists de sitios poco comunes que muestren error "No se puede encontrar la ruta del archivo", verifica que uses la URL correcta del video/audio individual. En ocasiones con URLs con playlist de sitios poco comunes, puede llegar a fallar en determinar qué archivo descargar, y DowP no está hecho para descargar archivos en cola (por ahora). Las descargas en cola se implementarán en futuras actualizaciones.
-
----
-
-## 🚀 Notas Finales
-Desarrollado con el soporte de Gemini (IA).
