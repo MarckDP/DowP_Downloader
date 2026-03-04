@@ -2,14 +2,20 @@
 
 **Está hecho con IA (Gemini).**
 
-Es una GUI para **`yt-dlp`** y **`ffmpeg`** hecha con **`Python`**. Sirve para descargar videos y/o recodificar videos tanto al descargar como al importar archivos locales en el mismo programa. Lo pensé para editores de video, principalmente para **Adobe Premiere Pro**.
+Es una interfaz gráfica para **`yt-dlp`** y **`ffmpeg`** desarrollada en **`Python`**. Permite la descarga y/o recodificación de medios (video y audio) tanto de fuentes remotas como locales. Diseñada para flujos de trabajo con **Adobe Premiere Pro**.
 
 <div align="center">
   <img width="300" height="451" alt="image" src="https://github.com/user-attachments/assets/ac367935-bc6e-43ef-be37-fd9cb7e01d31" />
   <img width="300" height="451" alt="image" src="https://github.com/user-attachments/assets/fa4c0c7d-83c4-49e1-abd9-b215d6adb021" />
   <img width="300" height="451" alt="image" src="https://github.com/user-attachments/assets/c089d6fb-034b-4bb6-8b12-d2edc19063d3" />
 
-</div>
+</div></div>
+
+### 🎯 Pestañas Principales
+- **Proceso Único**: Descarga e importación individual con opciones de recodificación.
+- **Proceso por Lotes**: Gestión masiva de Playlists y listas de URLs.
+- **Herramientas de Imagen**: Procesamiento vectorial, RAW y eliminación de fondos con IA.
+- **Ajustes**: Configuración global de la aplicación y gestión de dependencias.
 
 ## Instalación
 Solo descarga el [DowP.exe](https://github.com/MarckDP/DowP_Downloader/releases) y ya.
@@ -21,7 +27,7 @@ Pero si quieres en codigo:
    pip install -r requirements.txt
    ```
 
-3. **FFmpeg**: Se instala automáticamente pero si no funciona, instálalo manualmente:
+3. **FFmpeg**: Se instala automáticamente (repositorio **gyanv** para máxima estabilidad). Si necesitas instalarlo manualmente:
    - Descarga [FFmpeg](https://www.gyan.dev/ffmpeg/builds/)
    - Instálalo en el **PATH** de tu sistema, o
    - Copia la carpeta `bin` a la carpeta donde tengas el DowP.exe
@@ -41,7 +47,16 @@ En este modo puedes analizar cualquier URL compatible con yt-dlp para obtener to
 - **"Descargar miniatura con el video"**: Descarga ambos al usar "Iniciar Descarga"
 
 #### ✂️ Segmentar
-Selecciona un segmento específico del video o audio indicando la hora, minuto y segundo de inicio y final. Incluye una casilla para descargar también el video completo.
+Selecciona un segmento específico del video o audio indicando los tiempos de inicio y fin. Opciones avanzadas:
+- **Corte Preciso (Lento/Recodificar)**: Recodifica los bordes del fragmento para exactitud total milimétrica.
+- **Descargar completo para cortar (Rápido)**: Descarga primero a máxima velocidad y corta localmente, ideal si tienes internet rápido pero el servidor tarda en procesar el corte remoto.
+- **Conservar completo**: Guarda el video entero además del fragmento recortado.
+
+#### ✨ Extras
+Esta sección (antes "Modo Extraer") incluye herramientas adicionales para el procesamiento:
+- **Reescalado con IA**: Mejora la resolución de fotos y videos usando motores **Real-ESRGAN, Waifu2x, RealSR y SRMD**. Permite elegir escala (2x, 3x, 4x) y motor según tu GPU/CPU.
+- **Extraer Fotogramas**: Extrae frames del video a una secuencia de imágenes. Puedes configurar los FPS, elegir formato PNG o ajustar la compresión JPG usando un slider interactivo, y guardar todo en una subcarpeta automática.
+- **Auto-enviar a H.I. (Herramientas de Imagen)**: Opción en el panel de miniaturas para enviar automáticamente la vista previa descargada y poder editarla, quitar sus fondos o reescalarla.
 
 #### 📝 Subtítulos
 Muestra los subtítulos disponibles de la URL analizada:
@@ -101,9 +116,7 @@ Muestra advertencias sobre compatibilidad con Adobe Premiere Pro y qué hacer en
 
 ---
 
-## 🎬 Opciones de Recodificación
-
-Esta es la parte más interesante. Aquí puedes recodificar videos (descargados o locales) para que sean compatibles con Adobe Premiere Pro u otros editores. Estas opciones dependerán del modo en el que te encuentres:
+Esta sección permite recodificar medios (descargados o locales) para asegurar compatibilidad con editores como Adobe Premiere Pro. Las opciones disponibles varían según el modo seleccionado:
 
 ### Modo "Video+Audio"
 
@@ -135,6 +148,7 @@ Muestra alertas sobre compatibilidad de códecs:
   - Presets disponibles o resolución personalizada
   - Mantener relación de aspecto
   - "No ampliar resolución" para evitar aumentos accidentales
+- **Guardar Ajustes y Presets**: Los ajustes personalizados ahora se pueden guardar en json internos. Hay botones dedicados de "Importar", "Exportar" y "Eliminar" presets.
 
 > [!WARNING]
 > Cambiar resolución **estira** el video, no lo recorta. Puede distorsionar si no respetas la relación de aspecto original.
@@ -156,7 +170,7 @@ Muestra alertas sobre compatibilidad de códecs:
 
 ## 📁 Modo de Recodificación Local
 
-Actívalo con el botón **"Importar Archivo Local para Recodificar"** al final de las opciones de recodificación.
+Actívalo con el botón **"Importar Archivo Local"** o simplemente arrastrando tus archivos a la interfaz.
 
 ### Cambios en la Interfaz
 - **Miniatura**: Muestra un fotograma inicial del video (o icono 🎵 para audio)
@@ -171,6 +185,38 @@ Actívalo con el botón **"Importar Archivo Local para Recodificar"** al final d
 ### Regreso al Modo URL
 - Usa el botón "Limpiar y Volver a Modo URL", o
 - Simplemente pega una URL nueva y dale "Analizar"
+
+---
+
+## 📦 Proceso por Lotes (Batch)
+
+Ideal para descargar playlists de YouTube o listas de enlaces personalizados.
+- **Importación Masiva**: Pega una URL de playlist o una lista de links.
+- **NUEVO: Importación Local**: Activa el modo de recodificación local seleccionando múltiples archivos a la vez directos desde el ordenador.
+- **Configuración Individual o Global**: Aplica recodificación específica manual para cada elemento de la lista o activa "Recodificación Global" para imponer tus **presets de conversión previstos** en toda la cola con 1 sólo clic.
+- **Manejo de Conflictos**: Al detectar un archivo con un mismo nombre al guardar, el lote tiene nuevas normas seleccionables ("Sobrescribir", "Renombrar", u "Omitir").
+- **Drag & Drop Masivo**: Soporte en la pestaña mediante "arrastrar y soltar" directamente a la lista.
+- **Gestión de Cola**: Visualiza el progreso de cada descarga y proceso de forma independiente.
+
+---
+
+## 🎨 Herramientas de Imagen
+
+Módulo avanzado para el procesamiento de archivos de imagen:
+- **NUEVOS Visores Interactivos:** Soporte nativo para visualizar zoom al nivel de los pixeles usando rueda del ratón y arrastre. Hay 1 visor regular y 1 visor interactivo de doble capa ("Antes/Después") que incluye un slider desplazable para comparar diferencias visuales al procesar.
+- **Soporte extendido de Formatos:** Adicional a lo habitual (.png, .webp, .jpeg) ahora hay soporte para múltiples imágenes vectoriales (.ai, .eps, .ps) gracias a Ghostscript, así como los **archivos RAW en bruto** que usan directamente múltiples cámaras (.dng, .cr2, .arw, .nef).
+- **IA Background Remover**: Elimina fondos automáticamente.
+  - Sliders de **Suavizado** y **Expansión/Contracción** para un control total sobre los bordes del recorte.
+- **Procesamiento en Lote**: Aplica cambios de tamaño, formato o márgenes a cientos de imágenes simultáneamente y exporta en lotes unificados (por ej. a .avif).
+
+---
+
+## ⚙️ Pestaña de Ajustes
+
+Configura DowP a tu medida:
+- **Rutas por Defecto**: Establece dónde se guardarán tus descargas y procesos (separando descargas únicas de los lotes masivos).
+- **Gestión de Dependencias y Modelos**: Verifica y actualiza herramientas de sistema (FFmpeg, Deno, Poppler, etc.) y ahora, puedes **visualizar, descargar y eliminar** de forma controlada todos los modelos de Inteligencia Artificial (modelos rembg de BriaAI, motores Waifu2X y Real-ESRGAN, etc.) desde la propia interfaz para gestionar mejor tu espacio local.
+- **Comportamiento Global**: Configura si quieres que se abra la carpeta al finalizar, si prefieres modo rápido en lotes, etc.
 
 ---
 
@@ -207,6 +253,5 @@ Para URLs con playlists de sitios poco comunes que muestren error "No se puede e
 
 ---
 
-## 🚀 ¿Y ahora qué?
-
-Aquí dejo esta cosa jaja. En algún futuro lejano haré actualizaciones... si no muero antes.
+## 🚀 Notas Finales
+Desarrollado con el soporte de Gemini (IA).
