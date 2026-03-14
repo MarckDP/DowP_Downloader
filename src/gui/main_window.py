@@ -414,19 +414,42 @@ class MainWindow(TkBase):
         
         # --- INICIO DE LA MODIFICACIÓN (LA BUENA) ---
         # 1. Definir la carpeta de datos del usuario en %APPDATA%
-        self.APP_DATA_DIR = os.path.join(os.path.expandvars('%APPDATA%'), 'DowP')
+        appdata_path = os.getenv('APPDATA')
+        if not appdata_path:  # Fallback si APPDATA no existe (Raro en Windows, pero seguro)
+            appdata_path = os.path.expanduser('~\\AppData\\Roaming')
+            
+        self.APP_DATA_DIR = os.path.join(appdata_path, 'DowP')
 
         # 2. Asegurarse de que esa carpeta exista
         try:
             os.makedirs(self.APP_DATA_DIR, exist_ok=True)
         except Exception as e:
             print(f"ERROR: No se pudo crear la carpeta de datos en %APPDATA%: {e}")
-            # Fallback a la carpeta antigua si %APPDATA% falla
             self.APP_DATA_DIR = self.APP_BASE_PATH
 
         # 3. Definir las rutas usando la nueva carpeta de datos
         self.SETTINGS_FILE = os.path.join(self.APP_DATA_DIR, "app_settings.json")
         self.PRESETS_FILE = os.path.join(self.APP_DATA_DIR, "presets.json") 
+        
+        # 4. MIGRACIÓN AUTOMÁTICA (Para evitar que los usuarios pierdan configuraciones antiguas)
+        import shutil
+        old_settings = os.path.join(self.APP_BASE_PATH, "app_settings.json")
+        old_presets = os.path.join(self.APP_BASE_PATH, "presets.json")
+        
+        if self.APP_DATA_DIR != self.APP_BASE_PATH:
+            if os.path.exists(old_settings) and not os.path.exists(self.SETTINGS_FILE):
+                try:
+                    shutil.move(old_settings, self.SETTINGS_FILE)
+                    print("INFO: Opciones antiguas migradas a AppData.")
+                except Exception as e:
+                    print(f"ERROR: Falló la migración de app_settings.json: {e}")
+                    
+            if os.path.exists(old_presets) and not os.path.exists(self.PRESETS_FILE):
+                try:
+                    shutil.move(old_presets, self.PRESETS_FILE)
+                    print("INFO: Presets antiguos migrados a AppData.")
+                except Exception as e:
+                    print(f"ERROR: Falló la migración de presets.json: {e}")
         # --- FIN DE LA MODIFICACIÓN ---
 
         self.ui_update_queue = queue.Queue()
@@ -768,6 +791,18 @@ class MainWindow(TkBase):
             self.config_tab.dep_labels["poppler"].configure(text=f"Versión: {local_poppler_version}")
             self.config_tab.dep_buttons["poppler"].configure(state="normal", text="Buscar Actualización")
 
+            # --- AÑADIR Lógica de yt-dlp ---
+            local_ytdlp_version = "Desconocida"
+            ytdlp_version_file = os.path.join(BIN_DIR, "ytdlp", "ytdlp_version.txt")
+            if os.path.exists(ytdlp_version_file):
+                try:
+                    with open(ytdlp_version_file, 'r') as f:
+                        local_ytdlp_version = f.read().strip()
+                except Exception as e:
+                    print(f"ADVERTENCIA: No se pudo leer el archivo de versión de yt-dlp: {e}")
+            self.config_tab.dep_labels["ytdlp"].configure(text=f"Versión: {local_ytdlp_version}")
+            self.config_tab.dep_buttons["ytdlp"].configure(state="normal", text="Buscar Actualización")
+
             # --- AÑADIR Lógica de Inkscape ---
             local_ink_version = "Desconocida"
             ink_version_file = os.path.join(INKSCAPE_BIN_DIR, "inkscape_version.txt")
@@ -864,6 +899,14 @@ class MainWindow(TkBase):
         poppler_exists = status_info.get("poppler_path_exists")
         
         should_download_poppler = False # <--- IMPORTANTE
+        
+        # --- Variables de yt-dlp ---
+        local_ytdlp_version = status_info.get("local_ytdlp_version") or "No encontrado"
+        latest_ytdlp_version = status_info.get("latest_ytdlp_version")
+        ytdlp_download_url = status_info.get("ytdlp_download_url")
+        ytdlp_exists = status_info.get("ytdlp_path_exists")
+
+        should_download_ytdlp = False
         
         # --- Lógica de descarga de FFmpeg (CORREGIDA) ---
         if not ffmpeg_exists:
@@ -1046,6 +1089,51 @@ class MainWindow(TkBase):
                 if force_check:
                     messagebox.showinfo("Poppler", "Poppler está actualizado.")
 
+        # --- Lógica de descarga de yt-dlp ---
+        if not ytdlp_exists:
+            if not force_check:
+                print("INFO: yt-dlp no encontrado. Iniciando descarga automática.")
+                self.single_tab.update_progress(0, "yt-dlp no encontrado. Iniciando descarga...")
+                should_download_ytdlp = True
+            else:
+                print("INFO: Comprobación manual de yt-dlp. No está instalado.")
+                user_response = messagebox.askyesno(
+                    "yt-dlp no está instalado",
+                    f"No se encontró yt-dlp. Es necesario para procesar descargas.\n\n"
+                    f"Versión disponible: {latest_ytdlp_version}\n\n"
+                    "¿Deseas descargarlo e instalarlo ahora?"
+                )
+                self.lift()
+                if user_response:
+                    should_download_ytdlp = True
+                else:
+                    self.config_tab.dep_labels["ytdlp"].configure(text=f"Versión: {local_ytdlp_version} (Cancelado)")
+        else:
+            ytdlp_update_available = False
+            try:
+                if latest_ytdlp_version and local_ytdlp_version != latest_ytdlp_version:
+                    ytdlp_update_available = True
+            except Exception:
+                pass
+
+            if ytdlp_update_available and force_check:
+                user_response = messagebox.askyesno(
+                    "Actualización de yt-dlp Disponible",
+                    f"Hay una nueva versión de yt-dlp disponible.\n\n"
+                    f"Actual: {local_ytdlp_version}\nNueva: {latest_ytdlp_version}\n\n"
+                    "¿Actualizar ahora?"
+                )
+                self.lift()
+                if user_response:
+                    should_download_ytdlp = True
+            elif ytdlp_update_available:
+                 self.config_tab.dep_labels["ytdlp"].configure(text=f"Versión: {local_ytdlp_version} (Update disp.)", text_color="#E5A04B")
+            else:
+                self.config_tab.dep_labels["ytdlp"].configure(text=f"Versión: {local_ytdlp_version} (Instalado)")
+                if force_check:
+                    # Lo dejamos en silencio si no está desactualizado durante el auto-update
+                    pass
+
         # --- Hilo de Descarga de FFmpeg (Sin cambios) ---
         if should_download:
             if not download_url:
@@ -1160,6 +1248,109 @@ class MainWindow(TkBase):
 
             threading.Thread(target=download_poppler_task, daemon=True).start()
 
+    def on_ytdlp_check_complete(self, status_info, force_check=False):
+        """Callback que gestiona el estado de la actualización de yt-dlp."""
+        status = status_info.get("status")
+
+        self.config_tab.dep_buttons["ytdlp"].configure(state="normal", text="Buscar Actualización")
+
+        if status == "error":
+            messagebox.showerror("Error de yt-dlp", status_info.get("message"))
+            return
+
+        local_version = status_info.get("local_ytdlp_version") or "No encontrado"
+        latest_version = status_info.get("latest_ytdlp_version")
+        download_url = status_info.get("ytdlp_download_url")
+        ytdlp_exists = status_info.get("ytdlp_path_exists")
+
+        should_download = False
+
+        if not ytdlp_exists:
+            if not force_check:
+                should_download = True
+            else:
+                user_response = messagebox.askyesno(
+                    "yt-dlp no está instalado",
+                    f"No se encontró el ejecutable/zip de yt-dlp.\n\n"
+                    f"Versión más reciente disponible: {latest_version}\n\n"
+                    "¿Deseas descargarlo ahora?"
+                )
+                self.lift()
+                if user_response:
+                    should_download = True
+                else:
+                    self.config_tab.dep_labels["ytdlp"].configure(text=f"Versión: {local_version} (Instalación cancelada)")
+        else:
+            update_available = False
+            try:
+                if latest_version and local_version != latest_version:
+                    update_available = True
+            except Exception as e:
+                update_available = False
+
+            if update_available and force_check:
+                user_response = messagebox.askyesno(
+                    "Actualización Disponible",
+                    f"Hay una nueva versión de yt-dlp disponible.\n\n"
+                    f"Actual: {local_version} -> Nueva: {latest_version}\n\n"
+                    "¿Actualizar ahora?"
+                )
+                self.lift()
+                if user_response:
+                    should_download = True
+            elif update_available:
+                self.config_tab.dep_labels["ytdlp"].configure(text=f"Versión: {local_version} (Update disp.)", text_color="#E5A04B")
+            else:
+                self.config_tab.dep_labels["ytdlp"].configure(text=f"Versión: {local_version} (Instalado)")
+                if force_check:
+                    messagebox.showinfo("yt-dlp", "yt-dlp está actualizado.")
+
+        if should_download:
+            if not download_url:
+                if force_check: messagebox.showerror("Error", "No se pudo obtener la URL de yt-dlp.")
+                return
+
+            self.config_tab.update_setup_download_progress('ytdlp', f"Descargando yt-dlp {latest_version}...", 0.01)
+            from src.core.setup import download_and_install_ytdlp
+
+            def download_ytdlp_task():
+                def progress_safe(text, val):
+                    self.ui_update_queue.put((self.config_tab.update_setup_download_progress, ('ytdlp', text, val)))
+
+                success = download_and_install_ytdlp(latest_version, download_url, progress_safe)
+                
+                if success:
+                    self.ui_update_queue.put((
+                        lambda: self.config_tab.dep_labels["ytdlp"].configure(text=f"Versión: {latest_version} \n(Instalado)"),
+                        ()
+                    )) 
+                    self.ui_update_queue.put((
+                        self.config_tab.update_setup_download_progress, 
+                        ('ytdlp', f"✅ yt-dlp actualizado.", 100)
+                    ))
+                    # Preguntar si desea reiniciar usando una función wrapper para capturar la respuesta
+                    def prompt_restart():
+                        import sys
+                        import os
+                        response = messagebox.askyesno(
+                            "Reinicio Necesario",
+                            "La actualización de yt-dlp se ha descargado y extraído correctamente.\n\n"
+                            "DowP necesita reiniciarse para aplicar esta nueva versión.\n"
+                            "¿Quieres reiniciar el programa ahora mismo?"
+                        )
+                        if response:
+                            print("INFO: Reiniciando DowP por actualización de yt-dlp...")
+                            os.execl(sys.executable, sys.executable, *sys.argv)
+                            
+                    self.ui_update_queue.put((prompt_restart, ()))
+                else:
+                    self.ui_update_queue.put((
+                        self.config_tab.update_setup_download_progress, 
+                        ('ytdlp', "Falló la descarga de yt-dlp.", 0)
+                    ))
+
+            threading.Thread(target=download_ytdlp_task, daemon=True).start()
+
     def on_ffmpeg_detection_complete(self, success, message, show_ready_message=False):
         # 1. Definir la lógica de actualización
         def update_ui():
@@ -1200,7 +1391,6 @@ class MainWindow(TkBase):
         print(f"INFO: Iniciando descarga de actualización v{version_str} (ZIP)...")
 
         self.single_tab.update_app_button.configure(text=f"Descargando v{version_str}...", state="disabled")
-        self.single_tab.update_ffmpeg_button.configure(state="disabled")
         self.single_tab.download_button.configure(state="disabled")
 
         self.single_tab.update_progress(0, f"Descargando actualización v{version_str}...")
@@ -1238,15 +1428,22 @@ class MainWindow(TkBase):
                     total_size = int(r.headers.get('content-length', 0))
                     downloaded_size = 0
                     
+                    import time
+                    last_ui_update_time = 0.0
+                    
                     with open(zip_path, 'wb') as f:
                         for chunk in r.iter_content(chunk_size=8192 * 4):
                             if not chunk: continue
                             f.write(chunk)
                             downloaded_size += len(chunk)
                             if total_size > 0:
-                                progress_percent = (downloaded_size / total_size) * 100
-                                self.after(0, self.single_tab.update_progress, progress_percent / 100.0,
-                                           f"Descargando: {downloaded_size / (1024*1024):.1f} MB")
+                                current_time = time.monotonic()
+                                # Limitar actualizaciones visuales a 10 veces por segundo (cada 0.1 seg)
+                                if current_time - last_ui_update_time >= 0.1 or downloaded_size == total_size:
+                                    last_ui_update_time = current_time
+                                    progress_percent = (downloaded_size / total_size) * 100
+                                    self.after(0, self.single_tab.update_progress, progress_percent / 100.0,
+                                               f"Descargando: {downloaded_size / (1024*1024):.1f} MB")
 
                 self.after(0, self.single_tab.update_progress, 1.0, "Extrayendo instalador...")
                 
@@ -1283,7 +1480,7 @@ class MainWindow(TkBase):
             except Exception as e:
                 print(f"ERROR: Falló la actualización: {e}")
                 self.after(0, lambda: messagebox.showerror("Error", f"No se pudo actualizar:\n{e}"))
-                self.after(0, self._reset_buttons_to_original_state)
+                self.after(0, self.single_tab._reset_buttons_to_original_state)
                 self.after(0, lambda: self.single_tab.update_progress(0, "❌ Error en actualización."))
 
         threading.Thread(target=download_and_run, daemon=True).start()
@@ -1909,7 +2106,7 @@ class MainWindow(TkBase):
         """
         # 1. Normalizar rutas y verificar existencia
         valid_paths = [os.path.normpath(p) for p in file_paths if os.path.exists(p)]
-        
+
         if not valid_paths:
             print("ADVERTENCIA: Ninguno de los archivos recibidos existe.")
             return

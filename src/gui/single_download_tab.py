@@ -1781,6 +1781,7 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.update_estimated_size()
             self._validate_recode_compatibility()
             self._on_save_in_same_folder_change()
+
         self.app.after(0, update_ui)
 
     def _format_bitrate(self, bitrate_str):

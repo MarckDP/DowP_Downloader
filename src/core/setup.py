@@ -15,11 +15,14 @@ DENO_BIN_DIR = os.path.join(BIN_DIR, "deno")
 POPPLER_BIN_DIR = os.path.join(BIN_DIR, "poppler") 
 INKSCAPE_BIN_DIR = os.path.join(BIN_DIR, "inkscape")
 GHOSTSCRIPT_BIN_DIR = os.path.join(BIN_DIR, "ghostscript")
+YTDLP_BIN_DIR = os.path.join(BIN_DIR, "ytdlp")
 
+# --- ARCHIVOS DE VERSIÓN ---
 DENO_VERSION_FILE = os.path.join(DENO_BIN_DIR, "deno_version.txt")
 FFMPEG_VERSION_FILE = os.path.join(FFMPEG_BIN_DIR, "ffmpeg_version.txt")
 POPPLER_VERSION_FILE = os.path.join(POPPLER_BIN_DIR, "poppler_version.txt")
 INKSCAPE_VERSION_FILE = os.path.join(INKSCAPE_BIN_DIR, "inkscape_version.txt")
+YTDLP_VERSION_FILE = os.path.join(YTDLP_BIN_DIR, "ytdlp_version.txt")
 
 def check_and_install_python_dependencies(progress_callback):
     """Verifica e instala dependencias de Python, reportando el progreso."""
@@ -28,7 +31,7 @@ def check_and_install_python_dependencies(progress_callback):
         import customtkinter
         import PIL
         import requests
-        import yt_dlp
+        # import yt_dlp # <- Eliminado para no forzar su requerimiento
         import flask_socketio
         import gevent
         import py7zr 
@@ -58,6 +61,100 @@ def check_and_install_python_dependencies(progress_callback):
         print(f"ERROR: Falló la instalación de dependencias con pip: {e.stderr}")
         progress_callback(f"Error al instalar dependencias.", -1)
         return False
+
+# ==========================================================
+# YT-DLP (ZipApp dinámico)
+# ==========================================================
+
+def get_latest_ytdlp_info(progress_callback):
+    """Consulta la API de GitHub para la última versión de yt-dlp."""
+    progress_callback("Consultando la última versión de yt-dlp...", 5)
+    try:
+        api_url = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
+        response = requests.get(api_url, timeout=15)
+        response.raise_for_status()
+        latest_release_data = response.json()
+        
+        tag_name = latest_release_data["tag_name"]
+        
+        for asset in latest_release_data.get("assets", []):
+            if asset["name"] == "yt-dlp": # Archivo sin extensión (el zipapp nativo)
+                progress_callback("Información de yt-dlp encontrada.", 10)
+                return tag_name, asset["browser_download_url"]
+                
+        return tag_name, None
+    except requests.RequestException as e:
+        progress_callback(f"Error de red al buscar yt-dlp: {e}", -1)
+        return None, None
+    except (IndexError, KeyError) as e:
+        progress_callback(f"Error en respuesta de API de yt-dlp: {e}", -1)
+        return None, None
+
+def download_and_install_ytdlp(tag, url, progress_callback):
+    """Descarga el ZipApp de yt-dlp en bin/ytdlp/yt-dlp.zip."""
+    try:
+        os.makedirs(YTDLP_BIN_DIR, exist_ok=True)
+        archive_name = os.path.join(YTDLP_BIN_DIR, "yt-dlp.zip")
+        last_reported_progress = -1
+        
+        with requests.get(url, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            total_size = int(r.headers.get('content-length', 0))
+            downloaded_size = 0
+            with open(archive_name, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if not chunk: continue
+                    f.write(chunk)
+                    downloaded_size += len(chunk)
+                    if total_size > 0:
+                        progress = 40 + (downloaded_size / total_size) * 40
+                        if int(progress) > last_reported_progress:
+                            progress_callback(f"Descargando yt-dlp: {downloaded_size / 1024 / 1024:.1f}/{total_size / 1024 / 1024:.1f} MB", progress)
+                            last_reported_progress = int(progress)
+                            
+        # --- NUEVO: Limpieza del shebang para compatibilidad con zipfile ---
+        # yt-dlp es un zipapp que en recientes versiones empieza con #!/usr/bin/env python3
+        # Esto hace que Python's zipfile (usado por pkg_resources/importlib) falle
+        # con "bad local file header". Eliminamos cualquier byte antes de PK\x03\x04.
+        try:
+            with open(archive_name, "rb") as f:
+                content = f.read()
+            start_idx = content.find(b"PK\x03\x04")
+            if start_idx > 0:
+                with open(archive_name, "wb") as f:
+                    f.write(content[start_idx:])
+        except Exception as e:
+            print(f"ADVERTENCIA: No se pudo limpiar el shebang de yt-dlp: {e}")
+
+        with open(YTDLP_VERSION_FILE, "w") as f: f.write(tag)
+        progress_callback(f"yt-dlp {tag} descargado exitosamente.", 100)
+        return True
+    except Exception as e:
+        progress_callback(f"Error al descargar yt-dlp: {e}", -1)
+        return False
+        
+def check_ytdlp_status(progress_callback):
+    """Verifica el estado de yt-dlp.zip local."""
+    try:
+        ytdlp_path = os.path.join(YTDLP_BIN_DIR, "yt-dlp.zip")
+        ytdlp_exists = os.path.exists(ytdlp_path)
+
+        local_tag = ""
+        if os.path.exists(YTDLP_VERSION_FILE):
+            with open(YTDLP_VERSION_FILE, 'r') as f:
+                local_tag = f.read().strip()
+
+        latest_tag, download_url = get_latest_ytdlp_info(progress_callback)
+
+        return {
+            "status": "success",
+            "ytdlp_path_exists": ytdlp_exists,
+            "local_ytdlp_version": local_tag,
+            "latest_ytdlp_version": latest_tag,
+            "ytdlp_download_url": download_url
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Error en la verificación de yt-dlp: {e}"}
 
 def get_latest_ffmpeg_info(progress_callback):
     """Consulta la API de GitHub para la última versión ESTABLE de FFMPEG (GyanD)."""
@@ -389,14 +486,23 @@ def check_environment_status(progress_callback, check_updates=True): # <--- NUEV
         latest_tag, download_url = None, None
         latest_deno_tag, deno_download_url = None, None
         latest_poppler_tag, poppler_download_url = None, None
+        latest_ytdlp_tag, ytdlp_download_url = None, None
 
         if check_updates:
             # Solo consultamos GitHub si nos lo piden explícitamente
             latest_tag, download_url = get_latest_ffmpeg_info(progress_callback)
             latest_deno_tag, deno_download_url = get_latest_deno_info(progress_callback)
             latest_poppler_tag, poppler_download_url = get_latest_poppler_info(progress_callback)
+            latest_ytdlp_tag, ytdlp_download_url = get_latest_ytdlp_info(progress_callback)
         else:
             progress_callback("Verificación rápida de entorno completada.", 20)
+            
+        # ytdlp local check
+        ytdlp_path = os.path.join(YTDLP_BIN_DIR, "yt-dlp.zip")
+        ytdlp_exists = os.path.exists(ytdlp_path)
+        local_ytdlp_tag = ""
+        if os.path.exists(YTDLP_VERSION_FILE):
+             with open(YTDLP_VERSION_FILE, 'r') as f: local_ytdlp_tag = f.read().strip()
 
         # --- Construir diccionario FINAL ---
         return {
@@ -418,7 +524,13 @@ def check_environment_status(progress_callback, check_updates=True): # <--- NUEV
             "poppler_path_exists": poppler_exists,
             "local_poppler_version": local_poppler_tag,
             "latest_poppler_version": latest_poppler_tag,
-            "poppler_download_url": poppler_download_url
+            "poppler_download_url": poppler_download_url,
+            
+            # yt-dlp
+            "ytdlp_path_exists": ytdlp_exists,
+            "local_ytdlp_version": local_ytdlp_tag,
+            "latest_ytdlp_version": latest_ytdlp_tag,
+            "ytdlp_download_url": ytdlp_download_url
         }
         
     except Exception as e:

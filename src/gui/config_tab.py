@@ -175,10 +175,11 @@ class ConfigTab(ctk.CTkFrame):
         self.dep_progress = {}
         self.dep_buttons = {}
         
-        # Crear filas (FFmpeg, Deno, Poppler)
+        # Crear filas (FFmpeg, Deno, Poppler, yt-dlp)
         self._create_dependency_row(self.updatable_frame, "FFmpeg", "Motor de procesamiento multimedia", "ffmpeg")
         self._create_dependency_row(self.updatable_frame, "Deno", "Entorno de ejecución interno", "deno")
         self._create_dependency_row(self.updatable_frame, "Poppler", "Herramienta de extracción de PDF", "poppler")
+        self._create_dependency_row(self.updatable_frame, "yt-dlp", "Motor principal de descargas", "ytdlp")
         
         # --- SEPARADOR VISUAL ---
         separator = ctk.CTkFrame(frame_deps, height=2, fg_color=("gray75", "gray30"))
@@ -605,6 +606,8 @@ class ConfigTab(ctk.CTkFrame):
             btn.configure(command=self.manual_deno_update_check)
         elif key == "poppler":
             btn.configure(command=self.manual_poppler_update_check)
+        elif key == "ytdlp":
+            btn.configure(command=self.manual_ytdlp_update_check)
             
         self.dep_buttons[key] = btn
 
@@ -740,6 +743,22 @@ class ConfigTab(ctk.CTkFrame):
                 lambda text, val: self.update_setup_download_progress('poppler', text, val)
             )
             self.main_window_callback('on_poppler_check_complete', status_info)
+
+        threading.Thread(target=check_task, daemon=True).start()
+
+    def manual_ytdlp_update_check(self):
+        """Inicia una comprobación manual de la actualización de yt-dlp."""
+        self.dep_buttons["ytdlp"].configure(state="disabled", text="Buscando...")
+        self.dep_labels["ytdlp"].configure(text="Versión: Verificando...")
+
+        import threading
+        from src.core.setup import check_ytdlp_status
+
+        def check_task():
+            status_info = check_ytdlp_status(
+                lambda text, val: self.update_setup_download_progress('ytdlp', text, val)
+            )
+            self.main_window_callback('on_ytdlp_check_complete', status_info, True)
 
         threading.Thread(target=check_task, daemon=True).start()
 
