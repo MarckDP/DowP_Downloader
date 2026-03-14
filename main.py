@@ -10,7 +10,7 @@ import pillow_avif
 from tkinter import messagebox
 from PIL import Image, ImageTk
 
-APP_VERSION = "1.3.9"
+APP_VERSION = "1.4.0"
 
 if getattr(sys, 'frozen', False):
     PROJECT_ROOT = os.path.dirname(sys.executable)
@@ -199,6 +199,16 @@ if __name__ == "__main__":
     if PROJECT_ROOT not in sys.path:
         sys.path.insert(0, PROJECT_ROOT)
 
+    # --- INYECTAR YT-DLP DESDE EL ZIP EXTERNO (SI EXISTE) ---
+    yt_dlp_zip = os.path.join(BIN_DIR, "ytdlp", "yt-dlp.zip")
+    
+    if os.path.exists(yt_dlp_zip) and yt_dlp_zip not in sys.path:
+        # Lo insertamos primero para que Python le dé prioridad sobre la librería instalada
+        sys.path.insert(0, yt_dlp_zip)
+        print(f"INFO: Cargando yt-dlp desde el archivo ZIP externo: {yt_dlp_zip}")
+    else:
+        print("INFO: No se encontró yt-dlp.zip en bin/. Usando librería compilada (o del entorno virtual).")
+
     # 2. Actualizar estado mientras configuras el entorno
     splash.update_status("Configurando entorno y rutas...")
 
@@ -244,5 +254,4 @@ if __name__ == "__main__":
                      splash_screen=splash,
                      app_version=APP_VERSION)
     
-
     app.mainloop()
