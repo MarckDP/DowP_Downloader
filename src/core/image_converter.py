@@ -140,6 +140,53 @@ class ImageConverter:
         # Forzar al recolector de basura de Python
         import gc
         gc.collect()
+
+    def prepare_ai_sessions(self, options, progress_callback=None):
+        """
+        Pre-carga los modelos de IA necesarios según las opciones para evitar 
+        congelamientos durante el procesamiento.
+        """
+        # 1. ¿Se requiere rembg (eliminación de fondo)?
+        if options.get("rembg_enabled", False):
+            if not self._load_rembg_lazy(progress_callback):
+                return False
+            
+            # 2. Inicializar la sesión de ONNX si no existe
+            model_name = options.get("rembg_model", "u2net")
+            use_gpu = options.get("use_gpu", True)
+            
+            # Buscar ruta del modelo
+            from main import MODELS_DIR
+            model_path = os.path.join(MODELS_DIR, "rembg", f"{model_name}.onnx")
+            
+            if not os.path.exists(model_path):
+                # Si no existe, no podemos pre-cargar (se descargará luego en remove_background)
+                return True
+            
+            session_key = f"{model_path}_{'gpu' if use_gpu else 'cpu'}"
+            if session_key not in self.rembg_sessions:
+                if progress_callback:
+                    hw = "GPU/DirectML" if use_gpu else "CPU"
+                    progress_callback(None, f"Inicializando modelo {model_name} en {hw}...")
+                
+                try:
+                    import onnxruntime as ort
+                    sess_opts = ort.SessionOptions()
+                    if use_gpu:
+                        providers = ['DmlExecutionProvider', 'CPUExecutionProvider']
+                        sess_opts.enable_mem_pattern = False
+                    else:
+                        providers = ['CPUExecutionProvider']
+                    
+                    # Carga real (Bloqueante por 2-3s)
+                    self.rembg_sessions[session_key] = ort.InferenceSession(
+                        model_path, providers=providers, sess_options=sess_opts
+                    )
+                    print(f"DEBUG: Sesión {model_name} pre-cargada con éxito.")
+                except Exception as e:
+                    print(f"WARNING: No se pudo pre-cargar el modelo: {e}")
+        
+        return True
         
     def _process_rmbg2(self, pil_image, model_path, use_gpu=True): # <--- CAMBIO 1: Agregado argumento
         """

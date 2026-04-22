@@ -3616,6 +3616,20 @@ class ImageToolsTab(ctk.CTkFrame):
                     return
         
         options = self._gather_conversion_options()
+        
+        # --- AVISO DE RENDIMIENTO ONNX ---
+        if options.get("rembg_enabled", False) and getattr(self.app, 'show_onnx_warning', True):
+            from .dialogs import ONNXWarningDialog
+            dialog = ONNXWarningDialog(self)
+            continuar, no_mostrar = dialog.get_result()
+            
+            if not continuar:
+                return
+                
+            if no_mostrar:
+                self.app.show_onnx_warning = False
+                self.app.save_settings()
+
         is_video_export = options.get("format", "").startswith(".")
         
         if is_video_export:
@@ -3801,6 +3815,14 @@ class ImageToolsTab(ctk.CTkFrame):
                  self._set_item_status_color(idx, "pending")
         
         try:
+            # 🔧 NUEVO: Pre-cargar modelos de IA (ONNX/Rembg) para evitar congelamientos
+            # Callback simple solo para la fase de inicialización
+            def init_callback(_, message):
+                if message:
+                    self.app.after(0, lambda t=message: self.progress_label.configure(text=t))
+            
+            self.image_converter.prepare_ai_sessions(options, progress_callback=init_callback)
+
             for i, item_data in enumerate(self.file_list_data):
                 
                 if cancel_event.is_set():
@@ -4019,7 +4041,9 @@ class ImageToolsTab(ctk.CTkFrame):
             if hasattr(self, 'import_button'):
                 self.app.after(0, lambda: self.import_button.configure(state="normal"))
 
-            self.image_converter.clear_ai_sessions()
+            # ✅ MEJORA: Liberar VRAM solo si el usuario NO activó la persistencia en Ajustes
+            if not getattr(self.app, 'keep_ai_models_in_memory', False):
+                self.image_converter.clear_ai_sessions()
 
     def _show_process_summary(self, processed, skipped, errors, error_details):
         """

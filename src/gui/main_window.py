@@ -669,6 +669,8 @@ class MainWindow(TkBase):
         self.image_settings = {}
         self.upscayl_custom_models = {}  # Mapeo: nombre_real -> apodo
         self.console_enabled = False   # Consola de diagnóstico desactivada por defecto
+        self.keep_ai_models_in_memory = False # Optimización de VRAM
+        self.show_onnx_warning = True # Mostrar aviso de rendimiento de ONNX por defecto
         
         # --- INTENTAR CARGAR CONFIGURACIÓN GUARDADA ---
         try:
@@ -699,6 +701,8 @@ class MainWindow(TkBase):
                     self.image_settings = settings.get("image_settings", {})
                     self.upscayl_custom_models = settings.get("upscayl_custom_models", {})
                     self.console_enabled = settings.get("console_enabled", False)
+                    self.keep_ai_models_in_memory = settings.get("keep_ai_models_in_memory", False)
+                    self.show_onnx_warning = settings.get("show_onnx_warning", True)
                 print(f"DEBUG: Configuración cargada exitosamente.")
             else:
                 print("DEBUG: Archivo de configuración no encontrado. Usando valores por defecto.")
@@ -1534,6 +1538,10 @@ class MainWindow(TkBase):
 
             # Consola de Diagnóstico
             "console_enabled": self.console_enabled,
+
+            # Optimización de VRAM
+            "keep_ai_models_in_memory": self.keep_ai_models_in_memory,
+            "show_onnx_warning": self.show_onnx_warning,
         }
 
         # 4. Escribir en el archivo

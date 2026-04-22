@@ -1683,3 +1683,107 @@ class DependencySetupWindow(ctk.CTkToplevel):
     def get_result(self):
         self.master.wait_window(self)
         return self.result
+
+class ONNXWarningDialog(ctk.CTkToplevel):
+    """
+    Diálogo de advertencia que se muestra antes de ejecutar un modelo ONNX por primera vez.
+    Informa al usuario sobre el uso intensivo de recursos y posibles congelamientos de la UI.
+    """
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Aviso de Rendimiento (Modelos ONNX)")
+        apply_icon(self)
+        self.lift()
+        self.attributes("-topmost", True)
+        self.grab_set()
+        
+        self.result_continue = False
+        self.dont_show_again = False
+        
+        # Dimensiones y centrado
+        win_width = 550
+        win_height = 320
+        self.geometry(f"{win_width}x{win_height}")
+        self.resizable(False, False)
+        
+        self.update_idletasks()
+        try:
+            root = master
+            while hasattr(root, 'master') and root.master is not None:
+                root = root.master
+            master_geo = root.geometry()
+            master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
+            pos_x = master_x + (master_width // 2) - (win_width // 2)
+            pos_y = master_y + (master_height // 2) - (win_height // 2)
+            self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+        except:
+            screen_width = self.winfo_screenwidth()
+            screen_height = self.winfo_screenheight()
+            pos_x = (screen_width // 2) - (win_width // 2)
+            pos_y = (screen_height // 2) - (win_height // 2)
+            self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+
+        # Contenedor principal
+        container = ctk.CTkFrame(self, fg_color="transparent")
+        container.pack(padx=20, pady=20, fill="both", expand=True)
+
+        # Título
+        title_label = ctk.CTkLabel(container, text="Aviso de Uso de Recursos (IA)", font=ctk.CTkFont(size=16, weight="bold"), text_color="#E5A04B")
+        title_label.pack(anchor="w", pady=(0, 10))
+
+        # Texto explicativo
+        info_text = (
+            "Estás a punto de usar una herramienta basada en modelos de Inteligencia Artificial (ONNX).\n\n"
+            "Estos modelos requieren una carga pesada en la memoria de tu tarjeta gráfica (VRAM) o procesador (RAM). "
+            "Es completamente NORMAL que durante los primeros segundos la aplicación parezca congelarse o que tu "
+            "sistema se ralentice brevemente mientras el modelo se inicializa.\n\n"
+            "Tip: Puedes activar la opción 'Mantener modelos cargados' en Ajustes > General para evitar que "
+            "esto suceda repetidamente si vas a procesar varias cosas seguidas."
+        )
+        info_label = ctk.CTkLabel(container, text=info_text, font=ctk.CTkFont(size=13), justify="left", wraplength=510)
+        info_label.pack(anchor="w", pady=(0, 15))
+
+        # Checkbox "No volver a mostrar"
+        self.checkbox_var = ctk.BooleanVar(value=False)
+        self.dont_show_checkbox = ctk.CTkCheckBox(
+            container, 
+            text="Comprendido, no volver a mostrar este mensaje.",
+            variable=self.checkbox_var
+        )
+        self.dont_show_checkbox.pack(anchor="w", pady=(0, 20))
+
+        # Botones
+        button_frame = ctk.CTkFrame(container, fg_color="transparent")
+        button_frame.pack(fill="x", side="bottom")
+        button_frame.grid_columnconfigure((0, 1), weight=1)
+
+        continue_btn = ctk.CTkButton(
+            button_frame, 
+            text="Continuar", 
+            fg_color="#28A745", hover_color="#218838",
+            command=self._on_continue
+        )
+        continue_btn.grid(row=0, column=0, padx=(0, 10), sticky="ew")
+
+        cancel_btn = ctk.CTkButton(
+            button_frame, 
+            text="Cancelar", 
+            fg_color="gray", hover_color="#555555",
+            command=self._on_cancel
+        )
+        cancel_btn.grid(row=0, column=1, padx=(10, 0), sticky="ew")
+
+    def _on_continue(self):
+        self.result_continue = True
+        self.dont_show_again = self.checkbox_var.get()
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result_continue = False
+        self.dont_show_again = False
+        self.destroy()
+
+    def get_result(self):
+        """Espera y devuelve (continuar_booleano, no_mostrar_booleano)"""
+        self.master.wait_window(self)
+        return self.result_continue, self.dont_show_again

@@ -95,8 +95,49 @@ class ConfigTab(ctk.CTkFrame):
         
         # ===== Sección: General =====
         frame_general = ctk.CTkFrame(self.content_container, fg_color="transparent")
-        ctk.CTkLabel(frame_general, text="Configuraciones Generales", font=ctk.CTkFont(size=20, weight="bold")).pack(anchor="w", pady=(0, 20))
-        ctk.CTkLabel(frame_general, text="Aquí irán opciones de comportamiento por defecto del programa, como:\n- Ubicaciones de descargas.\n- Temas visuales.\n- Otras opciones de la app.", justify="left").pack(anchor="w")
+        # --- SUB-SECCIÓN: MODELOS DE IA ---
+        ctk.CTkLabel(frame_general, text="Opciones de Modelos de IA", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", pady=(10, 5), padx=5)
+
+        vram_frame = ctk.CTkFrame(frame_general, fg_color=("gray85", "gray20"), corner_radius=8)
+        vram_frame.pack(fill="x", pady=(0, 10), padx=5)
+        
+        vram_header = ctk.CTkLabel(
+            vram_frame,
+            text="Gestión de Memoria y Rendimiento (ONNX)",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=("#1F6AA5", "#52A2F2")
+        )
+        vram_header.pack(anchor="w", padx=15, pady=(10, 5))
+        
+        vram_desc = "Controla cómo el programa gestiona los modelos de inteligencia artificial en la memoria de tu tarjeta gráfica (VRAM) o procesador (RAM)."
+        ctk.CTkLabel(vram_frame, text=vram_desc, font=ctk.CTkFont(size=12), text_color="gray60", justify="left", wraplength=550).pack(anchor="w", padx=15, pady=(0, 10))
+
+        vram_controls = ctk.CTkFrame(vram_frame, fg_color="transparent")
+        vram_controls.pack(fill="x", padx=15, pady=(0, 15))
+        
+        # Switch para persistencia
+        self.keep_vram_var = ctk.BooleanVar(value=getattr(self.app, 'keep_ai_models_in_memory', False))
+        self.keep_vram_switch = ctk.CTkSwitch(
+            vram_controls,
+            text="Mantener modelos cargados en VRAM al terminar",
+            variable=self.keep_vram_var,
+            command=self._on_vram_persistence_toggle
+        )
+        self.keep_vram_switch.pack(side="left", padx=(5, 10))
+        
+        # Botón para limpieza manual (Ajustado)
+        self.clear_vram_btn = ctk.CTkButton(
+            vram_controls,
+            text="Liberar Memoria VRAM Ahora",
+            width=230, # Más ancho
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"), # Texto un poco más pequeño
+            fg_color=("#DC3545", "#c0392b"),
+            hover_color=("#C82333", "#a93226"),
+            command=self._manual_vram_clear
+        )
+        self.clear_vram_btn.pack(side="right")
+
         self.sections["general"] = frame_general
         
         # ===== Sección: Cookies =====
@@ -287,6 +328,7 @@ class ConfigTab(ctk.CTkFrame):
         self.rembg_models_frame = ctk.CTkFrame(frame_models, fg_color=("gray85", "gray20"))
         self.rembg_models_frame.pack(fill="x", pady=(0, 20), padx=5)
         self.model_rows = {}
+
         self._populate_rembg_model_rows()
 
         # -- Grupo: Motores de Reescalado (Upscaling) --
@@ -743,6 +785,23 @@ class ConfigTab(ctk.CTkFrame):
             self._console_auto_scroll = True
         except Exception:
             pass
+
+    # ================= LÓGICA DE VRAM =================
+
+    def _on_vram_persistence_toggle(self):
+        """Guarda la preferencia de persistencia de modelos IA."""
+        self.app.keep_ai_models_in_memory = self.keep_vram_var.get()
+        self.app.save_settings()
+
+    def _manual_vram_clear(self):
+        """Llama a la limpieza de sesiones de IA de forma manual."""
+        if hasattr(self.app, 'image_tab') and hasattr(self.app.image_tab, 'image_converter'):
+            self.app.image_tab.image_converter.clear_ai_sessions()
+            
+            # Feedback visual en el botón
+            original_text = self.clear_vram_btn.cget("text")
+            self.clear_vram_btn.configure(text="¡VRAM Liberada!", fg_color="#28a745")
+            self.app.after(2000, lambda: self.clear_vram_btn.configure(text=original_text, fg_color=("#DC3545", "#c0392b")))
 
     # ================= LOGICA DE MODELOS =================
 
