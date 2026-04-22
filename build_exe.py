@@ -102,7 +102,7 @@ def build():
     # Preparar los argumentos de PyInstaller
     args = [
         ENTRY_POINT,
-        '--name=%s' % f"{APP_NAME}_{version}",
+        '--name=%s' % f"{APP_NAME}",
         '--onedir',
         '--windowed',
         '--noconfirm',
@@ -154,7 +154,7 @@ def build():
         
         # --- NUEVO: Copiar bin/ytdlp recién descargado al directorio dist/ directamente ---
         import shutil
-        dist_dir = os.path.join("dist", f"{APP_NAME}_{version}")
+        dist_dir = os.path.join("dist", f"{APP_NAME}")
         dist_bin_dir = os.path.join(dist_dir, "bin", "ytdlp")
         src_bin_dir = os.path.join("bin", "ytdlp")
         
