@@ -902,9 +902,9 @@ class SingleDownloadTab(ctk.CTkFrame):
         ctk.CTkLabel(self.upscale_video_subpanel, text="Tile Size:", font=ctk.CTkFont(size=12)).grid(
             row=3, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
         self.upscale_tile_entry = ctk.CTkEntry(self.upscale_video_subpanel, placeholder_text="0", font=ctk.CTkFont(size=12))
-        self.upscale_tile_entry.insert(0, "0")
+        self.upscale_tile_entry.insert(0, "200")
         self.upscale_tile_entry.grid(row=3, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
-        Tooltip(self.upscale_tile_entry, "Tamaño del bloque de procesamiento.\n0 = Auto.\nUsa 100 o 200 si el proceso se detiene o la app se cierra.", delay_ms=1000)
+        Tooltip(self.upscale_tile_entry, "Tamaño del bloque de procesamiento (VRAM).\n200 es el valor recomendado.\nUsa 0 para Automático o 100 si tienes errores de memoria.", delay_ms=1000)
 
         # 3c-3. Reducción de Ruido (Solo Waifu2x/SRMD)
         self.upscale_denoise_label = ctk.CTkLabel(self.upscale_video_subpanel, text="Reducir Ruido:", font=ctk.CTkFont(size=12))

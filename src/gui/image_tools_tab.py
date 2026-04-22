@@ -1312,10 +1312,10 @@ class ImageToolsTab(ctk.CTkFrame):
         # Tile Size (Movido aquí arriba)
         ctk.CTkLabel(self.upscale_options_frame, text="Tile Size:").grid(row=2, column=2, padx=(5, 5), pady=5, sticky="e")
         self.upscale_tile_entry = ctk.CTkEntry(self.upscale_options_frame, width=60, placeholder_text="0")
-        self.upscale_tile_entry.insert(0, "0") # 0 = Auto
+        self.upscale_tile_entry.insert(0, "200") # 200 = Recomendado
         self.upscale_tile_entry.grid(row=2, column=3, padx=(0, 10), pady=5, sticky="w") # Sticky W
         
-        Tooltip(self.upscale_tile_entry, "Tamaño del bloque de procesamiento.\nDéjalo en 0 para Auto.\nSi la app se cierra sola (Crash), prueba con 200 o 100 (consume menos VRAM).", delay_ms=1000)
+        Tooltip(self.upscale_tile_entry, "Tamaño del bloque de procesamiento (VRAM).\n200 es el valor recomendado.\nUsa 0 para Automático o 100 si tienes errores de memoria.", delay_ms=1000)
 
         # --- FILA 3: Reducción de Ruido (Solo Waifu2x) ---
         self.upscale_denoise_label = ctk.CTkLabel(self.upscale_options_frame, text="Reducir Ruido:")
