@@ -597,8 +597,13 @@ class ImageConverter:
                 print("INFO: Iniciando reescalado con IA...")
                 if progress_callback: progress_callback(50, f"Reescalando ({options['upscale_engine']})...")
                 
-                # ✅ CAMBIO: Pasamos el evento de cancelación al upscaler
-                pil_image = self._upscale_image_ai(pil_image, options, cancellation_event)
+                # ✅ VÍA RÁPIDA: Si no hay ediciones previas y el archivo es local, pasar ruta directa
+                input_path_override = None
+                input_ext = os.path.splitext(input_path)[1].lower()
+                if not options.get("rembg_enabled", False) and input_ext in (".jpg", ".jpeg", ".png"):
+                    input_path_override = input_path
+                
+                pil_image = self._upscale_image_ai(pil_image, options, cancellation_event, input_path_override, progress_callback)
                 
                 if progress_callback: progress_callback(60)
 
@@ -770,7 +775,7 @@ class ImageConverter:
                                 if fixed_svg_path and os.path.exists(fixed_svg_path):
                                     try: os.remove(fixed_svg_path)
                                     except: pass
-                                return self._convert_with_inkscape(filepath, target_size, maintain_aspect, page_number)
+                                return self._convert_with_inkscape(filepath, target_size, maintain_aspect, page_number, options)
                             
                             temp_img = Image.open(io.BytesIO(temp_png_data))
                             original_width, original_height = temp_img.size
@@ -818,7 +823,7 @@ class ImageConverter:
                             os.remove(fixed_svg_path)
                     except: pass
                     # Último intento con Inkscape
-                    return self._convert_with_inkscape(filepath, target_size, maintain_aspect, page_number)
+                    return self._convert_with_inkscape(filepath, target_size, maintain_aspect, page_number, options)
             
             # --- VECTORIALES: Usar Inkscape o pdf2image ---
             elif ext in self.VECTOR_FORMATS:
@@ -827,7 +832,7 @@ class ImageConverter:
                 if ext in (".ai", ".eps", ".ps"): 
                     try:
                         # Intentar primero con Inkscape (Mejor calidad)
-                        return self._convert_with_inkscape(filepath, target_size, maintain_aspect, page_number)
+                        return self._convert_with_inkscape(filepath, target_size, maintain_aspect, page_number, options)
                     except Exception as e:
                         print(f"⚠️ Inkscape falló ({e}). Usando respaldo de Pillow/Ghostscript...")
                         # Si falla, usar el método de respaldo
@@ -839,7 +844,7 @@ class ImageConverter:
                         page_number = 1
                     
                     is_no_convert = options.get("format", "PNG") == "NO CONVERTIR"
-                    dpi = 300
+                    dpi = options.get("vector_dpi", 300)
                     if target_size and not is_no_convert:
                         dpi = self._calculate_optimal_dpi(filepath, ext, target_size, maintain_aspect)
 
@@ -929,7 +934,8 @@ class ImageConverter:
         except Exception as e:
             raise Exception(f"Fallo total (Inkscape y Pillow): {e}")
 
-    def _convert_with_inkscape(self, filepath, target_size=None, maintain_aspect=True, page_number=1):
+    def _convert_with_inkscape(self, filepath, target_size=None, maintain_aspect=True, page_number=1, options=None):
+        if options is None: options = {}
         """
         Convierte usando Inkscape con estrategia de DPI Alto + Redimensionado.
         ✅ CORREGIDO: Verifica Ghostscript antes de intentar conversión EPS/PS.
@@ -1008,8 +1014,15 @@ class ImageConverter:
             temp_png = tmp_file.name
 
         try:
+            # Determinar DPI: SVG ignora el slider global y usa 300 (estándar)
+            # Otros vectores (PDF/AI/EPS) usan el slider (vector_dpi)
+            if ext == ".svg":
+                dpi = 300
+            else:
+                dpi = options.get("vector_dpi", 300)
+                
             # Construir comando base (ahora filepath_to_process puede ser PDF temporal)
-            cmd = self._build_inkscape_command(filepath_to_process, temp_png, page_number, dpi=300)
+            cmd = self._build_inkscape_command(filepath_to_process, temp_png, page_number, dpi=dpi)
 
             # Si hay un tamaño objetivo, inyectar comandos de escalado vectorial
             if target_size:
@@ -1077,7 +1090,7 @@ class ImageConverter:
                         filepath_to_process,
                         first_page=page_number,
                         last_page=page_number,
-                        dpi=300,
+                        dpi=options.get("vector_dpi", 300),
                         poppler_path=self.poppler_path
                     )
                     if images:
@@ -2282,7 +2295,7 @@ class ImageConverter:
         except Exception:
             pass
     
-    def _upscale_image_ai(self, img, options, cancellation_event=None):
+    def _upscale_image_ai(self, img, options, cancellation_event=None, input_path_override=None, progress_callback=None):
         """
         Ejecuta Real-ESRGAN o Waifu2x nativamente.
         Versión blindada contra errores de variables no definidas.
@@ -2290,12 +2303,22 @@ class ImageConverter:
         import subprocess
         import tempfile
         import multiprocessing
+        import queue
+        import threading
+        import re
+        import time
         
         # 1. Inicializar variables para evitar errores en 'finally'
         temp_input_path = None
         temp_output_path = None
+        needs_input_cleanup = True
         
         try:
+            # ✅ VÍA RÁPIDA: Usar archivo original si no se requiere pre-procesamiento
+            if input_path_override and os.path.exists(input_path_override):
+                temp_input_path = input_path_override
+                needs_input_cleanup = False
+            
             engine = options.get("upscale_engine")
             friendly_model = options.get("upscale_model_friendly")
             
@@ -2321,15 +2344,16 @@ class ImageConverter:
             if img.mode != "RGBA" and img.mode != "LA":
                 ext_temp = ".jpg" # JPG es más rápido para el pipeline
             
-            # 2. Crear archivos temporales
-            with tempfile.NamedTemporaryFile(suffix=ext_temp, delete=False) as temp_in:
-                temp_input_path = temp_in.name
-            
-            if ext_temp == ".jpg":
-                # Guardar como JPG máxima calidad (sin subsampling)
-                img.convert("RGB").save(temp_input_path, "JPEG", quality=100, subsampling=0)
-            else:
-                img.save(temp_input_path, "PNG")
+            # 2. Crear archivos temporales si no tenemos override
+            if not temp_input_path:
+                with tempfile.NamedTemporaryFile(suffix=ext_temp, delete=False) as temp_in:
+                    temp_input_path = temp_in.name
+                
+                if ext_temp == ".jpg":
+                    # Guardar como JPG máxima calidad (sin subsampling)
+                    img.convert("RGB").save(temp_input_path, "JPEG", quality=100, subsampling=0)
+                else:
+                    img.save(temp_input_path, "PNG")
 
             # El output SIEMPRE será PNG (lo decide el ejecutable)
             temp_output_path = os.path.splitext(temp_input_path)[0] + "_out.png"
@@ -2415,30 +2439,71 @@ class ImageConverter:
             print(f"DEBUG: Ejecutando Upscale ({engine}): {' '.join(cmd)}")
             creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             
-            # ✅ CAMBIO: Usar Popen para poder cancelar
+            # ✅ CAMBIO: Usar Popen para poder cancelar y leer la salida en tiempo real
+            # Añadimos encoding utf-8 y errors='replace' para evitar UnicodeDecodeError
             process = subprocess.Popen(
                 cmd, 
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.PIPE, 
-                text=True, 
+                text=True,
+                encoding='utf-8',
+                errors='replace',
                 creationflags=creationflags
             )
             
-            # Bucle de espera que vigila el botón de cancelar
+            # --- NUEVO: Leer stderr en un hilo para no bloquear el buffer de Windows y obtener progreso ---
+            def enqueue_output(out, q):
+                for line in iter(out.readline, ''):
+                    q.put(line)
+                out.close()
+
+            q = queue.Queue()
+            t = threading.Thread(target=enqueue_output, args=(process.stderr, q))
+            t.daemon = True
+            t.start()
+            
+            last_update_time = 0
+            
+            # Bucle de espera que vigila el botón de cancelar y lee el progreso
             while process.poll() is None:
                 if cancellation_event and cancellation_event.is_set():
                     print("DEBUG: Cancelación detectada durante Upscaling. Matando proceso...")
                     process.kill()
                     raise UserCancelledError("Reescalado cancelado por usuario")
                 
-                # Esperar un poco para no saturar CPU
-                import time
-                time.sleep(0.1)
+                try:
+                    # Leer líneas sin bloquear
+                    line = q.get_nowait()
+                    
+                    # Buscar el porcentaje (ej: 12,50% o 12.50%)
+                    match = re.search(r"(\d+)[.,](\d+)%", line)
+                    if match:
+                        pct = float(match.group(1) + "." + match.group(2))
+                        
+                        # Limitar la actualización a 4 veces por segundo (0.25s) para balancear
+                        current_time = time.time()
+                        if current_time - last_update_time >= 0.25 or pct >= 100.0:
+                            last_update_time = current_time
+                            
+                            # Imprimir en consola de DowP y VS Code
+                            print(f"Progreso Upscayl: {pct:.1f}%")
+                            
+                            if progress_callback:
+                                # Mapear el 0-100% interno de upscayl al 50-60% de la barra global
+                                scaled_pct = 50 + (pct / 10.0)
+                                progress_callback(scaled_pct, f"Reescalando ({engine}): {pct:.1f}%")
+                            
+                except queue.Empty:
+                    # Si no hay texto nuevo, esperar un poco para no saturar CPU
+                    time.sleep(0.05)
             
             # Verificar resultado
             if process.returncode != 0 or not os.path.exists(temp_output_path):
-                stderr = process.stderr.read()
-                print(f"ERROR Upscaling CLI: {stderr}")
+                # Leer cualquier error restante
+                remaining_stderr = ""
+                while not q.empty():
+                    remaining_stderr += q.get_nowait()
+                print(f"ERROR Upscaling CLI: {remaining_stderr}")
                 return img
 
             # 4. Cargar resultado
@@ -2453,8 +2518,8 @@ class ImageConverter:
             return img
             
         finally:
-            # Limpieza SEGURA: Verificar que la variable no sea None antes de usarla
-            if temp_input_path and os.path.exists(temp_input_path):
+            # Limpieza SEGURA: Solo si nosotros creamos el temporal
+            if needs_input_cleanup and temp_input_path and os.path.exists(temp_input_path):
                 try: os.remove(temp_input_path) 
                 except: pass
                 

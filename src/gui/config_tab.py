@@ -137,6 +137,89 @@ class ConfigTab(ctk.CTkFrame):
             command=self._manual_vram_clear
         )
         self.clear_vram_btn.pack(side="right")
+        # --- SUB-SECCIÓN: OPCIONES DE IMAGEN (RENDER FINAL) ---
+        ctk.CTkLabel(frame_general, text="Calidad de Renderizado Final", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", pady=(10, 5), padx=5)
+
+        img_opt_frame = ctk.CTkFrame(frame_general, fg_color=("gray85", "gray20"), corner_radius=8)
+        img_opt_frame.pack(fill="x", pady=(0, 10), padx=5)
+        
+        img_opt_header = ctk.CTkLabel(
+            img_opt_frame,
+            text="Calidad de Renderizado Vectorial",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=("#1F6AA5", "#52A2F2")
+        )
+        img_opt_header.pack(anchor="w", padx=15, pady=(10, 5))
+        
+        img_opt_desc = "Ajusta la densidad de píxeles (DPI) para la conversión de archivos PDF, AI y EPS. 300 DPI es el estándar de impresión. Valores más altos aumentan el detalle pero también el uso de RAM."
+        ctk.CTkLabel(img_opt_frame, text=img_opt_desc, font=ctk.CTkFont(size=12), text_color="gray60", justify="left", wraplength=550).pack(anchor="w", padx=15, pady=(0, 10))
+
+        dpi_controls = ctk.CTkFrame(img_opt_frame, fg_color="transparent")
+        dpi_controls.pack(fill="x", padx=15, pady=(0, 15))
+        
+        self.vector_dpi_var = ctk.IntVar(value=self.app.vector_dpi)
+        
+        self.dpi_slider = ctk.CTkSlider(
+            dpi_controls, 
+            from_=70, to=1200, 
+            variable=self.vector_dpi_var,
+            command=self._on_vector_dpi_change
+        )
+        self.dpi_slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        
+        self.dpi_entry = ctk.CTkEntry(
+            dpi_controls, 
+            width=65,
+            placeholder_text="300"
+        )
+        self.dpi_entry.insert(0, str(self.app.vector_dpi))
+        self.dpi_entry.pack(side="right", padx=(5, 0))
+        self.dpi_entry.bind("<KeyRelease>", self._on_dpi_entry_change)
+        
+        ctk.CTkLabel(dpi_controls, text="DPI", font=ctk.CTkFont(size=12, weight="bold")).pack(side="right", padx=(5, 0))
+
+        # Etiqueta de advertencia para DPI alto
+        self.dpi_warning_label = ctk.CTkLabel(
+            img_opt_frame,
+            text="⚠️ Valores superiores a 1200 DPI no son recomendables y pueden agotar la RAM. Usar con precaución.",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#FF8C00", # Naranja
+            wraplength=550,
+            justify="left"
+        )
+        # Mostrar solo si el valor actual ya es alto
+        if self.app.vector_dpi > 1200:
+            self.dpi_warning_label.pack(anchor="w", padx=15, pady=(0, 10))
+
+        # --- SUB-SECCIÓN: OPCIONES DE PREVISUALIZACIÓN ---
+        ctk.CTkLabel(frame_general, text="Calidad de Previsualización (Vectores)", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", pady=(15, 5), padx=5)
+
+        preview_opt_frame = ctk.CTkFrame(frame_general, fg_color=("gray85", "gray20"), corner_radius=8)
+        preview_opt_frame.pack(fill="x", pady=(0, 10), padx=5)
+
+        preview_opt_desc = "Ajusta la nitidez de la vista previa para archivos PDF, AI y EPS. Un valor bajo (72-100) es mucho más rápido y fluido al navegar."
+        ctk.CTkLabel(preview_opt_frame, text=preview_opt_desc, font=ctk.CTkFont(size=12), text_color="gray60", justify="left", wraplength=550).pack(anchor="w", padx=15, pady=(10, 10))
+
+        preview_controls = ctk.CTkFrame(preview_opt_frame, fg_color="transparent")
+        preview_controls.pack(fill="x", padx=15, pady=(0, 15))
+
+        self.preview_dpi_var = ctk.IntVar(value=self.app.preview_vector_dpi)
+
+        self.preview_slider = ctk.CTkSlider(
+            preview_controls, 
+            from_=72, to=150, 
+            variable=self.preview_dpi_var,
+            command=self._on_preview_dpi_change
+        )
+        self.preview_slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        self.preview_dpi_label = ctk.CTkLabel(
+            preview_controls, 
+            text=f"{self.app.preview_vector_dpi} DPI",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            width=70
+        )
+        self.preview_dpi_label.pack(side="right")
 
         self.sections["general"] = frame_general
         
@@ -787,6 +870,59 @@ class ConfigTab(ctk.CTkFrame):
             pass
 
     # ================= LÓGICA DE VRAM =================
+
+    def _on_vector_dpi_change(self, value):
+        """Actualiza el DPI vectorial desde el slider y sincroniza la entrada."""
+        val = int(value)
+        self.app.vector_dpi = val
+        
+        # Sincronizar entry (borrar y escribir para evitar bucles de eventos si fuera StringVar)
+        self.dpi_entry.delete(0, "end")
+        self.dpi_entry.insert(0, str(val))
+        
+        self._update_dpi_warning(val)
+        self.app.save_settings()
+
+    def _on_dpi_entry_change(self, event):
+        """Valida y sincroniza el DPI cuando el usuario escribe manualmente."""
+        text = self.dpi_entry.get()
+        if not text: return
+        
+        try:
+            val = int(text)
+            # Límite máximo avanzado: 2400
+            if val > 2400:
+                val = 2400
+                self.dpi_entry.delete(0, "end")
+                self.dpi_entry.insert(0, "2400")
+            elif val < 70:
+                # No forzamos el mínimo mientras escribe para no molestar, 
+                # pero el slider se quedará en el mínimo.
+                pass
+                
+            self.app.vector_dpi = val
+            self.vector_dpi_var.set(min(val, 1200)) # El slider solo llega a 1200 visualmente
+            
+            self._update_dpi_warning(val)
+            self.app.save_settings()
+        except ValueError:
+            pass # Ignorar si no es número mientras escribe
+
+    def _update_dpi_warning(self, val):
+        """Muestra u oculta la advertencia según el valor de DPI."""
+        if val > 1200:
+            if not self.dpi_warning_label.winfo_ismapped():
+                self.dpi_warning_label.pack(anchor="w", padx=15, pady=(0, 10))
+        else:
+            if self.dpi_warning_label.winfo_ismapped():
+                self.dpi_warning_label.pack_forget()
+
+    def _on_preview_dpi_change(self, value):
+        """Actualiza el DPI de previsualización y guarda la configuración."""
+        val = int(value)
+        self.preview_dpi_label.configure(text=f"{val} DPI")
+        self.app.preview_vector_dpi = val
+        self.app.save_settings()
 
     def _on_vram_persistence_toggle(self):
         """Guarda la preferencia de persistencia de modelos IA."""

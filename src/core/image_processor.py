@@ -202,7 +202,7 @@ class ImageProcessor:
             print(f"ERROR CRÍTICO obteniendo páginas: {e}")
             return 1
 
-    def generate_thumbnail(self, filepath, size=(400, 400), page_number=None):
+    def generate_thumbnail(self, filepath, size=(400, 400), page_number=None, dpi=None):
         """
         Genera una miniatura (PIL.Image) para un archivo.
         OPTIMIZADO: Prioriza velocidad sobre calidad.
@@ -219,21 +219,32 @@ class ImageProcessor:
                     import rawpy
                     import numpy as np
                     
-                    print(f"DEBUG: Revelando RAW con LibRaw: {filepath}")
-                    
                     with rawpy.imread(filepath) as raw:
-                        # 🎨 Revelar con configuración óptima para previsualización
-                        rgb = raw.postprocess(
-                            use_camera_wb=True,      # Balance de blancos de cámara
-                            half_size=True,          # 🚀 RÁPIDO: Usar 1/4 de resolución para thumbnails
-                            no_auto_bright=False,    # Auto exposición
-                            output_bps=8,            # 8 bits (suficiente para preview)
-                            output_color=rawpy.ColorSpace.sRGB,  # Espacio de color estándar
-                            demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD  # Mejor calidad/velocidad
-                        )
+                        try:
+                            # 🚀 ESTRATEGIA PRO: Extraer la miniatura incrustada
+                            thumb = raw.extract_thumb()
+                            
+                            if thumb.format == rawpy.ThumbFormat.JPEG:
+                                pil_image = Image.open(io.BytesIO(thumb.data))
+                            elif thumb.format == rawpy.ThumbFormat.BITMAP:
+                                pil_image = Image.fromarray(thumb.data)
+                            
+                            # 🔍 VALIDACIÓN DE TAMAÑO:
+                            if pil_image and (max(pil_image.size) < 800):
+                                raise Exception("Miniatura demasiado pequeña")
+                                
+                        except Exception:
+                            # 🔄 FALLBACK: Revelado de mayor calidad para previsualización
+                            rgb = raw.postprocess(
+                                use_camera_wb=True,
+                                half_size=False,         # 🎨 CALIDAD: Resolución completa
+                                no_auto_bright=False,
+                                output_bps=8,
+                                output_color=rawpy.ColorSpace.sRGB,
+                                demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD
+                            )
+                            pil_image = Image.fromarray(rgb)
                     
-                    # Convertir numpy array a PIL Image
-                    pil_image = Image.fromarray(rgb)
                     
                     # Aplicar rotación EXIF si existe
                     try:
@@ -267,9 +278,9 @@ class ImageProcessor:
                             png_data = cairosvg.svg2png(url=temp_svg, output_width=size[0], output_height=size[1])
                             pil_image = Image.open(io.BytesIO(png_data))
                         except Exception:
-                            pil_image = self._generate_thumbnail_with_inkscape(temp_svg, size, 1)
+                            pil_image = self._generate_thumbnail_with_inkscape(temp_svg, size, 1, dpi=dpi)
                     else:
-                        pil_image = self._generate_thumbnail_with_inkscape(filepath, size, 1)
+                        pil_image = self._generate_thumbnail_with_inkscape(filepath, size, 1, dpi=dpi)
                 finally:
                     if temp_svg and os.path.exists(temp_svg):
                         try: os.remove(temp_svg)
@@ -280,12 +291,12 @@ class ImageProcessor:
                 if page_number is None: page_number = 1
                 
                 # --- LÓGICA DIFERENCIADA ---
-                # Aumentamos a 300 DPI (Estándar de impresión) para nitidez total
-                render_dpi = 300  
+                # Usar el DPI solicitado o 100 por defecto para velocidad
+                render_dpi = dpi if dpi is not None else 100  
                 render_fmt = "png"
                 use_transparent = (ext == ".ai") # Solo transparente para .ai
                 
-                print(f"DEBUG: Renderizando {ext} a {render_dpi} DPI para máxima nitidez...")
+                print(f"DEBUG: Renderizando {ext} a {render_dpi} DPI para previsualización rápida...")
 
                 try:
                     with HideCmdWindow():
@@ -413,7 +424,13 @@ class ImageProcessor:
             if pil_image.mode != "RGBA":
                 pil_image = pil_image.convert("RGBA")
 
-            pil_image.thumbnail(size, Image.Resampling.LANCZOS)
+            # ❌ CORRECCIÓN FINAL: No aplicar thumbnail destructivo a los RAW.
+            # Queremos que el visor reciba la resolución completa para permitir Zoom fluido.
+            ext_upper = ext.upper() if 'ext' in locals() else ""
+            
+            if ext_upper not in IMAGE_RAW_FORMATS:
+                pil_image.thumbnail(size, Image.Resampling.LANCZOS)
+                
             return pil_image
 
         except Exception as e:
@@ -422,8 +439,9 @@ class ImageProcessor:
         finally:
             os.environ['PATH'] = original_path
 
-    def _generate_thumbnail_with_inkscape(self, filepath, size, page_number):
+    def _generate_thumbnail_with_inkscape(self, filepath, size, page_number, dpi=None):
         """Helper para generar miniaturas con Inkscape (DPI bajo)."""
+        render_dpi = dpi if dpi is not None else 100
         import subprocess
         import tempfile
         
@@ -432,7 +450,7 @@ class ImageProcessor:
                 tmp_png_path = tmp_png.name
             
             cmd = self._build_inkscape_command(
-                filepath, tmp_png_path, page_number, dpi=150 
+                filepath, tmp_png_path, page_number, dpi=render_dpi 
             )
             
             subprocess.run(

@@ -671,6 +671,8 @@ class MainWindow(TkBase):
         self.console_enabled = False   # Consola de diagnóstico desactivada por defecto
         self.keep_ai_models_in_memory = False # Optimización de VRAM
         self.show_onnx_warning = True # Mostrar aviso de rendimiento de ONNX por defecto
+        self.vector_dpi = 300 # Calidad de renderizado para PDF/AI/EPS (Estándar: 300)
+        self.preview_vector_dpi = 100 # Calidad de previsualización para vectores (Rápida: 100)
         
         # --- INTENTAR CARGAR CONFIGURACIÓN GUARDADA ---
         try:
@@ -703,6 +705,8 @@ class MainWindow(TkBase):
                     self.console_enabled = settings.get("console_enabled", False)
                     self.keep_ai_models_in_memory = settings.get("keep_ai_models_in_memory", False)
                     self.show_onnx_warning = settings.get("show_onnx_warning", True)
+                    self.vector_dpi = settings.get("vector_dpi", 300)
+                    self.preview_vector_dpi = settings.get("preview_vector_dpi", 100)
                 print(f"DEBUG: Configuración cargada exitosamente.")
             else:
                 print("DEBUG: Archivo de configuración no encontrado. Usando valores por defecto.")
@@ -1515,6 +1519,8 @@ class MainWindow(TkBase):
             # Cookies
             "cookies_path": self.cookies_path,
             "cookies_mode": self.cookies_mode_saved,
+            "vector_dpi": self.vector_dpi,
+            "preview_vector_dpi": self.preview_vector_dpi,
             "selected_browser": self.selected_browser_saved,
             "browser_profile": self.browser_profile_saved,
 

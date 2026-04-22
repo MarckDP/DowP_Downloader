@@ -213,7 +213,7 @@ class SingleDownloadTab(ctk.CTkFrame):
     def _create_widgets(self):
 
         url_frame = ctk.CTkFrame(self)
-        url_frame.pack(pady=10, padx=10, fill="x")
+        url_frame.pack(pady=(10, 0), padx=10, fill="x")
         ctk.CTkLabel(url_frame, text="URL:").pack(side="left", padx=(10, 5))
         self.url_entry = ctk.CTkEntry(url_frame, placeholder_text="Pega la URL aquí...")
         self.url_entry.pack(side="left", fill="x", expand=True, padx=5)
@@ -1047,7 +1047,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         # Esto le dice a la app: "Usa TODO el espacio que sobre para el panel de en medio"
         # Asegúrate de haber guardado 'self.info_frame_ref' al inicio de la función como te indiqué antes.
         if hasattr(self, 'info_frame_ref'):
-            self.info_frame_ref.pack(side="top", fill="both", expand=True, padx=10, pady=10)
+            self.info_frame_ref.pack(side="top", fill="both", expand=True, padx=10, pady=(5, 10))
         
         # --- Binds y Configuración Final ---
         self.on_mode_change(self.mode_selector.get())

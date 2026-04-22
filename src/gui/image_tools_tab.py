@@ -125,18 +125,20 @@ class InteractiveImageViewer(ctk.CTkCanvas):
         
         iw, ih = self.original_image.size
         
-        # Calcular escala para ajustar
+        # ✅ NUEVO COMPORTAMIENTO: Encajar siempre al marco horizontal (Width Fit).
+        # Esto evita calcular escalas minúsculas (ej 0.04x) en imágenes gigantes como 8K, 
+        # lo cual ralentizaba drásticamente la extracción de regiones en Pillow.
         scale_w = cw / iw
-        scale_h = ch / ih
-        self.scale = min(scale_w, scale_h) * 0.95  # 95% para dejar un pequeño margen
+        self.scale = scale_w
         
-        # Centrar
         new_w = int(iw * self.scale)
         new_h = int(ih * self.scale)
+        
+        # Centrar horizontal y verticalmente
         self.pan_x = (cw - new_w) / 2
         self.pan_y = (ch - new_h) / 2
-        
-        print(f"DEBUG: fit_image() → Canvas: {cw}×{ch}, Imagen: {iw}×{ih}, Escala: {self.scale:.2f}, Pan: ({self.pan_x:.0f}, {self.pan_y:.0f})")
+            
+        print(f"DEBUG: fit_image() → Canvas: {cw}×{ch}, Imagen: {iw}×{ih}, Escala (Width-Fit): {self.scale:.2f}, Pan: ({self.pan_x:.0f}, {self.pan_y:.0f})")
         
         self._redraw()
 
@@ -341,14 +343,17 @@ class ComparisonViewer(ctk.CTkCanvas):
         iw, ih = self.img_after.size
         
         scale_w = cw / iw
-        scale_h = ch / ih
-        self.scale = min(scale_w, scale_h) * 0.95
+        
+        # ✅ NUEVO COMPORTAMIENTO: Encajar siempre al marco horizontal (Width Fit).
+        self.scale = scale_w
         
         new_w = iw * self.scale
         new_h = ih * self.scale
         
+        # Centrar horizontal y verticalmente
         self.pan_x = (cw - new_w) / 2
         self.pan_y = (ch - new_h) / 2
+            
         self.slider_pos = 0.5
         self._redraw()
 
@@ -469,10 +474,10 @@ class ComparisonViewer(ctk.CTkCanvas):
             cy = ch / 2
             self.create_oval(screen_slider_x-6, cy-6, screen_slider_x+6, cy+6, fill="white", outline="gray")
             
-            # Etiquetas flotantes
-            if self.scale > 0.5: # Solo si no está muy alejado
-                self.create_text(screen_slider_x - 10, cy - 20, text="Resultado", fill="white", anchor="e", font=("Arial", 10, "bold"))
-                self.create_text(screen_slider_x + 10, cy - 20, text="Original", fill="white", anchor="w", font=("Arial", 10, "bold"))
+            # Etiquetas flotantes (Siempre visibles, en la parte superior)
+            ty = 25
+            self.create_text(screen_slider_x - 12, ty, text="Resultado", fill="white", anchor="ne", font=("Arial", 10, "bold"))
+            self.create_text(screen_slider_x + 12, ty, text="Original", fill="white", anchor="nw", font=("Arial", 10, "bold"))
 
     # --- EVENTOS ---
 
@@ -635,23 +640,26 @@ class ImageToolsTab(ctk.CTkFrame):
         self.last_processed_output_dir = None
         self.current_selected_output_path = None
 
-        # --- 1. Diseño de la Rejilla Principal (3 Zonas) ---
+        # Fila 0: Barra de Entrada (URL, Importar, Pegar)
+        self.grid_rowconfigure(0, weight=0)
+        # Fila 1: Visor (Ancho completo)
+        self.grid_rowconfigure(1, weight=2)
+        # Fila 2: Contenido (Lista y Opciones)
+        self.grid_rowconfigure(2, weight=3)
+        # Fila 3: Panel de Salida
+        self.grid_rowconfigure(3, weight=0)
+        # Fila 4: Panel de Progreso
+        self.grid_rowconfigure(4, weight=0) 
         
-        # Fila 0: Contenido principal (Izquierda 50%, Derecha 50%)
-        self.grid_rowconfigure(0, weight=1)
-        # Fila 1: Panel de Salida (Altura fija)
-        self.grid_rowconfigure(1, weight=0)
-        # Fila 2: Panel de Progreso (Altura fija)
-        self.grid_rowconfigure(2, weight=0) 
-        
-        # ✅ CORRECCIÓN CRÍTICA: Pesos EXACTAMENTE iguales + sin minsize
-        # El minsize puede causar desbalance si una columna crece más que la otra
-        self.grid_columnconfigure(0, weight=1, uniform="cols")
-        self.grid_columnconfigure(1, weight=1, uniform="cols")
+        # Columnas: Proporción 40/60
+        self.grid_columnconfigure(0, weight=40, uniform="cols")
+        self.grid_columnconfigure(1, weight=60, uniform="cols")
         
         # --- 2. Crear los Paneles ---
-        self._create_left_panel()
-        self._create_right_panel()
+        self._create_top_bar()      # Nuevo: Entrada arriba
+        self._create_viewer_panel() # Visor debajo de entrada
+        self._create_left_panel()   # Gestión de lista
+        self._create_right_panel()  # Opciones
         self._create_bottom_panel()
         self._create_progress_panel()
 
@@ -662,92 +670,108 @@ class ImageToolsTab(ctk.CTkFrame):
     # --- CREACIÓN DE PANELES DE UI ---
     # ==================================================================
 
-    def _create_left_panel(self):
-        """Crea el panel izquierdo (40%) para la URL, botones y lista de archivos."""
+    def _create_top_bar(self):
+        """Crea la barra superior de entrada con el orden: Pegar | Importar | URL | Analizar."""
+        self.top_bar = ctk.CTkFrame(self)
+        self.top_bar.grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="ew")
         
-        self.left_panel = ctk.CTkFrame(self)
-        self.left_panel.grid(row=0, column=0, padx=(10, 5), pady=(10, 5), sticky="nsew")
-        
-        # Expandir la fila 3 (AHORA donde va la lista) para que ocupe el espacio vertical
-        self.left_panel.grid_rowconfigure(3, weight=1)
-        self.left_panel.grid_columnconfigure(0, weight=1)
-
-        # --- 1. Zona de URL (Fila 0) ---
-        self.url_frame = ctk.CTkFrame(self.left_panel)
-        self.url_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
-        self.url_frame.grid_columnconfigure(0, weight=1)
-        
-        self.url_entry = ctk.CTkEntry(self.url_frame, placeholder_text="Pegar URL de imagen o PDF...")
-        self.url_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.url_entry))
-        self.url_entry.grid(row=0, column=0, padx=(0, 5), pady=0, sticky="ew")
-
-        self.analyze_button = ctk.CTkButton(
-            self.url_frame, text="Añadir", width=80, 
-            command=self._on_analyze_url
-        )
-        self.analyze_button.grid(row=0, column=1, padx=(0, 0), pady=0)
-
-        # --- 2. Barra de Herramientas Unificada (Fila 1) ---
-        self.buttons_frame = ctk.CTkFrame(self.left_panel, fg_color="transparent")
-        self.buttons_frame.grid(row=1, column=0, padx=10, pady=(0, 5), sticky="ew")
-        
-        # Configurar 4 columnas con peso igual
-        self.buttons_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
-
-        # Botón 1: Importar (Con Menú)
-        self.import_button = ctk.CTkButton(
-            self.buttons_frame, 
-            text="Importar ▼", 
-            width=80,
-            command=self._show_import_menu
-        )
-        self.import_button.grid(row=0, column=0, padx=(0, 3), sticky="ew")
-
-        # Botón 2: Pegar
+        # 1. Botón Pegar (Verde)
         self.paste_button = ctk.CTkButton(
-            self.buttons_frame, 
-            text="Pegar", 
-            width=60,
+            self.top_bar, text="Pegar", width=80, 
+            fg_color="#28A745", hover_color="#218838",
             command=self._on_paste_list
         )
-        self.paste_button.grid(row=0, column=1, padx=3, sticky="ew")
+        self.paste_button.pack(side="left", padx=(10, 5), pady=0)
         
-        # Botón 3: Limpiar
-        self.clear_button = ctk.CTkButton(
-            self.buttons_frame, 
-            text="Limpiar", 
-            width=60,
-            command=self._on_clear_list
-        )
-        self.clear_button.grid(row=0, column=2, padx=3, sticky="ew")
+        # 2. Botón Importar
+        self.import_button = ctk.CTkButton(self.top_bar, text="Importar ▼", width=100, command=self._show_import_menu)
+        self.import_button.pack(side="left", padx=5, pady=0)
+        
+        # 3. Etiqueta URL
+        ctk.CTkLabel(self.top_bar, text="URL:").pack(side="left", padx=(15, 5))
+        
+        # 4. Entrada URL (Expansible)
+        self.url_entry = ctk.CTkEntry(self.top_bar, placeholder_text="Pega una URL de imagen aquí...")
+        self.url_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.url_entry))
+        self.url_entry.pack(side="left", fill="x", expand=True, padx=5, pady=0)
+        
+        # 5. Botón Analizar
+        self.analyze_button = ctk.CTkButton(self.top_bar, text="Analizar", width=100, command=self._on_analyze_url)
+        self.analyze_button.pack(side="left", padx=(5, 10), pady=0)
 
-        # Botón 4: Borrar (Rojo)
-        self.delete_button = ctk.CTkButton(
-            self.buttons_frame, 
-            text="Borrar", 
-            width=60,
-            fg_color="#DC3545", 
-            hover_color="#C82333",
-            command=self._on_delete_selected, 
-            state="disabled"
-        )
-        self.delete_button.grid(row=0, column=3, padx=(3, 0), sticky="ew")
+    def _create_viewer_panel(self):
+        """Crea el panel del visor."""
+        self.viewer_frame = ctk.CTkFrame(self, fg_color="#1D1D1D")
+        self.viewer_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="nsew")
+        self.viewer_frame.grid_propagate(False) 
 
-        # ✅ NUEVO: Checkbox "Omitir completados" (Fila 2)
-        self.process_only_new_checkbox = ctk.CTkCheckBox(
-            self.left_panel, 
-            text="Omitir completados",
-            font=ctk.CTkFont(size=12)
+        self.viewer_placeholder = ctk.CTkLabel(
+            self.viewer_frame, 
+            text="Selecciona un archivo de la lista para previsualizarlo",
+            text_color="gray"
         )
-        self.process_only_new_checkbox.grid(row=2, column=0, padx=15, pady=(5, 0), sticky="w")
-        self.process_only_new_checkbox.select() # Activado por defecto
+        self.viewer_placeholder.place(relx=0.5, rely=0.5, anchor="center")
 
-        # --- 3. Zona de Lista de Archivos (AHORA Fila 3) ---
-        # Frame contenedor que se expande
+    def _add_resolution_labels(self, original_size=None, result_size=None, is_vector=False):
+        """Añade etiquetas HUD de resolución sobre el visor."""
+        label_font = ctk.CTkFont(size=11, weight="bold")
+        bg_color = ("#333333", "#222222") # Gris oscuro semi-transparente
+        
+        if original_size:
+            w, h = original_size
+            text_orig = f"Original: {w}x{h} px"
+            if is_vector:
+                text_orig += "\n(Escala de Preview)"
+                
+            res_orig = ctk.CTkLabel(
+                self.viewer_frame, text=text_orig,
+                fg_color=bg_color, text_color="white",
+                corner_radius=6, font=label_font,
+                height=22, padx=8
+            )
+            res_orig.place(relx=0.98, rely=0.03, anchor="ne")
+            res_orig.lift()
+            
+        if result_size:
+            w, h = result_size
+            res_res = ctk.CTkLabel(
+                self.viewer_frame, text=f"Resultado: {w}x{h} px",
+                fg_color=bg_color, text_color="white",
+                corner_radius=6, font=label_font,
+                height=22, padx=8
+            )
+            res_res.place(relx=0.02, rely=0.03, anchor="nw")
+            res_res.lift()
+
+    def _create_left_panel(self):
+        """Crea el panel izquierdo (Gestión de lista de archivos)."""
+        
+        self.left_panel = ctk.CTkFrame(self)
+        self.left_panel.grid(row=2, column=0, padx=(10, 5), pady=(0, 5), sticky="nsew")
+        
+        # Expandir la fila de la lista
+        self.left_panel.grid_rowconfigure(2, weight=1)
+        self.left_panel.grid_columnconfigure(0, weight=1)
+
+        # --- 1. Botones de Gestión (Limpiar, Borrar) ---
+        self.list_buttons_frame = ctk.CTkFrame(self.left_panel, fg_color="transparent")
+        self.list_buttons_frame.grid(row=0, column=0, padx=5, pady=(5, 2), sticky="ew")
+        self.list_buttons_frame.grid_columnconfigure((0, 1), weight=1)
+
+        self.clear_button = ctk.CTkButton(self.list_buttons_frame, text="Limpiar Lista", height=28, command=self._on_clear_list)
+        self.clear_button.grid(row=0, column=0, padx=(0, 2), sticky="ew")
+        
+        self.delete_button = ctk.CTkButton(self.list_buttons_frame, text="Borrar Selecc.", height=28, fg_color="#DC3545", hover_color="#C82333", command=self._on_delete_selected, state="disabled")
+        self.delete_button.grid(row=0, column=1, padx=(2, 0), sticky="ew")
+
+        # --- 2. Checkbox "Omitir" ---
+        self.process_only_new_checkbox = ctk.CTkCheckBox(self.left_panel, text="Omitir completados", font=ctk.CTkFont(size=11))
+        self.process_only_new_checkbox.grid(row=1, column=0, padx=10, pady=(2, 2), sticky="w")
+        self.process_only_new_checkbox.select()
+
+        # --- 3. Lista de Archivos ---
         self.list_frame = ctk.CTkFrame(self.left_panel)
-        
-        # ⚠️ IMPORTANTE: Cambiamos row=2 a row=3
-        self.list_frame.grid(row=3, column=0, padx=10, pady=5, sticky="nsew")
+        self.list_frame.grid(row=2, column=0, padx=5, pady=(2, 5), sticky="nsew")
         
         self.list_frame.grid_columnconfigure(0, weight=1)
         self.list_frame.grid_rowconfigure(0, weight=1)
@@ -824,67 +848,40 @@ class ImageToolsTab(ctk.CTkFrame):
         self.list_status_label.grid(row=4, column=0, padx=10, pady=(0, 5), sticky="w") # <--- CAMBIAR 3 POR 4
 
     def _create_right_panel(self):
-        """Crea el panel derecho (60%) para el visor y las opciones."""
+        """Crea el panel derecho (Opciones de procesamiento)."""
         
         self.right_panel = ctk.CTkFrame(self)
-        self.right_panel.grid(row=0, column=1, padx=(5, 10), pady=(10, 5), sticky="nsew")
+        self.right_panel.grid(row=2, column=1, padx=(5, 10), pady=(0, 5), sticky="nsew")
 
-        # CORRECCIÓN: Usar proporciones para que el visor no sea gigante.
-        # weight=2 (Visor) vs weight=3 (Opciones) da un reparto aprox de 40% / 60%
-        self.right_panel.grid_rowconfigure(0, weight=2) 
-        self.right_panel.grid_rowconfigure(1, weight=0) 
-        self.right_panel.grid_rowconfigure(2, weight=3) 
+        self.right_panel.grid_rowconfigure(0, weight=0) 
+        self.right_panel.grid_rowconfigure(1, weight=1) 
         self.right_panel.grid_columnconfigure(0, weight=1)
 
-        # --- 1. Zona de Visor (Fila 0) ---
-        self.viewer_frame = ctk.CTkFrame(self.right_panel, fg_color="#1D1D1D")
-        self.viewer_frame.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="nsew")
-        
-        # CAMBIO: Quitamos la configuración interna de grid, usaremos .place()
-        self.viewer_frame.grid_propagate(False) 
-
-        self.viewer_placeholder = ctk.CTkLabel(
-            self.viewer_frame, 
-            text="Selecciona un archivo de la lista para previsualizarlo",
-            text_color="gray"
-        )
-        # CAMBIO: Usar place para centrar perfectamente
-        self.viewer_placeholder.place(relx=0.5, rely=0.5, anchor="center")
-
-        # --- 2. Zona de Título (Fila 1) ---
+        # --- 1. Zona de Título (Fila 0) ---
         self.title_frame = ctk.CTkFrame(self.right_panel)
-        self.title_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+        self.title_frame.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
         self.title_frame.grid_columnconfigure(1, weight=1)
         
         ctk.CTkLabel(self.title_frame, text="Título:").grid(row=0, column=0, padx=(10, 5))
         self.title_entry = ctk.CTkEntry(self.title_frame, placeholder_text="Nombre del archivo de salida...")
         self.title_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.title_entry))
-        
-        # ✅ NUEVO: Guardar título al escribir (KeyRelease)
         self.title_entry.bind("<KeyRelease>", self._on_title_entry_change)
-        
-        self.title_entry.grid(row=0, column=1, padx=(0, 10), sticky="ew")
+        self.title_entry.grid(row=0, column=1, padx=(0, 5), sticky="ew")
 
-        # ✅ NUEVO: Botón Copiar Resultado
         self.copy_result_button = ctk.CTkButton(
-            self.title_frame, 
-            text="Copiar", 
-            width=60, 
-            state="disabled", # Nace deshabilitado
+            self.title_frame, text="Copiar", width=60, state="disabled",
             command=self._copy_result_to_clipboard,
-            fg_color="#555555", 
-            hover_color="#444444"
+            fg_color="#555555", hover_color="#444444"
         )
         self.copy_result_button.grid(row=0, column=2, padx=(0, 5), sticky="e")
-        
         Tooltip(self.copy_result_button, "Copia la imagen procesada al portapapeles.", delay_ms=1000)
 
-        # --- 3. Zona de Opciones (Fila 2) ---
+        # --- 2. Zona de Opciones (Fila 1) ---
         self.options_frame = ctk.CTkScrollableFrame(
             self.right_panel, 
             label_text="Opciones de Procesamiento"
         )
-        self.options_frame.grid(row=2, column=0, padx=10, pady=(5, 10), sticky="nsew")
+        self.options_frame.grid(row=1, column=0, padx=10, pady=(5, 10), sticky="nsew")
         self.options_frame.grid_columnconfigure(0, weight=1)
         
         
@@ -1499,12 +1496,9 @@ class ImageToolsTab(ctk.CTkFrame):
         self._on_format_changed(self.format_menu.get())
         
     def _create_bottom_panel(self):
-        """
-        Crea el panel de salida inferior, copiando la estructura de 
-        batch_download_tab.py (sin límite de velocidad).
-        """
+        """Crea el panel de salida inferior."""
         self.bottom_panel = ctk.CTkFrame(self)
-        self.bottom_panel.grid(row=1, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
+        self.bottom_panel.grid(row=3, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
         
         # --- Fila 1 del panel (Ruta de salida) ---
         line1_frame = ctk.CTkFrame(self.bottom_panel, fg_color="transparent")
@@ -1582,7 +1576,7 @@ class ImageToolsTab(ctk.CTkFrame):
     def _create_progress_panel(self):
         """Crea el panel de progreso inferior."""
         self.progress_frame = ctk.CTkFrame(self)
-        self.progress_frame.grid(row=2, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
+        self.progress_frame.grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
         
         self.progress_label = ctk.CTkLabel(self.progress_frame, text="Listo. Añade archivos para empezar.")
         self.progress_label.pack(pady=(5,0))
@@ -3415,7 +3409,11 @@ class ImageToolsTab(ctk.CTkFrame):
 
             # No está en caché, agregar a la cola
             self.thumbnail_queue.put( (filepath, page_num) )
-            self._display_thumbnail_in_viewer(None, None, is_loading=True)
+            
+            is_vector = os.path.splitext(filepath)[1].lower() in (".ai", ".pdf", ".eps", ".svg", ".ps")
+            loading_text = "Renderizando vectores..." if is_vector else "Cargando..."
+            
+            self._display_thumbnail_in_viewer(None, None, loading_message=loading_text)
             self._start_thumbnail_worker()
             
         except Exception as e:
@@ -4210,6 +4208,9 @@ class ImageToolsTab(ctk.CTkFrame):
             # BMP
             "bmp_rle": self.bmp_rle.get() if hasattr(self, 'bmp_rle') else False,
             
+            # Global
+            "vector_dpi": self.app.vector_dpi,
+            
             # --- NUEVAS OPCIONES DE VIDEO ---
             "video_custom_title": self.video_filename_entry.get().strip() if hasattr(self, 'video_filename_entry') else "",
             "video_resolution": "Personalizado...", 
@@ -4633,6 +4634,13 @@ class ImageToolsTab(ctk.CTkFrame):
         
         if new_files_added > 0:
             print(f"INFO: Añadidos {new_files_added} archivos nuevos a la lista.")
+            # ✅ AUTO-SELECCIÓN: Seleccionar y mostrar el último ítem añadido
+            last_index = self.file_list_box.size() - 1
+            if last_index >= 0:
+                self.file_list_box.select_clear(0, "end")
+                self.file_list_box.select_set(last_index)
+                self.file_list_box.see(last_index)
+                self._on_file_select() # Disparar vista previa
         
         # Llamar a la función de estado centralizada
         self._update_list_status()
@@ -4742,7 +4750,31 @@ class ImageToolsTab(ctk.CTkFrame):
         # Enviar la imagen (o None) de vuelta al hilo principal (UI)
         self.app.after(0, self._display_thumbnail_in_viewer, pil_image, filepath)
 
-    def _display_thumbnail_in_viewer(self, pil_image, original_filepath, is_loading=False):
+    def _show_viewer_error(self, message):
+        """Muestra un mensaje de error estético en el visor."""
+        # Limpiar el frame
+        for widget in self.viewer_frame.winfo_children():
+            widget.destroy()
+        
+        # Contenedor de error
+        error_frame = ctk.CTkFrame(self.viewer_frame, fg_color="#3D2010", corner_radius=8)
+        error_frame.place(relx=0.5, rely=0.5, anchor="center")
+        
+        ctk.CTkLabel(
+            error_frame, 
+            text="⚠️", 
+            font=("Arial", 30)
+        ).pack(pady=(10, 0))
+        
+        ctk.CTkLabel(
+            error_frame, 
+            text=message, 
+            text_color="#FF9500",
+            font=("Arial", 13, "bold"),
+            wraplength=350
+        ).pack(padx=20, pady=10)
+
+    def _display_thumbnail_in_viewer(self, pil_image, original_filepath, is_loading=False, loading_message=None):
         """
         (Hilo de UI) Muestra la imagen en el visor interactivo.
         ✅ CORREGIDO: Fuerza centrado correcto en el primer load
@@ -4755,9 +4787,10 @@ class ImageToolsTab(ctk.CTkFrame):
         if original_filepath is not None and original_filepath != self.last_preview_path:
             return
 
-        if is_loading:
+        if is_loading or loading_message:
+            msg = loading_message if loading_message else "Cargando..."
             self.viewer_placeholder = ctk.CTkLabel(
-                self.viewer_frame, text="Cargando...", text_color="gray"
+                self.viewer_frame, text=msg, text_color="gray"
             )
             self.viewer_placeholder.place(relx=0.5, rely=0.5, anchor="center")
         
@@ -4776,16 +4809,46 @@ class ImageToolsTab(ctk.CTkFrame):
             is_raster_compatible = ext in IMAGE_RASTER_FORMATS
             
             # Cargar imagen
-            if original_filepath and os.path.exists(original_filepath) and is_raster_compatible:
-                print(f"DEBUG: Visor cargando Raster desde disco: {original_filepath}")
-                self.image_viewer.load_image(original_filepath)
-            elif pil_image:
-                print(f"DEBUG: Visor cargando Vector/Miniatura desde memoria")
-                self.image_viewer.load_image(pil_image)
+            try:
+                if original_filepath and os.path.exists(original_filepath) and is_raster_compatible:
+                    print(f"DEBUG: Visor cargando Raster desde disco: {original_filepath}")
+                    self.image_viewer.load_image(original_filepath)
+                elif pil_image:
+                    print(f"DEBUG: Visor cargando Vector/Miniatura desde memoria")
+                    self.image_viewer.load_image(pil_image)
+            except Exception as e:
+                error_msg = str(e)
+                if "decompression bomb" in error_msg.lower():
+                    self._show_viewer_error("Imagen demasiado grande para previsualizar (Límite de seguridad de Pillow).")
+                elif "MemoryError" in error_msg or "allocat" in error_msg.lower():
+                    self._show_viewer_error("Memoria insuficiente para mostrar esta imagen.")
+                else:
+                    self._show_viewer_error(f"Error al cargar imagen:\n{error_msg[:100]}")
+                return
             else:
                 self.viewer_placeholder = ctk.CTkLabel(self.viewer_frame, text="Error al cargar imagen", text_color="orange")
                 self.viewer_placeholder.place(relx=0.5, rely=0.5, anchor="center")
                 return
+
+            # 4. Añadir etiqueta de resolución original
+            orig_size = None
+            # PRIORIDAD: Intentar leer siempre el archivo original del disco para tener la resolución REAL
+            if original_filepath and os.path.exists(original_filepath):
+                try:
+                    with Image.open(original_filepath) as tmp:
+                        orig_size = tmp.size
+                except: pass
+            
+            # Solo si no hay archivo (o falló), usar el tamaño de la imagen en memoria
+            if not orig_size and pil_image:
+                orig_size = pil_image.size
+            
+            if orig_size:
+                is_vector = False
+                if original_filepath:
+                    _ext = os.path.splitext(original_filepath)[1].lower()
+                    is_vector = _ext in (".ai", ".pdf", ".eps", ".svg", ".ps")
+                self._add_resolution_labels(original_size=orig_size, is_vector=is_vector)
             
             # ✅ CORRECCIÓN: Programar un segundo fit después de que Tk termine de renderizar
             # Esto garantiza que las dimensiones sean las correctas
@@ -4843,7 +4906,8 @@ class ImageToolsTab(ctk.CTkFrame):
                 pil_image = self.image_processor.generate_thumbnail(
                     filepath, 
                     size=(width, height),
-                    page_number=page_num # <-- ¡EL NUEVO ARGUMENTO!
+                    page_number=page_num,
+                    dpi=self.app.preview_vector_dpi
                 )
                 
                 # 5. Verificar de nuevo si sigue siendo relevante
@@ -4903,16 +4967,22 @@ class ImageToolsTab(ctk.CTkFrame):
         real_path = key_parts[0]
         
         # --- LÓGICA DE CARGA ---
+        orig_size = None
         
-        # 1. Detectar si es Raster (JPG, PNG...) -> Cargar desde disco (Mejor calidad)
+        # 1. Detectar si es Raster estándar (Cargar desde disco para liberar RAM si es posible)
         ext = os.path.splitext(real_path)[1].lower().lstrip('.').upper()
         if ext == "JPG": ext = "JPEG"
         
-        is_raster_compatible = ext in IMAGE_RASTER_FORMATS
+        # Nota: Los RAW NO entran aquí porque Pillow no los abre a resolución completa
+        is_standard_raster = ext in ["JPG", "JPEG", "PNG", "BMP", "WEBP", "TIFF"]
         
-        if os.path.exists(real_path) and os.path.isfile(real_path) and is_raster_compatible:
-             print(f"DEBUG: Cargando imagen local Full Res desde caché: {real_path}")
+        if os.path.exists(real_path) and os.path.isfile(real_path) and is_standard_raster:
+             print(f"DEBUG: Cargando imagen local Full Res (Standard): {real_path}")
              self.image_viewer.load_image(real_path)
+             try:
+                 with Image.open(real_path) as tmp:
+                     orig_size = tmp.size
+             except: pass
              
         else:
              # 2. Es Vector (SVG, PDF) -> Usar la imagen PIL guardada en memoria
@@ -4931,19 +5001,28 @@ class ImageToolsTab(ctk.CTkFrame):
                      pil_image_to_show = stored['pil']
             
              if pil_image_to_show:
-                 # ✅ OPTIMIZACIÓN DE ENTRADA: Límite 4K
-                 # Si la imagen es absurdamente grande solo para "verla" antes de procesar,
-                 # la bajamos a 4K. Se sigue viendo perfecta, pero no explota la RAM.
-                 MAX_PREVIEW_SIZE = 1080 
-                 
+                 # ✅ OPTIMIZACIÓN DE ENTRADA: Límite 4000p para previsualización (Fidelidad alta)
+                 MAX_PREVIEW_SIZE = 4000 
                  w, h = pil_image_to_show.size
+                 
+                 if not orig_size:
+                     orig_size = (w, h)
+
                  if w > MAX_PREVIEW_SIZE or h > MAX_PREVIEW_SIZE:
-                     print(f"DEBUG: Optimizando vista previa de entrada ({w}x{h} -> Limitado a 4K)")
-                     pil_image_to_show = pil_image_to_show.copy() # Copia para no tocar el original
+                     print(f"DEBUG: Optimizando vista previa de entrada ({w}x{h} -> Limitado a 4000p)")
+                     pil_image_to_show = pil_image_to_show.copy()
                      pil_image_to_show.thumbnail((MAX_PREVIEW_SIZE, MAX_PREVIEW_SIZE), Image.Resampling.BILINEAR)
 
                  print(f"DEBUG: Cargando imagen en visor: {real_path}")
                  self.image_viewer.load_image(pil_image_to_show)
+        
+        # 3. Mostrar etiquetas HUD
+        if orig_size:
+            is_vector = False
+            if real_path:
+                _ext = os.path.splitext(real_path)[1].lower()
+                is_vector = _ext in (".ai", ".pdf", ".eps", ".svg", ".ps")
+            self._add_resolution_labels(original_size=orig_size, is_vector=is_vector)
 
     def import_folder_from_path(self, folder_path):
         """
@@ -5400,6 +5479,13 @@ class ImageToolsTab(ctk.CTkFrame):
             widget.destroy()
 
         try:
+            # ✅ RESOLUCIÓN REAL: Obtener siempre del origen (disco) para evitar valores de caché redimensionados
+            real_original_size = None
+            try:
+                with Image.open(input_path) as tmp_img:
+                    real_original_size = tmp_img.size
+            except: pass
+            
             # === PARTE 1: OBTENER IMAGEN ORIGINAL ("ANTES") ===
             
             # Generar clave única para el caché
@@ -5457,21 +5543,35 @@ class ImageToolsTab(ctk.CTkFrame):
                     print("DEBUG: 📂 Cargando imagen original del disco...")
                     try:
                         img_before = Image.open(input_path).convert("RGBA")
-                    except Exception:
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "decompression bomb" in error_msg.lower():
+                            self._show_viewer_error("Original demasiado grande para el visor (Límite Pillow).")
+                            return
+                        elif "MemoryError" in error_msg:
+                            self._show_viewer_error("Memoria insuficiente para cargar el original.")
+                            return
                         pass
                 
                 # Fallback genérico
                 if img_before is None:
-                     try: img_before = Image.open(input_path).convert("RGBA")
-                     except: pass
+                     try: 
+                         img_before = Image.open(input_path).convert("RGBA")
+                     except Exception as e:
+                         if "decompression bomb" in str(e).lower():
+                             self._show_viewer_error("Imagen excede el límite de seguridad de Pillow.")
+                             return
+                         pass
 
                 # ✅ GUARDAR EN CACHÉ (Si se generó correctamente)
                 if img_before:
-                    # Optimización: Si es absurdamente grande (>4K), reducirla un poco para la RAM
+                    if not real_original_size:
+                        real_original_size = img_before.size
+                    # Optimización: Si es absurdamente grande (>8K), reducirla un poco para la RAM
                     # (El archivo original no se toca, esto es solo para verla en pantalla)
-                    if img_before.width > 4000 or img_before.height > 4000:
-                        img_before.thumbnail((4000, 4000), Image.Resampling.BILINEAR)
-                        print("DEBUG: Imagen 'Antes' optimizada a 4K para caché RAM.")
+                    if img_before.width > 8192 or img_before.height > 8192:
+                        img_before.thumbnail((8192, 8192), Image.Resampling.BILINEAR)
+                        print("DEBUG: Imagen 'Antes' optimizada a 8K para caché RAM.")
 
                     # Gestión de memoria: Borrar antiguas si hay muchas
                     if len(self.comparison_cache) > 5:
@@ -5489,7 +5589,13 @@ class ImageToolsTab(ctk.CTkFrame):
                 try:
                     img_after = Image.open(output_path).convert("RGBA")
                 except Exception as e:
+                    error_msg = str(e)
                     print(f"ERROR: El archivo de resultado existe pero no se puede leer: {e}")
+                    if "decompression bomb" in error_msg.lower():
+                        self._show_viewer_error("Resultado demasiado grande para previsualizar (Límite Pillow).")
+                    elif "MemoryError" in error_msg:
+                        self._show_viewer_error("Memoria insuficiente para cargar el resultado.")
+                    return
 
             # Validación final
             if not img_before and img_after:
@@ -5535,6 +5641,18 @@ class ImageToolsTab(ctk.CTkFrame):
             
             # Forzar foco inmediato para permitir zoom con la rueda sin tener que clicar
             self.compare_viewer.focus_set()
+            
+            # 5. Añadir etiquetas de resolución (Original y Resultado)
+            is_vector = False
+            if input_path:
+                _ext = os.path.splitext(input_path)[1].lower()
+                is_vector = _ext in (".ai", ".pdf", ".eps", ".svg", ".ps")
+
+            self._add_resolution_labels(
+                original_size=real_original_size if real_original_size else img_before.size,
+                result_size=img_after.size,
+                is_vector=is_vector
+            )
             
             self._show_comparison_instructions()
 
