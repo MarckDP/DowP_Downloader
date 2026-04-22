@@ -2,7 +2,7 @@
 
 **Está hecho con IA (Gemini).**
 
-Es una interfaz gráfica para **`yt-dlp`** y **`ffmpeg`** desarrollada en **`Python`**. Permite la descarga y/o recodificación de medios (video y audio) tanto de fuentes remotas como locales. Diseñada para flujos de trabajo con **Adobe Premiere Pro**.
+Es una interfaz gráfica para **`yt-dlp`** y **`ffmpeg`** desarrollada en **`Python`**. Permite la descarga y/o recodificación de medios (video y audio) tanto de fuentes remotas como locales. Diseñada para flujos de trabajo con **Adobe Premiere Pro** y **Adobe After Effects**.
 
 <div align="center">
   <table>
