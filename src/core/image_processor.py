@@ -229,12 +229,18 @@ class ImageProcessor:
                             elif thumb.format == rawpy.ThumbFormat.BITMAP:
                                 pil_image = Image.fromarray(thumb.data)
                             
+                            print(f"DEBUG: [RAW] Miniatura extraída: {pil_image.size}, Formato: {thumb.format}")
+                            
                             # 🔍 VALIDACIÓN DE TAMAÑO:
                             if pil_image and (max(pil_image.size) < 800):
+                                print(f"DEBUG: [RAW] Miniatura demasiado pequeña ({pil_image.size}), forzando revelado.")
                                 raise Exception("Miniatura demasiado pequeña")
+                                
+                            print(f"DEBUG: [RAW] Miniatura validada exitosamente: {pil_image.size}")
                                 
                         except Exception:
                             # 🔄 FALLBACK: Revelado de mayor calidad para previsualización
+                            print(f"DEBUG: [RAW] Realizando revelado de alta calidad para {os.path.basename(filepath)}...")
                             rgb = raw.postprocess(
                                 use_camera_wb=True,
                                 half_size=False,         # 🎨 CALIDAD: Resolución completa
@@ -244,13 +250,16 @@ class ImageProcessor:
                                 demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD
                             )
                             pil_image = Image.fromarray(rgb)
+                            print(f"DEBUG: [RAW] Revelado finalizado. Tamaño: {pil_image.size}")
                     
                     
                     # Aplicar rotación EXIF si existe
                     try:
                         from PIL import ImageOps
                         pil_image = ImageOps.exif_transpose(pil_image)
-                    except:
+                        print(f"DEBUG: [RAW] Tras rotación EXIF: {pil_image.size}")
+                    except Exception as e:
+                        print(f"DEBUG: [RAW] Error en rotación: {e}")
                         pass
                     
                 except ImportError:
@@ -430,6 +439,8 @@ class ImageProcessor:
             
             if ext_upper not in IMAGE_RAW_FORMATS:
                 pil_image.thumbnail(size, Image.Resampling.LANCZOS)
+            else:
+                print(f"DEBUG: [RAW] Saltando thumbnail final para mantener resolución: {pil_image.size}")
                 
             return pil_image
 
