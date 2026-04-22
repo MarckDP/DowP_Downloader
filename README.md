@@ -5,11 +5,14 @@
 Es una interfaz gráfica para **`yt-dlp`** y **`ffmpeg`** desarrollada en **`Python`**. Permite la descarga y/o recodificación de medios (video y audio) tanto de fuentes remotas como locales. Diseñada para flujos de trabajo con **Adobe Premiere Pro**.
 
 <div align="center">
-  <img width="300" height="451" alt="image" src="https://github.com/user-attachments/assets/ac367935-bc6e-43ef-be37-fd9cb7e01d31" />
-  <img width="300" height="451" alt="image" src="https://github.com/user-attachments/assets/fa4c0c7d-83c4-49e1-abd9-b215d6adb021" />
-  <img width="300" height="451" alt="image" src="https://github.com/user-attachments/assets/c089d6fb-034b-4bb6-8b12-d2edc19063d3" />
-
-</div></div>
+  <table>
+    <tr>
+      <td valign="top"><img width="280" alt="image" src="https://github.com/user-attachments/assets/ac367935-bc6e-43ef-be37-fd9cb7e01d31" /></td>
+      <td valign="top"><img width="280" alt="image" src="https://github.com/user-attachments/assets/fa4c0c7d-83c4-49e1-abd9-b215d6adb021" /></td>
+      <td valign="top"><img width="280" alt="image" src="https://github.com/user-attachments/assets/c089d6fb-034b-4bb6-8b12-d2edc19063d3" /></td>
+    </tr>
+  </table>
+</div>
 
 ### 🎯 Pestañas Principales
 - **Proceso Único**: Descarga e importación individual con opciones de recodificación.
