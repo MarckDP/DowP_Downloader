@@ -46,6 +46,9 @@ class InteractiveImageViewer(ctk.CTkCanvas):
     Mantiene la resolución original para inspección de calidad.
     """
     def __init__(self, master, **kwargs):
+        # Asegurar que no tenga bordes blancos por defecto
+        kwargs.setdefault("highlightthickness", 1)
+        kwargs.setdefault("borderwidth", 0)
         super().__init__(master, **kwargs)
         
         # Estado interno
@@ -276,9 +279,11 @@ class InteractiveImageViewer(ctk.CTkCanvas):
         
         self.configure(cursor="arrow") # Restaurar cursor
     
-    def refresh_theme(self, bg_color, grid_color1=None, grid_color2=None):
-        """Actualiza el color de fondo y de la cuadrícula del canvas."""
+    def refresh_theme(self, bg_color, grid_color1=None, grid_color2=None, border_color=None):
+        """Actualiza el color de fondo, cuadrícula y borde del canvas."""
         self.configure(bg=bg_color)
+        if border_color:
+            self.configure(highlightbackground=border_color)
         if grid_color1 and grid_color2:
             self.grid_color1 = grid_color1
             self.grid_color2 = grid_color2
@@ -292,6 +297,9 @@ class ComparisonViewer(ctk.CTkCanvas):
     - Clic derecho: Paneo (Mover imagen)
     """
     def __init__(self, master, **kwargs):
+        # Asegurar que no tenga bordes blancos por defecto
+        kwargs.setdefault("highlightthickness", 1)
+        kwargs.setdefault("borderwidth", 0)
         super().__init__(master, **kwargs)
 
         # Datos de imágenes (PIL)
@@ -390,9 +398,11 @@ class ComparisonViewer(ctk.CTkCanvas):
         else:
             self._redraw()
 
-    def refresh_theme(self, bg_color):
-        """Actualiza el color de fondo del canvas."""
+    def refresh_theme(self, bg_color, border_color=None):
+        """Actualiza el color de fondo y borde del canvas."""
         self.configure(bg=bg_color)
+        if border_color:
+            self.configure(highlightbackground=border_color)
         self._redraw()
 
     # --- LÓGICA DE DIBUJADO (EL NÚCLEO) ---
@@ -698,6 +708,12 @@ class ImageToolsTab(ctk.CTkFrame):
         # --- 3. Cargar Configuración Inicial ---
         self._initialize_ui_settings()
 
+        # --- 4. Aplicar tema diferido ---
+        # Se ejecuta 150ms después de que la ventana esté completamente dibujada,
+        # garantizando que el modo de apariencia de CTk esté estabilizado y que
+        # todos los widgets (Listbox, viewer_frame, etc.) reciban el color correcto.
+        self.after(150, self.refresh_theme)
+
     # ==================================================================
     # --- SISTEMA DE TEMAS ---
     # ==================================================================
@@ -707,11 +723,16 @@ class ImageToolsTab(ctk.CTkFrame):
         if isinstance(color, (list, tuple)) and len(color) >= 2:
             # Preguntar a CTK el modo real (incluyendo si está en 'System')
             mode = ctk.get_appearance_mode().lower()
-            return color[1] if mode == "dark" else color[0]
+            resolved = color[1] if mode == "dark" else color[0]
+            return resolved
         return color
 
     def _load_theme_colors(self):
         """Carga los colores desde el motor de temas de la aplicación."""
+        mode = ctk.get_appearance_mode()
+        has_data = bool(self.app.theme_data) and "CustomColors" in self.app.theme_data
+        print(f"🎨 [THEME-LOAD] Modo CTk: '{mode}' | theme_data tiene CustomColors: {has_data}")
+        
         # Botones Principales
         self.DOWNLOAD_BTN_COLOR = self.app.get_theme_color("DOWNLOAD_BTN", ["#28A745", "#218838"])
         self.DOWNLOAD_BTN_HOVER = self.app.get_theme_color("DOWNLOAD_BTN_HOVER", ["#218838", "#1E7E34"])
@@ -740,8 +761,13 @@ class ImageToolsTab(ctk.CTkFrame):
         self.LISTBOX_SELECTED_TEXT = self.app.get_theme_color("LISTBOX_SELECTED_TEXT", ["white", "white"])
         self.LISTBOX_BORDER = self.app.get_theme_color("DND_BORDER", ["#565B5E", "#565B5E"])
 
+        print(f"🎨 [THEME-LOAD] LISTBOX_BG (raw del JSON): {self.LISTBOX_BG}")
+        print(f"🎨 [THEME-LOAD] LISTBOX_TEXT (raw del JSON): {self.LISTBOX_TEXT}")
+        print(f"🎨 [THEME-LOAD] VIEWER_BG (raw del JSON): {self.VIEWER_BG if hasattr(self, 'VIEWER_BG') else '(no cargado aún)'}")
+
         # Colores de Visores
         self.VIEWER_BG = self.app.get_theme_color("VIEWER_BG", ["#F0F0F0", "#1D1D1D"])
+        self.VIEWER_BORDER = self.app.get_theme_color("VIEWER_BORDER", ["#565B5E", "#565B5E"])
         self.HUD_BG = self.app.get_theme_color("HUD_BG", ["#333333", "#222222"])
         self.HUD_TEXT = self.app.get_theme_color("HUD_TEXT", ["white", "white"])
         self.SEPARATOR_COLOR = self.app.get_theme_color("SEPARATOR_COLOR", ["gray75", "gray35"])
@@ -753,22 +779,50 @@ class ImageToolsTab(ctk.CTkFrame):
 
         self.DISABLED_TEXT_COLOR = self.app.get_theme_color("DISABLED_TEXT", ["#A0A0A0", "#D3D3D3"])
         self.DISABLED_FG_COLOR = self.app.get_theme_color("DISABLED_FG", ["#565b5f", "#565b5f"])
+        
+        print(f"🎨 [THEME-LOAD] VIEWER_BG (raw): {self.VIEWER_BG}")
 
     def refresh_theme(self):
         """Aplica los colores del tema actual a todos los widgets de la pestaña."""
+        mode = ctk.get_appearance_mode()
+        print(f"🔄 [REFRESH-THEME] === INICIO === Modo CTk: '{mode}'")
+        
         # Forzar a que la interfaz procese cambios pendientes antes de resolver colores
         self.update_idletasks()
         self._load_theme_colors()
 
         # 1. Actualizar Visores y Contenedores
-        if hasattr(self, 'viewer_canvas'):
-            self.viewer_canvas.refresh_theme(self.VIEWER_BG, self.GRID_COLOR_1, self.GRID_COLOR_2)
-        if hasattr(self, 'comparison_canvas'):
-            self.comparison_canvas.refresh_theme(self.VIEWER_BG, self.GRID_COLOR_1, self.GRID_COLOR_2)
+        # Los viewers se crean dinámicamente con nombre 'image_viewer' / 'compare_viewer'
+        viewer_bg = self._resolve_color(self.VIEWER_BG)
+        grid1 = self._resolve_color(self.GRID_COLOR_1)
+        grid2 = self._resolve_color(self.GRID_COLOR_2)
+        print(f"🔄 [REFRESH-THEME] Viewer BG resuelto: '{viewer_bg}' (raw: {self.VIEWER_BG})")
+
+        has_viewer = hasattr(self, 'image_viewer') and self.image_viewer.winfo_exists()
+        has_compare = hasattr(self, 'compare_viewer') and self.compare_viewer.winfo_exists()
+        print(f"🔄 [REFRESH-THEME] image_viewer existe: {has_viewer} | compare_viewer existe: {has_compare}")
         
+        if has_viewer:
+            try:
+                border_c = self._resolve_color(self.VIEWER_BORDER)
+                self.image_viewer.refresh_theme(viewer_bg, grid1, grid2, border_color=border_c)
+                actual_bg = self.image_viewer.cget("bg")
+                print(f"🔄 [REFRESH-THEME] ✅ Canvas image_viewer → bg aplicado: '{actual_bg}', border: {border_c}")
+            except Exception as e:
+                print(f"🔄 [REFRESH-THEME] ❌ Canvas image_viewer FALLÓ: {e}")
+        if has_compare:
+            try:
+                border_c = self._resolve_color(self.VIEWER_BORDER)
+                self.compare_viewer.refresh_theme(viewer_bg, border_color=border_c)
+                actual_bg = self.compare_viewer.cget("bg")
+                print(f"🔄 [REFRESH-THEME] ✅ Canvas compare_viewer → bg aplicado: '{actual_bg}', border: {border_c}")
+            except Exception as e:
+                print(f"🔄 [REFRESH-THEME] ❌ Canvas compare_viewer FALLÓ: {e}")
+
         # El frame del visor también tiene fondo
         if hasattr(self, 'viewer_frame'):
             self.viewer_frame.configure(fg_color=self.VIEWER_BG)
+            print(f"🔄 [REFRESH-THEME] viewer_frame fg_color → {self.VIEWER_BG}")
 
         # Panel izquierdo (Lista)
         if hasattr(self, 'left_panel'):
@@ -785,22 +839,45 @@ class ImageToolsTab(ctk.CTkFrame):
         if hasattr(self, 'analyze_button'):
             self.analyze_button.configure(fg_color=self.ANALYZE_BTN_COLOR, hover_color=self.ANALYZE_BTN_HOVER, text_color=self.ANALYZE_BTN_TEXT)
 
-            # 3. Lista de Archivos (FIJA OSCURA para estabilidad)
-            self.file_list_box.configure(
-                bg="#18181A",
-                fg="#DCE4EE",
-                selectbackground="#B8860B",
-                selectforeground="white",
-                highlightbackground="#3F3F46"
-            )
-            # Sincronizar etiqueta de ayuda y scrollbars (Fijos)
-            if hasattr(self, 'drag_hint_label'):
-                self.drag_hint_label.configure(fg_color="#18181A")
+        # 3. Lista de Archivos (Dinámica: lee colores del JSON del tema)
+        if hasattr(self, 'file_list_box'):
+            listbox_bg = self._resolve_color(self.LISTBOX_BG)
+            listbox_fg = self._resolve_color(self.LISTBOX_TEXT)
+            listbox_sel_bg = self._resolve_color(self.LISTBOX_SELECTED_BG)
+            listbox_sel_fg = self._resolve_color(self.LISTBOX_SELECTED_TEXT)
+            listbox_border = self._resolve_color(self.LISTBOX_BORDER)
             
+            print(f"🔄 [REFRESH-THEME] 📋 Listbox (tkinter) ANTES → bg='{self.file_list_box.cget('bg')}', fg='{self.file_list_box.cget('fg')}'")
+            print(f"🔄 [REFRESH-THEME] 📋 Listbox APLICANDO → bg='{listbox_bg}', fg='{listbox_fg}', sel_bg='{listbox_sel_bg}'")
+            
+            try:
+                self.file_list_box.configure(
+                    bg=listbox_bg,
+                    fg=listbox_fg,
+                    selectbackground=listbox_sel_bg,
+                    selectforeground=listbox_sel_fg,
+                    highlightbackground=listbox_border
+                )
+                actual_bg = self.file_list_box.cget('bg')
+                actual_fg = self.file_list_box.cget('fg')
+                print(f"🔄 [REFRESH-THEME] 📋 Listbox DESPUÉS → bg='{actual_bg}', fg='{actual_fg}' → {'✅ CAMBIÓ' if actual_bg == listbox_bg else '❌ NO CAMBIÓ'}")
+            except Exception as e:
+                print(f"🔄 [REFRESH-THEME] ❌ Listbox configure FALLÓ: {e}")
+            
+            # Sincronizar etiqueta de ayuda (mismo fondo que la listbox)
+            if hasattr(self, 'drag_hint_label'):
+                self.drag_hint_label.configure(fg_color=listbox_bg)
+            # Sincronizar frame contenedor (evita franjas de color distinto)
+            if hasattr(self, 'list_frame'):
+                self.list_frame.configure(fg_color=listbox_bg)
             if hasattr(self, 'file_list_scrollbar_y'):
-                self.file_list_scrollbar_y.configure(button_color="#444444", button_hover_color="#555555")
+                self.file_list_scrollbar_y.configure(fg_color=listbox_bg)
             if hasattr(self, 'file_list_scrollbar_x'):
-                self.file_list_scrollbar_x.configure(button_color="#444444", button_hover_color="#555555")
+                self.file_list_scrollbar_x.configure(fg_color=listbox_bg)
+        else:
+            print(f"🔄 [REFRESH-THEME] ⚠️ file_list_box NO EXISTE (hasattr=False)")
+        
+        print(f"🔄 [REFRESH-THEME] === FIN ===")
         
         if hasattr(self, 'clear_button'):
             self.clear_button.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)
@@ -883,7 +960,7 @@ class ImageToolsTab(ctk.CTkFrame):
     def _add_resolution_labels(self, original_size=None, result_size=None, is_vector=False):
         """Añade etiquetas HUD de resolución sobre el visor."""
         label_font = ctk.CTkFont(size=11, weight="bold")
-        bg_color = ("#333333", "#222222") # Gris oscuro semi-transparente
+        bg_color = self.HUD_BG
         
         if original_size:
             w, h = original_size
@@ -952,16 +1029,21 @@ class ImageToolsTab(ctk.CTkFrame):
         self.file_list_scrollbar_x = ctk.CTkScrollbar(self.list_frame, orientation="horizontal")
         self.file_list_scrollbar_x.grid(row=1, column=0, sticky="ew")
 
-        # Listbox Nativo (Tkinter)
+        # Listbox Nativo (Tkinter) — colores leídos del tema activo
+        _lb_bg  = self._resolve_color(self.LISTBOX_BG)
+        _lb_fg  = self._resolve_color(self.LISTBOX_TEXT)
+        _lb_sel = self._resolve_color(self.LISTBOX_SELECTED_BG)
+        _lb_sft = self._resolve_color(self.LISTBOX_SELECTED_TEXT)
+        _lb_bdr = self._resolve_color(self.LISTBOX_BORDER)
         self.file_list_box = tkinter.Listbox(
             self.list_frame,
-            bg="#18181A",
-            fg="#DCE4EE",
-            selectbackground="#B8860B",
-            selectforeground="white",
+            bg=_lb_bg,
+            fg=_lb_fg,
+            selectbackground=_lb_sel,
+            selectforeground=_lb_sft,
             borderwidth=0,
             highlightthickness=1,
-            highlightbackground="#3F3F46",
+            highlightbackground=_lb_bdr,
             font=("Segoe UI", 10),
             activestyle="none",
             selectmode="extended",
@@ -975,12 +1057,12 @@ class ImageToolsTab(ctk.CTkFrame):
         self.file_list_scrollbar_y.configure(command=self.file_list_box.yview)
         self.file_list_scrollbar_x.configure(command=self.file_list_box.xview)
 
-        # Etiqueta de "Arrastra aquí" (Empty State)
+        # Etiqueta de "Arrastra aquí" (Empty State) — mismo fondo que la listbox
         self.drag_hint_label = ctk.CTkLabel(
             self.list_frame,
             text="Arrastra archivos o carpetas aquí\no usa 'Importar Archivos'",
             text_color="gray",
-            fg_color="#18181A",
+            fg_color=_lb_bg,
             font=ctk.CTkFont(size=12, weight="bold")
         )
         self.drag_hint_label.place(relx=0.5, rely=0.5, anchor="center")
@@ -1040,7 +1122,7 @@ class ImageToolsTab(ctk.CTkFrame):
         self.copy_result_button = ctk.CTkButton(
             self.title_frame, text="Copiar", width=60, state="disabled",
             command=self._copy_result_to_clipboard,
-            fg_color="#555555", hover_color="#444444"
+            fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER
         )
         self.copy_result_button.grid(row=0, column=2, padx=(0, 5), sticky="e")
         Tooltip(self.copy_result_button, "Copia la imagen procesada al portapapeles.", delay_ms=1000)
@@ -2678,7 +2760,7 @@ class ImageToolsTab(ctk.CTkFrame):
         self.pause_event.set()
         
         self.start_process_button.configure(state="normal", text="Cancelar", 
-                                        fg_color="#DC3545", hover_color="#C82333")
+                                        fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER)
         self.import_button.configure(state="disabled")
         
         
@@ -3863,7 +3945,7 @@ class ImageToolsTab(ctk.CTkFrame):
         self.cancel_event.clear() # No está cancelado
         
         self.start_process_button.configure(state="normal", text="Cancelar", 
-                                        fg_color="#DC3545", hover_color="#C82333")
+                                        fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER)
         
         # ✅ CORRECCIÓN: Deshabilitar el nuevo botón único
         self.import_button.configure(state="disabled")
@@ -5038,8 +5120,12 @@ class ImageToolsTab(ctk.CTkFrame):
             self.viewer_placeholder.place(relx=0.5, rely=0.5, anchor="center")
         
         elif pil_image or (original_filepath and os.path.exists(original_filepath)):
-            # 3. Instanciar Visor Interactivo
-            self.image_viewer = InteractiveImageViewer(self.viewer_frame)
+            # 3. Instanciar Visor Interactivo con color de fondo del tema
+            _vbg = self._resolve_color(self.VIEWER_BG)
+            _vbr = self._resolve_color(self.VIEWER_BORDER)
+            self.image_viewer = InteractiveImageViewer(self.viewer_frame, bg=_vbg, highlightbackground=_vbr)
+            self.image_viewer.grid_color1 = self._resolve_color(self.GRID_COLOR_1)
+            self.image_viewer.grid_color2 = self._resolve_color(self.GRID_COLOR_2)
             self.image_viewer.pack(expand=True, fill="both")
             
             # ✅ CRÍTICO: Forzar actualización de geometría ANTES de cargar
@@ -5201,8 +5287,12 @@ class ImageToolsTab(ctk.CTkFrame):
         for widget in self.viewer_frame.winfo_children():
             widget.destroy()
             
-        # Instanciar Visor
-        self.image_viewer = InteractiveImageViewer(self.viewer_frame)
+        # Instanciar Visor con color de fondo del tema
+        _vbg = self._resolve_color(self.VIEWER_BG)
+        _vbr = self._resolve_color(self.VIEWER_BORDER)
+        self.image_viewer = InteractiveImageViewer(self.viewer_frame, bg=_vbg, highlightbackground=_vbr)
+        self.image_viewer.grid_color1 = self._resolve_color(self.GRID_COLOR_1)
+        self.image_viewer.grid_color2 = self._resolve_color(self.GRID_COLOR_2)
         self.image_viewer.pack(expand=True, fill="both")
         
         # Obtener la ruta real
@@ -5877,7 +5967,10 @@ class ImageToolsTab(ctk.CTkFrame):
                 img_before = canvas_before
 
             # === PARTE 4: MOSTRAR EN VISOR ===
-            self.compare_viewer = ComparisonViewer(self.viewer_frame)
+            _vbg = self._resolve_color(self.VIEWER_BG)
+            self.compare_viewer = ComparisonViewer(self.viewer_frame, bg=_vbg)
+            self.compare_viewer.grid_color1 = self._resolve_color(self.GRID_COLOR_1)
+            self.compare_viewer.grid_color2 = self._resolve_color(self.GRID_COLOR_2)
             self.compare_viewer.place(relx=0, rely=0, relwidth=1, relheight=1)
             
             self.compare_viewer.load_images(img_before, img_after)

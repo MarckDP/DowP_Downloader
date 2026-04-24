@@ -39,12 +39,13 @@
     "LISTBOX_SELECTED_BG": ["#B8860B", "#8B6508"],
     "LISTBOX_SELECTED_TEXT": ["#ffffff", "#ffffff"],
     "VIEWER_BG": ["#F0F0F0", "#18181A"],
+    "VIEWER_BORDER": ["#B8860B", "#D4AF37"],
     "HUD_BG": ["gray86", "#202024"],
     "HUD_TEXT": ["gray10", "#DCE4EE"],
     "SEPARATOR_COLOR": ["gray65", "#3F3F46"],
     "OPTIONS_PANEL_BG": ["gray81", "#2A2A2E"],
-    "TRANSPARENCY_GRID_1": ["#E1E1E1", "#252525"],
-    "TRANSPARENCY_GRID_2": ["#F0F0F0", "#1D1D1D"]
+    "TRANSPARENCY_GRID_1": ["#F5E6A3", "#5C4A1E"],
+    "TRANSPARENCY_GRID_2": ["#FFFFFF", "#3A2F0F"]
   },
   "CTk": { "fg_color": ["gray92", "#18181A"] },
   "CTkToplevel": { "fg_color": ["gray92", "#18181A"] },

@@ -153,8 +153,6 @@ class ConfigTab(ctk.CTkFrame):
             theme_row, 
             text="Importar Tema 📂", 
             width=120,
-            fg_color="transparent",
-            border_width=1,
             command=self._import_theme
         )
         self.import_theme_btn.pack(side="left", padx=5)
@@ -284,8 +282,6 @@ class ConfigTab(ctk.CTkFrame):
             text="Descargar Inkscape 🌐", 
             width=140, height=24, 
             font=ctk.CTkFont(size=11), 
-            fg_color="transparent", 
-            border_width=1, 
             command=lambda: webbrowser.open(INKSCAPE_URL)
         )
         self.ink_download_btn.pack(side="right")
@@ -1049,6 +1045,11 @@ class ConfigTab(ctk.CTkFrame):
         self.app.save_settings()
         
         print(f"DEBUG: Modo de apariencia cambiado a: {internal_mode}")
+        
+        # Propagar el cambio de modo a los widgets nativos (tkinter Listbox, Canvas)
+        # CTk actualiza sus propios widgets automáticamente, pero los nativos necesitan
+        # un refresh manual para leer el nuevo color según el modo Light/Dark.
+        self.app.after(100, self.app.refresh_theme)
 
     def _refresh_theme_list(self):
         """Escanea las carpetas de temas y actualiza el menú desplegable."""
@@ -1674,6 +1675,61 @@ class ConfigTab(ctk.CTkFrame):
                 # Escalar valor de 0-100 a 0.0-1.0 para el widget
                 normalized_value = max(0.0, min(1.0, value / 100.0))
                 self.dep_progress[key]["bar"].set(normalized_value)
+
+    def refresh_theme(self):
+        """Actualiza los colores de la pestaña de configuración dinámicamente."""
+        # 1. Cargar colores del tema
+        download_btn = self.app.get_theme_color("DOWNLOAD_BTN", ["#3B8ED0", "#1F6AA5"])
+        download_hover = self.app.get_theme_color("DOWNLOAD_BTN_HOVER", ["#367fb8", "#1a5a8a"])
+        download_text = self.app.get_theme_color("DOWNLOAD_BTN_TEXT", ["white", "white"])
+
+        cancel_btn = self.app.get_theme_color("CANCEL_BTN", ["#dc3545", "#c82333"])
+        cancel_hover = self.app.get_theme_color("CANCEL_BTN_HOVER", ["#c82333", "#bd2130"])
+        cancel_text = self.app.get_theme_color("CANCEL_BTN_TEXT", ["white", "white"])
+
+        secondary_btn = self.app.get_theme_color("SECONDARY_BTN", ["gray50", "gray30"])
+        secondary_hover = self.app.get_theme_color("SECONDARY_BTN_HOVER", ["gray60", "gray40"])
+        secondary_text = self.app.get_theme_color("SECONDARY_BTN_TEXT", ["white", "white"])
+
+        # 2. Aplicar a botones específicos
+        # Botones de "Importar" y "Descargar Inkscape" (Ahora usan el color primario de descarga por defecto)
+        self.import_theme_btn.configure(fg_color=download_btn, hover_color=download_hover, text_color=download_text)
+        self.ink_download_btn.configure(fg_color=download_btn, hover_color=download_hover, text_color=download_text)
+        
+        # Botón de liberar VRAM (Usa el de cancelar/peligro)
+        self.clear_vram_btn.configure(fg_color=cancel_btn, hover_color=cancel_hover, text_color=cancel_text)
+        
+        # Botón de buscar actualizaciones
+        self.btn_check_all_updates.configure(fg_color=download_btn, hover_color=download_hover, text_color=download_text)
+
+        # Botones de modelos e IA
+        if hasattr(self, 'model_rows'):
+            for row in self.model_rows.values():
+                # El botón de descargar usa el primario
+                row["dl_btn"].configure(fg_color=download_btn, hover_color=download_hover, text_color=download_text)
+                # El botón de eliminar usa el de cancelar
+                row["del_btn"].configure(fg_color=cancel_btn, hover_color=cancel_hover, text_color=cancel_text)
+                # El botón de carpeta usa el secundario
+                if row.get("folder_btn"):
+                    row["folder_btn"].configure(fg_color=secondary_btn, hover_color=secondary_hover, text_color=secondary_text)
+
+        # Botones de dependencias
+        if hasattr(self, 'dep_buttons'):
+            for key, btn in self.dep_buttons.items():
+                if key == "ffmpeg_safe":
+                    continue # Este tiene color propio verde
+                # Si el botón está habilitado, ponerle el color de descarga
+                if btn.cget("state") != "disabled":
+                    btn.configure(fg_color=download_btn, hover_color=download_hover, text_color=download_text)
+
+        # 3. Forzar refresco de consola si está abierta
+        if hasattr(self, '_console_textbox'):
+            lb_bg = self.app.get_theme_color("LISTBOX_BG", ["#F9F9FA", "#18181A"])
+            lb_text = self.app.get_theme_color("LISTBOX_TEXT", ["gray10", "#DCE4EE"])
+            self._console_textbox.configure(fg_color=lb_bg[1] if ctk.get_appearance_mode() == "Dark" else lb_bg[0],
+                                          text_color=lb_text[1] if ctk.get_appearance_mode() == "Dark" else lb_text[0])
+
+        print("🔄 [REFRESH-THEME] ✅ ConfigTab actualizada dinámicamente.")
 
     def _load_local_versions(self):
         """Carga las versiones locales instantáneamente."""
