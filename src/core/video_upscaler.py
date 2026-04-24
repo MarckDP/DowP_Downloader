@@ -31,6 +31,7 @@ CONTAINER_CODECS = {
     ".mkv":  {"vcodec": "libx264",      "acodec": "copy",         "pix_fmt": "yuv420p"},
     ".mov":  {"vcodec": "libx264",      "acodec": "aac",          "pix_fmt": "yuv420p"},
     ".avi":  {"vcodec": "libx264",      "acodec": "libmp3lame",   "pix_fmt": "yuv420p"},
+    ".gif":  {"vcodec": "gif",          "acodec": None,           "pix_fmt": "rgb24"}, # GIF no lleva audio
 }
 
 
@@ -87,11 +88,15 @@ class VideoUpscaler:
         return subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
     def _thread_args(self) -> str:
+        """
+        Calcula los hilos de carga:proceso:guardado.
+        En video somos más conservadores que en imagen para evitar crashes de GPU por saturación.
+        """
         n = multiprocessing.cpu_count()
-        if n >= 8:
-            return "2:4:2"
-        elif n >= 4:
-            return "1:2:2"
+        if n >= 12:
+            return "1:2:1" # Máximo balanceado para video
+        elif n >= 6:
+            return "1:1:1"
         return "1:1:1"
 
     # ─── Paso 1: Obtener info del video original ─────────────────────────────
@@ -204,10 +209,20 @@ class VideoUpscaler:
     # ─── Paso 3: Reescalar con NCNN ─────────────────────────────────────────
 
     def _build_ncnn_cmd(self, engine: str, model_friendly: str, scale: str,
-                        in_dir: str, out_dir: str, tile_size: str = "0", denoise: str = "-1", tta: bool = False) -> list:
+                        in_dir: str, out_dir: str, tile_size: str = "0", denoise: str = "-1", tta: bool = False, concurrency: str = "Automático") -> list:
         """Construye el comando NCNN para procesar un directorio de frames."""
         if not tile_size: tile_size = "0"
-        threads_arg = self._thread_args()
+        
+        # Mapear concurrencia elegida por el usuario
+        if concurrency == "Seguro (Estabilidad)":
+            threads_arg = "1:1:1"
+        elif concurrency == "Equilibrado":
+            threads_arg = "1:2:1"
+        elif concurrency == "Máximo (Potente)":
+            threads_arg = "2:4:2"
+        else:
+            # Automático (Lógica interna conservadora para video)
+            threads_arg = self._thread_args()
 
         if engine == "SRMD":
             info = SRMD_MODELS.get(model_friendly, {})
@@ -275,12 +290,12 @@ class VideoUpscaler:
             return cmd
 
     def _run_ncnn(self, engine: str, model_friendly: str, scale: str,
-                  in_dir: str, out_dir: str, total_frames: int, tile_size: str = "0", denoise: str = "-1", tta: bool = False):
+                  in_dir: str, out_dir: str, total_frames: int, tile_size: str = "0", denoise: str = "-1", tta: bool = False, concurrency: str = "Automático"):
         """Ejecuta el proceso NCNN y reporta progreso estimado."""
         self._check_cancel()
         self._report(15, f"Iniciando motor AI ({engine})...")
 
-        cmd = self._build_ncnn_cmd(engine, model_friendly, scale, in_dir, out_dir, tile_size, denoise, tta)
+        cmd = self._build_ncnn_cmd(engine, model_friendly, scale, in_dir, out_dir, tile_size, denoise, tta, concurrency)
         print(f"DEBUG [VideoUpscaler] NCNN cmd: {' '.join(cmd)}")
 
         exe = cmd[0]
@@ -340,17 +355,41 @@ class VideoUpscaler:
         proc.wait()
         reader_thread.join(timeout=1.0)
 
+        stderr_out = "".join(_logs)
+        
+        # --- NUEVAS VALIDACIONES DE ERROR ---
+        
+        # 1. Verificar retorno de error
         if proc.returncode != 0:
-            stderr_out = "".join(_logs)
             print(f"ERROR NCNN: {stderr_out}")
             raise Exception(f"El motor AI falló (Código {proc.returncode}).\n\nDetalles:\n{stderr_out[:500]}")
+
+        # 2. Verificar errores críticos de Vulkan en el log (incluso si retornó 0)
+        vulkan_errors = ["vkQueueSubmit failed", "vkAllocateMemory failed", "invalid gpu device", "out of gpu memory"]
+        if any(err in stderr_out for err in vulkan_errors):
+            print(f"CRITICAL ERROR (Vulkan): {stderr_out}")
+            raise Exception(
+                "Error de Hardware (Vulkan) detectado.\n\n"
+                "Tu tarjeta gráfica no pudo procesar los fotogramas. "
+                "Intenta reducir el 'Tamaño de Mosaico (Tile Size)' a 128 o 64 en los ajustes."
+            )
+
+        # 3. Verificar integridad de los frames producidos
+        out_frames = [f for f in os.listdir(out_dir) if f.endswith(".png")]
+        if not out_frames:
+            raise Exception("El motor AI terminó pero no se generó ningún fotograma reescalado.")
+            
+        # Comprobar si el primer frame es válido (no 0 bytes)
+        first_frame = os.path.join(out_dir, out_frames[0])
+        if os.path.getsize(first_frame) < 100: # Un PNG real pesa más de 100 bytes
+            raise Exception("Error de procesamiento: Los fotogramas generados están vacíos o corruptos (posible incompatibilidad de driver GPU).")
 
         self._report(85, "Reescalado completado con éxito.")
 
     # ─── Paso 4: Reensamblar con FFmpeg ─────────────────────────────────────
 
     def _reassemble(self, upscaled_dir: str, original_path: str,
-                    output_path: str, fps: str, container: str, has_audio: bool):
+                    output_path: str, fps: str, container: str, has_audio: bool, transparency: bool = False):
         """Ensambla los frames reescalados + audio original en el video final."""
         self._check_cancel()
         self._report(86, "Preparando ensamblado final...")
@@ -369,16 +408,34 @@ class VideoUpscaler:
         if has_audio:
             cmd += ["-i", original_path]
 
-        cmd += [
-            "-c:v", codec_info["vcodec"],
-            "-pix_fmt", codec_info["pix_fmt"],
-            "-crf", "18",           # Calidad alta
-            "-preset", "fast",
-        ]
+        if ext == ".gif":
+            # Para GIFs usamos una lógica de paleta para mayor calidad
+            # y evitamos el codec x264 que no es soportado por el muxer gif
+            cmd += [
+                "-vf", "fps=" + fps + ",scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+                "-loop", "0"
+            ]
+        else:
+            if transparency and ext == ".mov":
+                # Usar codec Animation (qtrle) para preservar Alpha en MOV
+                cmd += [
+                    "-c:v", "qtrle", 
+                    "-pix_fmt", "rgba",
+                ]
+            else:
+                cmd += [
+                    "-c:v", codec_info["vcodec"],
+                    "-pix_fmt", codec_info["pix_fmt"],
+                    "-crf", "18",           # Calidad alta
+                    "-preset", "fast",
+                ]
 
-        if has_audio:
+        if has_audio and ext != ".gif":
             # Copiar audio del segundo input (-i original_path)
             cmd += ["-c:a", codec_info["acodec"], "-map", "0:v:0", "-map", "1:a:0?"]
+        else:
+            # Solo video (o GIF)
+            cmd += ["-map", "0:v:0"]
 
         cmd += ["-y", output_path]
 
@@ -485,10 +542,14 @@ class VideoUpscaler:
             tile_size = options.get("upscale_tile", "0")
             denoise = options.get("upscale_denoise", "-1")
             tta = options.get("upscale_tta", False)
-            self._run_ncnn(engine, model, scale, frames_dir, upscaled_dir, total, tile_size=tile_size, denoise=denoise, tta=tta)
+            concurrency = options.get("upscale_concurrency", "Automático")
+            transparency = options.get("upscale_transparency", False)
+            
+            self._run_ncnn(engine, model, scale, frames_dir, upscaled_dir, total, 
+                           tile_size=tile_size, denoise=denoise, tta=tta, concurrency=concurrency)
 
             # Paso 3: Reensamblar
-            self._reassemble(upscaled_dir, input_path, output_path, fps, ext_out, has_audio)
+            self._reassemble(upscaled_dir, input_path, output_path, fps, ext_out, has_audio, transparency=transparency)
 
         finally:
             # Limpieza garantizada

@@ -78,6 +78,9 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.is_initializing = True 
         self.pack(expand=True, fill="both")
         
+        # 🎨 Cargar colores del tema (dinámicos)
+        self._load_theme_colors()
+        
         # Hacemos "atajos" a objetos globales que usaremos mucho
         self.ffmpeg_processor = self.app.ffmpeg_processor
         self.cancellation_event = self.app.cancellation_event
@@ -138,6 +141,82 @@ class SingleDownloadTab(ctk.CTkFrame):
 
         self._create_widgets()
         self._initialize_ui_settings()
+
+    def _load_theme_colors(self):
+        """Carga los colores dinámicos desde el tema de la aplicación."""
+        self.DOWNLOAD_BTN_COLOR = self.app.get_theme_color("DOWNLOAD_BTN", "#28A745")
+        self.DOWNLOAD_BTN_HOVER = self.app.get_theme_color("DOWNLOAD_BTN_HOVER", "#218838")
+        self.PROCESS_BTN_COLOR = self.app.get_theme_color("PROCESS_BTN", "#6F42C1")
+        self.PROCESS_BTN_HOVER = self.app.get_theme_color("PROCESS_BTN_HOVER", "#59369A")
+        self.ANALYZE_BTN_COLOR = self.app.get_theme_color("ANALYZE_BTN", "#007BFF")
+        self.ANALYZE_BTN_HOVER = self.app.get_theme_color("ANALYZE_BTN_HOVER", "#0069D9")
+        self.CANCEL_BTN_COLOR = self.app.get_theme_color("CANCEL_BTN", "#DC3545")
+        self.CANCEL_BTN_HOVER = self.app.get_theme_color("CANCEL_BTN_HOVER", "#C82333")
+        self.SECONDARY_BTN_COLOR = self.app.get_theme_color("SECONDARY_BTN", "#555555")
+        self.SECONDARY_BTN_HOVER = self.app.get_theme_color("SECONDARY_BTN_HOVER", "#444444")
+        
+        # Colores de Drag & Drop
+        self.DND_BORDER_COLOR = self.app.get_theme_color("DND_BORDER", "#007BFF")
+        self.DND_BG_COLOR = self.app.get_theme_color("DND_BG", "#1a3d5c")
+        self.DND_TEXT_COLOR = self.app.get_theme_color("DND_TEXT", "#00BFFF")
+        
+        # Colores de texto (Internos)
+        self.DOWNLOAD_BTN_TEXT = self.app.get_theme_color("DOWNLOAD_BTN_TEXT", "white")
+        self.ANALYZE_BTN_TEXT = self.app.get_theme_color("ANALYZE_BTN_TEXT", "white")
+        self.CANCEL_BTN_TEXT = self.app.get_theme_color("CANCEL_BTN_TEXT", "white")
+        self.PROCESS_BTN_TEXT = self.app.get_theme_color("PROCESS_BTN_TEXT", "white")
+        self.SECONDARY_BTN_TEXT = self.app.get_theme_color("SECONDARY_BTN_TEXT", "white")
+        
+        self.DISABLED_TEXT_COLOR = self.app.get_theme_color("DISABLED_TEXT", "#D3D3D3")
+        self.DISABLED_FG_COLOR = self.app.get_theme_color("DISABLED_FG", "#565b5f")
+
+    def refresh_theme(self):
+        """Actualiza los colores de los widgets críticos según el tema actual."""
+        self._load_theme_colors()
+        
+        # Actualizar colores originales guardados para estados dinámicos
+        self.original_analyze_fg_color = self.ANALYZE_BTN_COLOR
+        self.original_download_fg_color = self.DOWNLOAD_BTN_COLOR
+        
+        # 1. Botones Principales
+        if hasattr(self, 'analyze_button'):
+            self.analyze_button.configure(
+                fg_color=self.ANALYZE_BTN_COLOR, 
+                hover_color=self.ANALYZE_BTN_HOVER,
+                text_color=self.ANALYZE_BTN_TEXT
+            )
+        
+        if hasattr(self, 'download_button'):
+            self.download_button.configure(
+                fg_color=self.DOWNLOAD_BTN_COLOR, 
+                hover_color=self.DOWNLOAD_BTN_HOVER,
+                text_color=self.DOWNLOAD_BTN_TEXT,
+                text_color_disabled=self.DISABLED_TEXT_COLOR
+            )
+
+        # 2. Botones de Presets
+        if hasattr(self, 'import_preset_button'):
+            self.import_preset_button.configure(fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, text_color=self.DOWNLOAD_BTN_TEXT)
+        if hasattr(self, 'export_preset_button'):
+            self.export_preset_button.configure(fg_color=self.ANALYZE_BTN_COLOR, hover_color=self.ANALYZE_BTN_HOVER, text_color=self.ANALYZE_BTN_TEXT)
+        if hasattr(self, 'delete_preset_button'):
+            self.delete_preset_button.configure(fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER, text_color=self.CANCEL_BTN_TEXT)
+
+        # 3. Botones de Herramientas / Modelos
+        if hasattr(self, 'open_models_folder_button'):
+            self.open_models_folder_button.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)
+        if hasattr(self, 'upscale_add_custom_btn'):
+            self.upscale_add_custom_btn.configure(fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, text_color=self.DOWNLOAD_BTN_TEXT)
+        if hasattr(self, 'upscale_delete_btn'):
+            self.upscale_delete_btn.configure(fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER, text_color=self.CANCEL_BTN_TEXT)
+        if hasattr(self, 'upscale_open_btn'):
+            self.upscale_open_btn.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)
+        
+        # 4. Otros widgets específicos
+        if hasattr(self, 'clear_local_file_button'):
+            self.clear_local_file_button.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)
+        if hasattr(self, 'import_button'):
+            self.import_button.configure(fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, text_color=self.DOWNLOAD_BTN_TEXT)
 
     def _get_ctk_fg_color(self, ctk_widget):
         """
@@ -420,7 +499,7 @@ class SingleDownloadTab(ctk.CTkFrame):
             maintenance_frame,
             text="Abrir Carpeta de Modelos",
             command=self._open_ai_models_folder,
-            fg_color="#555555", hover_color="#444444", # Color gris discreto
+            fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, # Color dinámico
             height=24
         )
         self.open_models_folder_button.grid(row=13, column=0, padx=10, pady=(0, 15), sticky="ew")
@@ -526,8 +605,8 @@ class SingleDownloadTab(ctk.CTkFrame):
             preset_actions_frame,
             text="📥 Importar",
             command=self.import_preset_file,
-            fg_color="#28A745",
-            hover_color="#218838"
+            fg_color=self.DOWNLOAD_BTN_COLOR,
+            hover_color=self.DOWNLOAD_BTN_HOVER
         )
         self.import_preset_button.grid(row=0, column=0, padx=(0, 5), sticky="ew")
         
@@ -536,8 +615,8 @@ class SingleDownloadTab(ctk.CTkFrame):
             text="📤 Exportar",
             command=self.export_preset_file,
             state="disabled",
-            fg_color="#007BFF",
-            hover_color="#0069D9"
+            fg_color=self.ANALYZE_BTN_COLOR,
+            hover_color=self.ANALYZE_BTN_HOVER
         )
         self.export_preset_button.grid(row=0, column=1, padx=5, sticky="ew")
         
@@ -546,8 +625,8 @@ class SingleDownloadTab(ctk.CTkFrame):
             text="🗑️ Eliminar",
             command=self.delete_preset_file,
             state="disabled",
-            fg_color="#DC3545",
-            hover_color="#C82333"
+            fg_color=self.CANCEL_BTN_COLOR,
+            hover_color=self.CANCEL_BTN_HOVER
         )
         self.delete_preset_button.grid(row=0, column=2, padx=(5, 0), sticky="ew")
         
@@ -842,6 +921,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.upscale_video_subpanel = ctk.CTkFrame(self.extract_options_frame, fg_color="transparent")
         self.upscale_video_subpanel.grid(row=4, column=0, columnspan=2, sticky="ew")
         self.upscale_video_subpanel.grid_columnconfigure(1, weight=1)
+        self.upscale_video_subpanel.grid_columnconfigure(3, weight=1) # Nuevo peso para Tile Size
         self.upscale_video_subpanel.grid_remove()
 
         # 3a. Motor
@@ -853,7 +933,7 @@ class SingleDownloadTab(ctk.CTkFrame):
             font=ctk.CTkFont(size=12),
             command=self._on_upscale_engine_change
         )
-        self.upscale_engine_menu.grid(row=0, column=1, padx=(0, 10), pady=(5, 3), sticky="ew")
+        self.upscale_engine_menu.grid(row=0, column=1, columnspan=3, padx=(0, 10), pady=(5, 3), sticky="ew")
         Tooltip(self.upscale_engine_menu, "Motor de IA para reescalado.\nUpscayl es el mas recomendado para video.", delay_ms=1000)
 
         # 3b. Modelo
@@ -861,7 +941,7 @@ class SingleDownloadTab(ctk.CTkFrame):
             row=1, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
         # Contenedor para Modelo + Botón
         self.upscale_model_container = ctk.CTkFrame(self.upscale_video_subpanel, fg_color="transparent")
-        self.upscale_model_container.grid(row=1, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
+        self.upscale_model_container.grid(row=1, column=1, columnspan=3, padx=(0, 10), pady=(3, 3), sticky="ew")
         self.upscale_model_container.grid_columnconfigure(0, weight=1)
 
         self.upscale_model_menu = ctk.CTkOptionMenu(
@@ -877,34 +957,46 @@ class SingleDownloadTab(ctk.CTkFrame):
             text="+",
             width=30,
             height=24,
-            fg_color="#28A745",
-            hover_color="#218838",
+            fg_color=self.DOWNLOAD_BTN_COLOR,
+            hover_color=self.DOWNLOAD_BTN_HOVER,
             font=ctk.CTkFont(size=16, weight="bold"),
             command=self._on_add_custom_model
         )
         self.upscale_add_custom_btn.grid(row=0, column=1, padx=0, pady=0, sticky="e")
         Tooltip(self.upscale_add_custom_btn, "Agregar modelo personalizado (.bin/.param)", delay_ms=500)
 
-        # 3c. Escala
+        # 3c. Escala y Tile Size (Misma fila)
         ctk.CTkLabel(self.upscale_video_subpanel, text="Escala:", font=ctk.CTkFont(size=12)).grid(
             row=2, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
-        # Escalas iniciales (Upscayl por defecto)
         _initial_scales = ["2x", "3x", "4x", "5x", "6x", "7x", "8x"]
         self.upscale_scale_menu = ctk.CTkOptionMenu(
             self.upscale_video_subpanel,
             values=_initial_scales,
+            width=70,
             font=ctk.CTkFont(size=12)
         )
-        self.upscale_scale_menu.grid(row=2, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
-        Tooltip(self.upscale_scale_menu, "Factor de reescalado.\nx2 duplica la resolucion, x4 la cuadruplica.", delay_ms=1000)
-
-        # 3c-2. Tile Size (Para evitar Crashes/Hangs por VRAM) - AHORA DEBAJO
+        self.upscale_scale_menu.grid(row=2, column=1, padx=(0, 5), pady=(3, 3), sticky="w")
+        
         ctk.CTkLabel(self.upscale_video_subpanel, text="Tile Size:", font=ctk.CTkFont(size=12)).grid(
+            row=2, column=2, padx=(5, 5), pady=(3, 3), sticky="w")
+        self.upscale_tile_entry = ctk.CTkEntry(self.upscale_video_subpanel, width=60, placeholder_text="0", font=ctk.CTkFont(size=12))
+        self.upscale_tile_entry.insert(0, "0")
+        self.upscale_tile_entry.grid(row=2, column=3, padx=(0, 10), pady=(3, 3), sticky="w")
+        
+        Tooltip(self.upscale_scale_menu, "Factor de reescalado.", delay_ms=1000)
+        Tooltip(self.upscale_tile_entry, "Tamaño de bloque (VRAM). 0 = Auto.", delay_ms=1000)
+
+        # 3c-2. Potencia (Hilos de procesamiento)
+        ctk.CTkLabel(self.upscale_video_subpanel, text="Potencia:", font=ctk.CTkFont(size=12)).grid(
             row=3, column=0, padx=(10, 5), pady=(3, 3), sticky="w")
-        self.upscale_tile_entry = ctk.CTkEntry(self.upscale_video_subpanel, placeholder_text="0", font=ctk.CTkFont(size=12))
-        self.upscale_tile_entry.insert(0, "200")
-        self.upscale_tile_entry.grid(row=3, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
-        Tooltip(self.upscale_tile_entry, "Tamaño del bloque de procesamiento (VRAM).\n200 es el valor recomendado.\nUsa 0 para Automático o 100 si tienes errores de memoria.", delay_ms=1000)
+        self.upscale_threads_menu = ctk.CTkOptionMenu(
+            self.upscale_video_subpanel,
+            values=["Automático", "Seguro (Estabilidad)", "Equilibrado", "Máximo (Potente)"],
+            font=ctk.CTkFont(size=12)
+        )
+        self.upscale_threads_menu.set("Automático")
+        self.upscale_threads_menu.grid(row=3, column=1, columnspan=3, padx=(0, 10), pady=(3, 3), sticky="ew")
+        Tooltip(self.upscale_threads_menu, "Control de hilos (concurrencia).", delay_ms=1000)
 
         # 3c-3. Reducción de Ruido (Solo Waifu2x/SRMD)
         self.upscale_denoise_label = ctk.CTkLabel(self.upscale_video_subpanel, text="Reducir Ruido:", font=ctk.CTkFont(size=12))
@@ -915,7 +1007,7 @@ class SingleDownloadTab(ctk.CTkFrame):
             font=ctk.CTkFont(size=12)
         )
         self.upscale_denoise_menu.set("2 (Alta)")
-        self.upscale_denoise_menu.grid(row=4, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
+        self.upscale_denoise_menu.grid(row=4, column=1, columnspan=3, padx=(0, 10), pady=(3, 3), sticky="ew")
         Tooltip(self.upscale_denoise_menu, "Nivel de reducción de ruido (Solo compatible con Waifu2x y SRMD).", delay_ms=1000)
 
         # 3d. Contenedor de salida
@@ -926,8 +1018,8 @@ class SingleDownloadTab(ctk.CTkFrame):
             values=["Mismo que el original", "MP4", "MKV", "MOV", "AVI"],
             font=ctk.CTkFont(size=12)
         )
-        self.upscale_container_menu.grid(row=5, column=1, padx=(0, 10), pady=(3, 3), sticky="ew")
-        Tooltip(self.upscale_container_menu, "Formato del video de salida.\n'Mismo que el original' conserva la extension del archivo de entrada.", delay_ms=1000)
+        self.upscale_container_menu.grid(row=5, column=1, columnspan=3, padx=(0, 10), pady=(3, 3), sticky="ew")
+        Tooltip(self.upscale_container_menu, "Formato del video de salida.", delay_ms=1000)
 
         # 3f. TTA (Test Time Augmentation)
         self.upscale_tta_checkbox = ctk.CTkCheckBox(
@@ -935,40 +1027,50 @@ class SingleDownloadTab(ctk.CTkFrame):
             text="TTA (Mejor calidad, muy lento)",
             font=ctk.CTkFont(size=12)
         )
-        self.upscale_tta_checkbox.grid(row=6, column=0, columnspan=2, padx=(10, 5), pady=(3, 3), sticky="w")
+        self.upscale_tta_checkbox.grid(row=6, column=0, columnspan=4, padx=(10, 5), pady=(3, 3), sticky="w")
         self.upscale_tta_checkbox.deselect() # Desactivado por defecto
-        Tooltip(self.upscale_tta_checkbox, "Test Time Augmentation.\nReduce artefactos y mejora la precision de los bordes,\npero hace que el proceso sea hasta 8 veces mas lento.", delay_ms=1000)
+        Tooltip(self.upscale_tta_checkbox, "Test Time Augmentation.", delay_ms=1000)
+
+        # 3g. Transparencia - NUEVO
+        self.upscale_transparency_checkbox = ctk.CTkCheckBox(
+            self.upscale_video_subpanel,
+            text="Preservar Transparencia (Alpha)",
+            font=ctk.CTkFont(size=12),
+            command=self._on_transparency_toggle
+        )
+        self.upscale_transparency_checkbox.grid(row=7, column=0, columnspan=4, padx=(10, 5), pady=(3, 3), sticky="w")
+        Tooltip(self.upscale_transparency_checkbox, "Conserva el canal Alpha (transparencia).", delay_ms=1000)
 
         # 3e. Nombre del archivo de salida
         ctk.CTkLabel(self.upscale_video_subpanel, text="Nombre de salida:", font=ctk.CTkFont(size=12)).grid(
-            row=7, column=0, padx=(10, 5), pady=(3, 5), sticky="w")
+            row=8, column=0, padx=(10, 5), pady=(3, 5), sticky="w")
         self.upscale_output_name_entry = ctk.CTkEntry(
             self.upscale_video_subpanel,
             placeholder_text="Nombre del video + '_upscaled'",
             font=ctk.CTkFont(size=12)
         )
-        self.upscale_output_name_entry.grid(row=7, column=1, padx=(0, 10), pady=(3, 5), sticky="ew")
-        Tooltip(self.upscale_output_name_entry, "Nombre personalizado para el archivo de salida.\nDejalo vacio para usar el nombre original con sufijo '_upscaled'.", delay_ms=1000)
+        self.upscale_output_name_entry.grid(row=8, column=1, columnspan=3, padx=(0, 10), pady=(3, 5), sticky="ew")
+        Tooltip(self.upscale_output_name_entry, "Nombre personalizado para el archivo de salida.", delay_ms=1000)
 
         # 3f. Estado del Motor (Instalado/No)
         self.upscale_status_label = ctk.CTkLabel(self.upscale_video_subpanel, text="", font=ctk.CTkFont(size=10))
-        self.upscale_status_label.grid(row=7, column=0, columnspan=2, padx=10, pady=(2, 2), sticky="ew")
+        self.upscale_status_label.grid(row=9, column=0, columnspan=4, padx=10, pady=(2, 2), sticky="ew")
 
         # 3g. Botones de Gestión (Abrir/Borrar/Guardar Preset)
         self.upscale_mgmt_frame = ctk.CTkFrame(self.upscale_video_subpanel, fg_color="transparent")
-        self.upscale_mgmt_frame.grid(row=8, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
+        self.upscale_mgmt_frame.grid(row=10, column=0, columnspan=4, padx=10, pady=(0, 5), sticky="ew")
         self.upscale_mgmt_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
         self.upscale_open_btn = ctk.CTkButton(
             self.upscale_mgmt_frame, text="Abrir", height=22, font=ctk.CTkFont(size=11),
-            fg_color="#555555", hover_color="#444444",
+            fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER,
             command=lambda: self._open_model_folder("upscale")
         )
         self.upscale_open_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
 
         self.upscale_delete_btn = ctk.CTkButton(
             self.upscale_mgmt_frame, text="Borrar", height=22, font=ctk.CTkFont(size=11),
-            fg_color="#DC3545", hover_color="#C82333",
+            fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER,
             command=lambda: self._delete_current_model("upscale")
         )
         self.upscale_delete_btn.grid(row=0, column=1, padx=(5, 5), sticky="ew")
@@ -987,10 +1089,10 @@ class SingleDownloadTab(ctk.CTkFrame):
         local_import_frame = ctk.CTkFrame(self.recode_main_frame)
         local_import_frame.pack(side="bottom", fill="x", padx=10, pady=(15, 5))
         ctk.CTkLabel(local_import_frame, text="¿Tienes un archivo existente?", font=ctk.CTkFont(weight="bold")).pack()
-        self.import_button = ctk.CTkButton(local_import_frame, text="Importar Archivo Local para Recodificar", command=self.import_local_file)
+        self.import_button = ctk.CTkButton(local_import_frame, text="Importar Archivo Local para Recodificar", fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, command=self.import_local_file)
         self.import_button.pack(fill="x", padx=10, pady=5)
         self.save_in_same_folder_check = ctk.CTkCheckBox(local_import_frame, text="Guardar en la misma carpeta que el original", command=self._on_save_in_same_folder_change)
-        self.clear_local_file_button = ctk.CTkButton(local_import_frame, text="Limpiar y Volver a Modo URL", fg_color="gray", hover_color="#555555", command=self.reset_to_url_mode)
+        self.clear_local_file_button = ctk.CTkButton(local_import_frame, text="Limpiar y Volver a Modo URL", fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, command=self.reset_to_url_mode)
         
         # 1. Panel de Progreso (Lo creamos PRIMERO para que quede al fondo absoluto)
         progress_frame = ctk.CTkFrame(self)
@@ -4211,11 +4313,6 @@ class SingleDownloadTab(ctk.CTkFrame):
             extract_checked = self.extract_frames_checkbox.get() == 1
             upscale_checked = self.upscale_video_checkbox.get() == 1
 
-            if not extract_checked and not upscale_checked:
-                self.progress_label.configure(text="Activa al menos una opcion en Extras.")
-                self._reset_download_button()
-                return
-
             if extract_checked:
                 print("DEBUG: Iniciando Hilo de Extraccion.")
                 extract_options = {
@@ -4245,11 +4342,19 @@ class SingleDownloadTab(ctk.CTkFrame):
                     "upscale_tile":            self.upscale_tile_entry.get() or "0",
                     "upscale_denoise":         self.upscale_denoise_menu.get().split(" ")[0], # "-1", "0", etc.
                     "upscale_tta":             self.upscale_tta_checkbox.get() == 1,
+                    "upscale_concurrency":     self.upscale_threads_menu.get(),
+                    "upscale_transparency":    self.upscale_transparency_checkbox.get() == 1,
                     "keep_originals":          self.keep_original_checkbox.get() == 1
                 }
                 options.update(upscale_options)
                 self.active_operation_thread = threading.Thread(
                     target=self._execute_video_upscale_thread, args=(options,), daemon=True)
+                self.active_operation_thread.start()
+            
+            else:
+                # Fallback: Si no hay extras marcados, realizar descarga/recodificación normal
+                print("DEBUG: Iniciando Hilo de Recodificación/Descarga (Modo Extras - Sin Extras).")
+                self.active_operation_thread = threading.Thread(target=self._execute_download_and_recode, args=(options,), daemon=True)
                 self.active_operation_thread.start()
 
 
@@ -6758,6 +6863,14 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.upscale_video_subpanel.grid_remove()
         self.update_download_button_state()
 
+    def _on_transparency_toggle(self):
+        """Si se activa la transparencia, forzar contenedor MOV."""
+        if self.upscale_transparency_checkbox.get():
+            self.upscale_container_menu.set("MOV")
+            self.upscale_container_menu.configure(state="disabled")
+        else:
+            self.upscale_container_menu.configure(state="normal")
+
     def _scan_upscayl_models(self):
         """Escanea la carpeta de modelos de Upscayl."""
         from main import UPSCALING_DIR
@@ -6775,6 +6888,12 @@ class SingleDownloadTab(ctk.CTkFrame):
             if filename.endswith(".param"):
                 raw_name = filename[:-6]
                 friendly_name = custom_nicks.get(raw_name) or UPSCAYL_MODELS_MAP.get(raw_name, raw_name)
+                
+                # 🚫 FILTRO DE ESTABILIDAD: Excluir modelos problemáticos en video
+                # El usuario reportó que Anime Video V3 (x2 y x3) explotan en video.
+                if friendly_name in ["Anime Video V3 (x2)", "Anime Video V3 (x3)"]:
+                    continue
+                
                 models.append(friendly_name)
         return sorted(list(set(models)))
 
@@ -7308,8 +7427,8 @@ class SingleDownloadTab(ctk.CTkFrame):
         """Efecto visual cuando el archivo entra al área de drop"""
         print("DEBUG: 🎯 _on_drag_enter ejecutado")
         
-        self.thumbnail_container.configure(border_width=4, border_color="#007BFF")
-        self.dnd_overlay.configure(bg="#1a3d5c")
+        self.thumbnail_container.configure(border_width=4, border_color=self.DND_BORDER_COLOR)
+        self.dnd_overlay.configure(bg=self.DND_BG_COLOR)
         
         if hasattr(self, 'thumbnail_label') and self.thumbnail_label and self.thumbnail_label.winfo_exists():
             self.thumbnail_label.place_forget()
@@ -7321,7 +7440,7 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.dnd_overlay,
             text="📂 Suelta tu archivo aquí\n\n(Video o Audio)",
             font=ctk.CTkFont(size=18, weight="bold"),
-            text_color="#00BFFF"
+            text_color=self.DND_TEXT_COLOR
         )
         self._drag_label.place(relx=0.5, rely=0.5, anchor="center")
         self.dnd_overlay.lift()
@@ -7465,7 +7584,7 @@ class SingleDownloadTab(ctk.CTkFrame):
                 self.thumbnail_label.configure(
                     text="Arrastra un archivo aquí (Video o Audio) \n Para activar el modo de Recodificación Local",
                     font=ctk.CTkFont(size=12, weight="bold"),
-                    fg_color="#1a1a1a"
+                    fg_color=self.DND_BG_COLOR
                 )
             except:
                 pass
@@ -7526,7 +7645,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         # CASO 3: Archivo local SIN miniatura (solo emoji 🎵)
         elif self.local_file_path and not self.pil_image:
             try:
-                self.thumbnail_label.configure(fg_color="#1a1a1a")
+                self.thumbnail_label.configure(fg_color=self.DND_BG_COLOR)
                 
                 # Mostrar texto encima
                 if not hasattr(self, '_hover_text_label') or self._hover_text_label is None:
@@ -7629,7 +7748,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         """Muestra feedback visual cuando se detecta un drop"""
         try:
             # Cambiar borde
-            self.thumbnail_container.configure(border_width=2, border_color="#007BFF")
+            self.thumbnail_container.configure(border_width=2, border_color=self.DND_BORDER_COLOR)
             
             # ✅ NO tocar el overlay, solo el thumbnail_label
             if hasattr(self, 'thumbnail_label') and self.thumbnail_label:

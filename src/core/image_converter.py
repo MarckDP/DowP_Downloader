@@ -1,9 +1,11 @@
 import os
 import io
+import re
 import tempfile
 import threading
 import subprocess
 import pillow_avif
+from src.core.inkscape_service import InkscapeService
 
 from src.core.constants import WAIFU2X_MODELS, SRMD_MODELS
 from src.core.constants import IMAGE_RASTER_FORMATS, IMAGE_INPUT_FORMATS, IMAGE_RAW_FORMATS
@@ -49,9 +51,9 @@ class ImageConverter:
     de entrada/salida con opciones avanzadas.
     """
     
-    def __init__(self, poppler_path=None, inkscape_path=None, ffmpeg_processor=None):
+    def __init__(self, poppler_path=None, inkscape_service=None, ffmpeg_processor=None):
         self.poppler_path = poppler_path
-        self.inkscape_path = inkscape_path
+        self.inkscape_service = inkscape_service
         self.ffmpeg_processor = ffmpeg_processor
 
         # --- Variables para Lazy Loading de IA ---
@@ -188,21 +190,21 @@ class ImageConverter:
         
         return True
         
-    def _process_rmbg2(self, pil_image, model_path, use_gpu=True): # <--- CAMBIO 1: Agregado argumento
+    def _process_high_res_onnx(self, pil_image, model_path, use_gpu=True):
         """
-        Ejecuta la inferencia específica para RMBG 2.0 usando ONNX Runtime.
-        Replica la lógica de normalización y redimensión a 1024x1024.
+        Ejecuta la inferencia específica para modelos de alta resolución (RMBG 2.0, InSPyReNet) 
+        usando ONNX Runtime con redimensión a 1024x1024 y normalización ImageNet.
         """
         try:
             import numpy as np
             import onnxruntime as ort
             
             # 1. Gestión de Sesión (Clave única por hardware)
-            session_key = f"{model_path}_{'gpu' if use_gpu else 'cpu'}" # <--- CAMBIO 2: Clave única
+            session_key = f"{model_path}_{'gpu' if use_gpu else 'cpu'}"
             
             if session_key not in self.rembg_sessions:
                 hw_label = 'GPU' if use_gpu else 'CPU'
-                print(f"DEBUG: Cargando RMBG 2.0 en [{hw_label}]: {os.path.basename(model_path)}")
+                print(f"DEBUG: Cargando Modelo de Alta Res. en [{hw_label}]: {os.path.basename(model_path)}")
                 
                 sess_opts = ort.SessionOptions()
                 
@@ -221,24 +223,20 @@ class ImageConverter:
             session = self.rembg_sessions[session_key]
 
             # 2. Preprocesamiento
-            # Convertir a RGB y guardar tamaño original
             original_image = pil_image.convert("RGB")
             orig_w, orig_h = original_image.size
             
-            # Redimensionar a 1024x1024 (Requisito estricto de RMBG 2.0)
+            # Redimensionar a 1024x1024
             img_resized = original_image.resize((1024, 1024), Image.Resampling.BILINEAR)
             
             # Convertir a Numpy y Normalizar (0-1)
             img_np = np.array(img_resized).astype(np.float32) / 255.0
             
             # Estandarización (ImageNet mean/std)
-            # IMPORTANTE: Definir explícitamente como float32 para evitar que Numpy use float64 (double)
             mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
             std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
             
             img_np = (img_np - mean) / std
-            
-            # Asegurar tipo final float32 antes de enviar al modelo
             img_np = img_np.astype(np.float32)
             
             # Transponer a (Batch, Channel, Height, Width) -> (1, 3, 1024, 1024)
@@ -248,30 +246,21 @@ class ImageConverter:
             # 3. Inferencia
             input_name = session.get_inputs()[0].name
             result = session.run(None, {input_name: img_np})
-            mask = result[0][0, 0] # Obtener la máscara (quitando batch y channel)
+            mask = result[0][0, 0]
 
             # 4. Postprocesamiento
-            # Normalizar máscara a 0-255 y convertir a entero
             mask = (mask * 255).clip(0, 255).astype(np.uint8)
-            
-            # Convertir máscara de numpy a Imagen PIL
             mask_img = Image.fromarray(mask, mode='L')
-            
-            # Redimensionar máscara al tamaño ORIGINAL de la imagen
             mask_img = mask_img.resize((orig_w, orig_h), Image.Resampling.LANCZOS)
 
             # 5. Aplicar al canal Alfa
-            # Si la imagen original no tiene alfa, agregarlo
             final_image = pil_image.convert("RGBA")
             final_image.putalpha(mask_img)
             
             return final_image
 
-        except ImportError:
-            print("ERROR: Faltan librerías 'numpy' o 'onnxruntime' para RMBG 2.0")
-            return pil_image
         except Exception as e:
-            print(f"ERROR en inferencia RMBG 2.0: {e}")
+            print(f"ERROR en inferencia de alta resolución: {e}")
             return pil_image
         
     def _process_onnx_manual(self, pil_image, session, target_size):
@@ -341,20 +330,31 @@ class ImageConverter:
         from main import MODELS_DIR
         import onnxruntime as ort 
         
-        # --- BLOQUE RMBG 2.0 ---
-        rmbg2_names = [
+        # --- BLOQUE DE ALTA RESOLUCIÓN (RMBG 2.0 e InSPyReNet) ---
+        high_res_names = [
             "bria-rmbg-2.0.onnx", "model.onnx", "model_bnb4.onnx", "model_fp16.onnx", 
             "model_int8.onnx", "model_quantized.onnx", "model_q4.onnx",
-            "model_q4f16.onnx", "model_uint8.onnx"
+            "model_q4f16.onnx", "model_uint8.onnx",
+            "inspyrenet_ultra.onnx", "inspyrenet_ultra_fp16.onnx"
         ]
-        rmbg2_path = os.path.join(MODELS_DIR, "rmbg2", model_filename)
+        
+        # Rutas posibles para modelos de alta resolución
+        possible_paths = [
+            os.path.join(MODELS_DIR, "rmbg2", model_filename),
+            os.path.join(MODELS_DIR, "inspyrenet", model_filename)
+        ]
+        
+        target_model_path = None
+        for p in possible_paths:
+            if os.path.exists(p):
+                target_model_path = p
+                break
 
-        if model_filename in rmbg2_names or os.path.exists(rmbg2_path):
-            if not os.path.exists(rmbg2_path):
-                print(f"ERROR: El modelo RMBG 2.0 no se encuentra en: {rmbg2_path}")
+        if model_filename in high_res_names or target_model_path:
+            if not target_model_path:
+                print(f"ERROR: El modelo de alta resolución no se encuentra localmente: {model_filename}")
                 return pil_image
-            # Pasamos use_gpu aquí también
-            return self._process_rmbg2(pil_image, rmbg2_path, use_gpu=use_gpu)
+            return self._process_high_res_onnx(pil_image, target_model_path, use_gpu=use_gpu)
 
         # --- CARGA LAZY DE REMBG ---
         if not self._load_rembg_lazy(progress_callback):
@@ -829,56 +829,25 @@ class ImageConverter:
             elif ext in self.VECTOR_FORMATS:
                 
                 # ✅ CAMBIO: Forzar Inkscape para .ai y .eps
+                # ✅ CAMBIO: Usar motores nativos centralizados para vectores
                 if ext in (".ai", ".eps", ".ps"): 
                     try:
-                        # Intentar primero con Inkscape (Mejor calidad)
-                        return self._convert_with_inkscape(filepath, target_size, maintain_aspect, page_number, options)
-                    except Exception as e:
-                        print(f"⚠️ Inkscape falló ({e}). Usando respaldo de Pillow/Ghostscript...")
-                        # Si falla, usar el método de respaldo
-                        return self._load_eps_with_pillow(filepath, target_size)
+                        # Intentar primero con Inkscape (si está habilitado y el usuario lo prefiere)
+                        if self.inkscape_service and self.inkscape_service.is_available():
+                            return self._convert_with_inkscape(filepath, target_size, maintain_aspect, page_number, options)
+                        else:
+                            raise Exception("Inkscape no disponible")
+                    except Exception:
+                        # Usar el nuevo motor nativo de respaldo (Ghostscript + Poppler)
+                        if ext in (".eps", ".ps"):
+                            return self._convert_eps_native(filepath, page_number, target_size, maintain_aspect, options)
+                        else:
+                            # .ai usualmente es un PDF internamente
+                            return self._convert_pdf_ai_native(filepath, page_number, target_size, maintain_aspect, options)
                 
-                # Para PDF estándar, seguimos usando Poppler (es más rápido para documentos)
+                # Para PDF estándar, usamos Poppler nativo
                 elif ext == ".pdf" and CAN_PDF:
-                    if page_number is None:
-                        page_number = 1
-                    
-                    is_no_convert = options.get("format", "PNG") == "NO CONVERTIR"
-                    dpi = options.get("vector_dpi", 300)
-                    if target_size and not is_no_convert:
-                        dpi = self._calculate_optimal_dpi(filepath, ext, target_size, maintain_aspect)
-
-                    print(f"DEBUG: Rasterizando PDF página {page_number} con DPI {dpi}")
-                    
-                    images = convert_from_path(filepath, first_page=page_number, last_page=page_number, dpi=dpi, poppler_path=self.poppler_path)
-                    if images:
-                        pdf_img = images[0]
-                        
-                        # Si maintain_aspect, ajustar el tamaño después de rasterizar
-                        if target_size and maintain_aspect:
-                            original_width, original_height = pdf_img.size
-                            target_width, target_height = target_size
-                            original_aspect = original_width / original_height
-                            target_aspect = target_width / target_height
-                            
-                            if original_aspect > target_aspect:
-                                new_width = target_width
-                                new_height = int(target_width / original_aspect)
-                            else:
-                                new_height = target_height
-                                new_width = int(target_height * original_aspect)
-                            
-                            if new_width > target_width:
-                                new_width = target_width
-                                new_height = int(target_width / original_aspect)
-                            if new_height > target_height:
-                                new_height = target_height
-                                new_width = int(target_height * original_aspect)
-                            
-                            from PIL import Image as PILImage
-                            pdf_img = pdf_img.resize((new_width, new_height), PILImage.Resampling.LANCZOS)
-                        
-                        return pdf_img
+                    return self._convert_pdf_ai_native(filepath, page_number, target_size, maintain_aspect, options)
             
                 else:
                     # Fallback: Intentar con Pillow
@@ -996,128 +965,194 @@ class ImageConverter:
                     raise Exception("Ghostscript generó un PDF vacío")
                 
                 print(f"✅ PDF temporal creado: {temp_pdf_path} ({pdf_size} bytes)")
-                
-                # Ahora usar este PDF en lugar del EPS original
-                filepath_to_process = temp_pdf_path
+                filepath = temp_pdf_path # Cambiar al PDF temporal para el resto del proceso
                 
             except Exception as e:
-                # Limpiar archivo temporal
-                if temp_pdf_path and os.path.exists(temp_pdf_path):
+                print(f"ERROR en Ghostscript: {e}")
+                if os.path.exists(temp_pdf_path):
                     try: os.remove(temp_pdf_path)
                     except: pass
-                raise Exception(f"Conversión EPS→PDF falló: {e}")
-        else:
-            filepath_to_process = filepath
+                raise e
+        options = options or {}
+        ext = os.path.splitext(filepath)[1].lower()
+        
+        # 1. ¿Usar Inkscape Externo?
+        if self.inkscape_service and self.inkscape_service.is_available():
+            print(f"DEBUG: Usando Inkscape Externo para {ext}")
+            return self._convert_with_inkscape_external(filepath, page_number, target_size, maintain_aspect, options)
 
-        # Crear PNG de salida temporal
+        # 2. Motor Nativo (Sin Inkscape)
+        print(f"DEBUG: Usando motor nativo para {ext}")
+        
+        if ext == ".svg":
+            return self._convert_svg_native(filepath, target_size, maintain_aspect)
+        
+        elif ext in (".ai", ".pdf"):
+            return self._convert_pdf_ai_native(filepath, page_number, target_size, maintain_aspect, options)
+            
+        elif ext in (".eps", ".ps"):
+            return self._convert_eps_native(filepath, page_number, target_size, maintain_aspect, options)
+            
+        else:
+            raise Exception(f"Formato vectorial no soportado para motor nativo: {ext}")
+
+    def _convert_with_inkscape_external(self, filepath, page_number, target_size, maintain_aspect, options):
+        """Conversión usando el nuevo servicio de Inkscape."""
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
             temp_png = tmp_file.name
 
         try:
-            # Determinar DPI: SVG ignora el slider global y usa 300 (estándar)
-            # Otros vectores (PDF/AI/EPS) usan el slider (vector_dpi)
-            if ext == ".svg":
-                dpi = 300
+            dpi = options.get("vector_dpi", 300) if os.path.splitext(filepath)[1].lower() != ".svg" else 300
+            
+            # 🚀 OPTIMIZACIÓN: Si hay una sesión activa, usar modo batch (Shell)
+            if hasattr(self.inkscape_service, '_session_process'):
+                print(f"DEBUG: [Batch] Usando sesión persistente de Inkscape para {os.path.basename(filepath)}")
+                success = self.inkscape_service.convert_batch(
+                    filepath, temp_png, page_number, dpi, target_size, maintain_aspect
+                )
+                if not success:
+                    raise Exception("Fallo en conversión por lotes de Inkscape.")
             else:
-                dpi = options.get("vector_dpi", 300)
+                # Modo normal (Uno por uno)
+                cmd = self.inkscape_service.build_command(filepath, temp_png, page_number, dpi=dpi)
                 
-            # Construir comando base (ahora filepath_to_process puede ser PDF temporal)
-            cmd = self._build_inkscape_command(filepath_to_process, temp_png, page_number, dpi=dpi)
+                # Aplicar tamaño si es necesario
+                if target_size:
+                    w, h = target_size
+                    cmd = [c for c in cmd if not c.startswith("--export-dpi")]
+                    cmd.insert(2, f"--export-width={w}")
+                    if not maintain_aspect:
+                        cmd.insert(3, f"--export-height={h}")
 
-            # Si hay un tamaño objetivo, inyectar comandos de escalado vectorial
-            if target_size:
-                width, height = target_size
-                
-                # Eliminar argumentos de DPI si existen para evitar conflictos
-                cmd = [c for c in cmd if not c.startswith("--export-dpi")]
-                
-                if maintain_aspect:
-                    cmd.insert(2, f"--export-width={width}")
-                else:
-                    cmd.insert(2, f"--export-width={width}")
-                    cmd.insert(3, f"--export-height={height}")
-                
-                print(f"DEBUG: Forzando renderizado vectorial a {width}px")
+                env = self.inkscape_service.get_env()
+                # Añadir Ghostscript al PATH para que Inkscape pueda abrir EPS
+                if self.gs_dir:
+                    env["PATH"] = f"{self.gs_dir};{env.get('PATH', '')}"
+                    env["GS_PROG"] = self.gs_exe
 
-            print(f"DEBUG: Ejecutando Inkscape: {' '.join(cmd[:5])}...")
-
-            # Preparar entorno con Ghostscript
-            env = os.environ.copy()
+                subprocess.run(
+                    cmd, check=True, env=env, 
+                    cwd=self.inkscape_service.get_cwd(),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
             
-            if self.gs_dir and self.gs_exe:
-                env["PATH"] = f"{self.gs_dir};{env.get('PATH', '')}"
-                env["GS_PROG"] = self.gs_exe
-
-            # Ejecutar Inkscape
-            result = subprocess.run(
-                cmd,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-                timeout=120,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            )
-            
-            # Verificar que el archivo se creó
             if not os.path.exists(temp_png) or os.path.getsize(temp_png) == 0:
-                stderr = result.stderr.decode('utf-8', errors='ignore')
-                raise Exception(f"Inkscape no generó salida. STDERR: {stderr[:500]}")
-            
-            print(f"✅ Inkscape generó PNG: {os.path.getsize(temp_png)} bytes")
-            
-            # Cargar imagen resultante
+                raise Exception("Inkscape no generó salida.")
+                
             img = Image.open(temp_png)
             img.load()
-            
-            # Aplicar el tamaño exacto solicitado
-            if target_size:
-                if maintain_aspect:
-                    img.thumbnail(target_size, Image.Resampling.LANCZOS)
-                else:
-                    img = img.resize(target_size, Image.Resampling.LANCZOS)
-
             return img
-        
-        except subprocess.CalledProcessError as e:
-            stderr = e.stderr.decode('utf-8', errors='ignore')
-            
-            # Fallback a Poppler para archivos PDF-like
-            if CAN_PDF and ext in (".ai", ".pdf"):
-                print(f"DEBUG: Inkscape falló, usando Poppler para página {page_number}")
-                try:
-                    images = convert_from_path(
-                        filepath_to_process,
-                        first_page=page_number,
-                        last_page=page_number,
-                        dpi=options.get("vector_dpi", 300),
-                        poppler_path=self.poppler_path
-                    )
-                    if images:
-                        img = images[0]
-                        if target_size:
-                            if maintain_aspect:
-                                img.thumbnail(target_size, Image.Resampling.LANCZOS)
-                            else:
-                                img = img.resize(target_size, Image.Resampling.LANCZOS)
-                        return img
-                except Exception as fallback_error:
-                    print(f"ERROR en fallback Poppler: {fallback_error}")
-            
-            raise Exception(f"Inkscape CLI falló: {stderr[:300]}")
-        except Exception as e:
-            raise Exception(f"Error Inkscape: {e}")
         finally:
-            # Limpiar archivos temporales
             if os.path.exists(temp_png):
                 try: os.remove(temp_png)
                 except: pass
+
+    def _convert_svg_native(self, filepath, target_size, maintain_aspect):
+        """Conversión nativa de SVG usando CairoSVG."""
+        if not CAN_SVG:
+            raise Exception("CairoSVG no está instalado.")
             
-            # Limpiar PDF temporal si existe
-            if temp_pdf_path and os.path.exists(temp_pdf_path):
-                try: 
-                    os.remove(temp_pdf_path)
-                    print(f"DEBUG: PDF temporal eliminado")
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+            temp_png = tmp_file.name
+            
+        try:
+            render_kwargs = {}
+            if target_size:
+                w, h = target_size
+                render_kwargs['output_width'] = w
+                if not maintain_aspect:
+                    render_kwargs['output_height'] = h
+            
+            cairosvg.svg2png(url=filepath, write_to=temp_png, **render_kwargs)
+            img = Image.open(temp_png)
+            img.load()
+            return img
+        finally:
+            if os.path.exists(temp_png):
+                try: os.remove(temp_png)
+                except: pass
+
+    def _convert_pdf_ai_native(self, filepath, page_number, target_size, maintain_aspect, options, original_ext=None):
+        """Conversión nativa de PDF/AI usando Poppler con soporte real de transparencia."""
+        if not CAN_PDF or not self.poppler_path:
+            raise Exception("Poppler no está configurado.")
+            
+        ext = original_ext if original_ext else os.path.splitext(filepath)[1].lower()
+        print(f"DEBUG: [Render] Iniciando renderizado de {ext}: {os.path.basename(filepath)}")
+        
+        # 🧠 LÓGICA DE TRANSPARENCIA
+        if ext == ".pdf":
+            use_transparent = options.get("pdf_transparent", False)
+        else:
+            use_transparent = not options.get("force_background", False)
+        
+        # 📏 CÁLCULO DE DPI ÓPTIMO
+        dpi = options.get("vector_dpi", 300)
+        if target_size:
+            dpi = self._calculate_optimal_dpi(filepath, ext, target_size, maintain_aspect)
+        
+        print(f"DEBUG: [Render] Parámetros: Transparent={use_transparent}, DPI={dpi}, Size={target_size}")
+
+        images = convert_from_path(
+            filepath,
+            dpi=dpi,
+            first_page=page_number,
+            last_page=page_number,
+            poppler_path=self.poppler_path,
+            transparent=use_transparent,
+            use_pdftocairo=True 
+        )
+        
+        if not images:
+            raise Exception("Poppler no pudo renderizar el archivo.")
+            
+        img = images[0]
+        if not use_transparent:
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "RGBA":
+                bg.paste(img, (0, 0), img)
+            else:
+                bg.paste(img, (0, 0))
+            img = bg
+        else:
+            img = img.convert("RGBA")
+        
+        if target_size:
+            if not maintain_aspect:
+                img = img.resize(target_size, Image.Resampling.LANCZOS)
+            else:
+                img.thumbnail(target_size, Image.Resampling.LANCZOS)
+            
+        return img
+
+    def _convert_eps_native(self, filepath, page_number, target_size, maintain_aspect, options):
+        """Conversión nativa de EPS/PS usando Ghostscript + Poppler."""
+        if not self.gs_exe:
+            raise Exception("Ghostscript no está instalado (necesario para EPS).")
+            
+        # Paso 1: Convertir EPS a PDF temporal con Ghostscript
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_pdf:
+            temp_pdf = tmp_pdf.name
+            
+        try:
+            gs_cmd = [
+                self.gs_exe,
+                "-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=pdfwrite",
+                "-dCompatibilityLevel=1.4", # PDF 1.4 soporta transparencia nativa
+                "-dPDFSETTINGS=/prepress",  # Máxima calidad
+                f"-sOutputFile={temp_pdf}",
+                "-dEPSCrop", # Respetar BoundingBox de EPS
+                filepath
+            ]
+            print(f"DEBUG: Ejecutando Ghostscript para EPS transparente: {' '.join(gs_cmd)}")
+            subprocess.run(gs_cmd, check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            
+            # Paso 2: Procesar ese PDF con el motor Poppler (Forzando lógica de EPS para transparencia)
+            return self._convert_pdf_ai_native(temp_pdf, page_number, target_size, maintain_aspect, options, original_ext=".eps")
+            
+        finally:
+            if os.path.exists(temp_pdf):
+                try: os.remove(temp_pdf)
                 except: pass
 
     def _fix_svg_attributes(self, svg_path):
@@ -1210,62 +1245,6 @@ class ImageConverter:
             return f'"{path}"'
         return path
         
-    def _build_inkscape_command(self, filepath, output_path, page_number=1, dpi=96, artboard_id=None):
-        """
-        Construye el comando de Inkscape según el tipo de archivo.
-        CORREGIDO: Detecta automáticamente si el .ai tiene múltiples páginas.
-        """
-        ink_exe = "inkscape.exe" if os.name == "nt" else "inkscape"
-        if self.inkscape_path:
-            ink_cmd = os.path.join(self.inkscape_path, ink_exe)
-        else:
-            ink_cmd = ink_exe
-        
-        ext = os.path.splitext(filepath)[1].lower()
-        
-        cmd = [
-            ink_cmd,
-            filepath,
-            f"--export-filename={output_path}",
-            f"--export-dpi={dpi}",
-            "--export-type=png"
-        ]
-        
-        # ✅ Estrategia por tipo de archivo
-        if ext == ".ai":
-            # 🔧 NUEVO: Detectar si el .ai tiene múltiples páginas
-            try:
-                from pdf2image import pdfinfo_from_path
-                info = pdfinfo_from_path(filepath, poppler_path=self.poppler_path)
-                page_count = int(info.get('Pages', 1))
-            except Exception:
-                page_count = 1
-            
-            # Solo usar --pages si hay múltiples páginas
-            if page_count > 1:
-                cmd.insert(2, "--pdf-poppler")
-                cmd.insert(2, f"--pages={page_number}")
-                cmd.insert(4, "--export-area-page")
-                print(f"DEBUG: .ai con {page_count} páginas → usando --pages={page_number}")
-            else:
-                # Archivo de una sola página: tratarlo como EPS simple
-                cmd.insert(2, "--export-area-page")
-                print(f"DEBUG: .ai de 1 página → sin --pages")
-        
-        elif ext in (".eps", ".ps"):
-            # EPS/PS: Solo export-area-page
-            cmd.insert(2, "--export-area-page")
-        
-        elif ext == ".svg" and artboard_id:
-            # SVG con artboard específico
-            cmd.insert(2, f"--export-id={artboard_id}")
-            cmd.insert(3, "--export-id-only")
-        
-        else:
-            # Default
-            cmd.insert(2, "--export-area-page")
-        
-        return cmd
     
     # ========================================================================
     # MÉTODOS DE GUARDADO POR FORMATO
@@ -1523,31 +1502,74 @@ class ImageConverter:
     
     def _calculate_optimal_dpi(self, filepath, ext, target_size, maintain_aspect):
         """
-        Calcula el DPI óptimo para rasterizar un vector al tamaño objetivo.
+        Calcula el DPI óptimo para rasterizar un vector al tamaño objetivo sondeando sus dimensiones reales.
         """
-        # Aquí implementarás la lógica de cálculo de DPI
-        # Por ahora, placeholder:
         target_width, target_height = target_size
+        doc_width_pts = 612  # 8.5" default
+        doc_height_pts = 792 # 11" default
         
-        # Asumir tamaño de documento estándar (8.5x11 pulgadas - carta)
-        # Esto es un placeholder, idealmente deberías leer las dimensiones reales del PDF
-        doc_width_inches = 8.5
-        doc_height_inches = 11.0
+        try:
+            import re # Fail-safe
+            if ext in (".pdf", ".ai"):
+                # Leer dimensiones reales del PDF
+                info = pdfinfo_from_path(filepath, poppler_path=self.poppler_path)
+                # Formato esperado de 'Page size': '200 x 300 pts'
+                page_size = info.get('Page size', '')
+                match = re.search(r'([\d.]+)\s*x\s*([\d.]+)', page_size)
+                if match:
+                    doc_width_pts = float(match.group(1))
+                    doc_height_pts = float(match.group(2))
+            
+            elif ext in (".eps", ".ps"):
+                # 1. Intentar lectura manual rápida del BoundingBox
+                found_bbox = False
+                with open(filepath, 'rb') as f:
+                    header = f.read(16384).decode('latin-1', errors='ignore')
+                    match = re.search(r'%%HiResBoundingBox:\s*([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)', header)
+                    if not match:
+                        match = re.search(r'%%BoundingBox:\s*([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)', header)
+                    
+                    if match:
+                        x1, y1, x2, y2 = map(float, match.groups())
+                        doc_width_pts = abs(x2 - x1)
+                        doc_height_pts = abs(y2 - y1)
+                        found_bbox = True
+                
+                # 2. Si falla (atend, binario, etc.), usar Ghostscript para sondear
+                if not found_bbox and self.gs_exe:
+                    print(f"DEBUG: [Render] BBox no encontrado en cabecera. Usando Ghostscript para sondear: {ext}")
+                    try:
+                        gs_cmd = [self.gs_exe, "-q", "-dBATCH", "-dNOPAUSE", "-sDEVICE=bbox", filepath]
+                        result = subprocess.run(gs_cmd, capture_output=True, text=True, 
+                                               creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                        bbox_info = result.stderr
+                        match = re.search(r'%%HiResBoundingBox:\s*([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)\s+([\d.-]+)', bbox_info)
+                        if match:
+                            x1, y1, x2, y2 = map(float, match.groups())
+                            doc_width_pts = abs(x2 - x1)
+                            doc_height_pts = abs(y2 - y1)
+                            print(f"DEBUG: [Render] GS detectó BBox: {doc_width_pts}x{doc_height_pts} pts")
+                    except Exception as ge:
+                        print(f"DEBUG: [Render] Ghostscript falló al sondear BBox: {ge}")
+        except Exception as e:
+            print(f"DEBUG: [Render] No se pudo obtener dimensiones reales de {ext} ({e}). Usando default 8.5x11.")
+
+        # Convertir puntos (1/72 inch) a pulgadas
+        doc_width_inches = max(0.1, doc_width_pts / 72.0)
+        doc_height_inches = max(0.1, doc_height_pts / 72.0)
         
         dpi_width = target_width / doc_width_inches
         dpi_height = target_height / doc_height_inches
         
         if maintain_aspect:
-            # Usar el menor para mantener proporción
             optimal_dpi = min(dpi_width, dpi_height)
         else:
-            # Usar un promedio
-            optimal_dpi = (dpi_width + dpi_height) / 2
+            optimal_dpi = max(dpi_width, dpi_height)
         
-        # Limitar DPI a un rango razonable
-        optimal_dpi = max(72, min(optimal_dpi, 2400))
+        # Limitar DPI (Ghostscript/Poppler pueden fallar con DPIs absurdos)
+        optimal_dpi = max(72, min(optimal_dpi, 4800))
         
-        print(f"DPI calculado: {optimal_dpi:.0f} para {target_size}")
+        print(f"DEBUG: Vector {doc_width_pts:.0f}x{doc_height_pts:.0f} pts -> DPI óptimo: {optimal_dpi:.0f}")
         return int(optimal_dpi)
     
     def _resize_raster_image(self, img, target_size, maintain_aspect, options):
@@ -2360,14 +2382,23 @@ class ImageConverter:
             
             # --- MEJORA 3: Calcular Hilos de Tubería (Pipeline) ---
             # Formato NCNN: "load:proc:save"
-            # Upscayl usa estrategias agresivas aquí para saturar la GPU.
-            cpu_count = multiprocessing.cpu_count()
-            if cpu_count >= 8:
-                threads_arg = "2:4:2" # CPUs potentes
-            elif cpu_count >= 4:
-                threads_arg = "1:2:2" # CPUs medias
+            concurrency = options.get("upscale_concurrency", "Automático")
+            
+            if concurrency == "Seguro (Estabilidad)":
+                threads_arg = "1:1:1"
+            elif concurrency == "Equilibrado":
+                threads_arg = "1:2:1"
+            elif concurrency == "Máximo (Potente)":
+                threads_arg = "2:4:2"
             else:
-                threads_arg = "1:1:1" # CPUs básicas
+                # Automático: Calcular según CPU
+                cpu_count = multiprocessing.cpu_count()
+                if cpu_count >= 8:
+                    threads_arg = "2:4:2"
+                elif cpu_count >= 4:
+                    threads_arg = "1:2:2"
+                else:
+                    threads_arg = "1:1:1"
 
             models_root = os.path.join(BIN_DIR, "models", "upscaling")
             cmd = []

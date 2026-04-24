@@ -402,7 +402,7 @@ IMAGE_RAW_FORMATS = {".CR2", ".DNG", ".ARW", ".NEF", ".ORF", ".RW2", ".SR2", ".R
 # --- CONSTANTES DE HERRAMIENTAS DE IMAGEN ---
 
 # Actualizar los formatos de entrada permitidos sumando los RAW
-IMAGE_INPUT_FORMATS = {".svg", ".eps", ".ai", ".pdf", ".ps", ".avif"}.union(IMAGE_RAW_FORMATS)
+IMAGE_INPUT_FORMATS = {".svg", ".eps", ".ai", ".pdf", ".ps"}.union(IMAGE_RAW_FORMATS)
 IMAGE_EXPORT_FORMATS = ["PNG", "JPG", "JPEG", "WEBP", "AVIF", "BMP", "PDF", "TIFF"]
 
 # Agrupar formatos por tipo para mejor manejo en la lógica y la UI
@@ -485,8 +485,7 @@ GRADIENT_DIRECTIONS = [
     "Radial (Centro)"
 ]
 
-# Formatos que soportan transparencia
-FORMATS_WITH_TRANSPARENCY = {"PNG", "WEBP", "TIFF", "ICO", "PDF"}
+# Los formatos que soportan transparencia ya están definidos arriba.
 
 REMBG_MODEL_FAMILIES = {
     "Rembg Standard (U2Net)": {
@@ -600,6 +599,19 @@ REMBG_MODEL_FAMILIES = {
             "file": "model_quantized.onnx",
             "url": "https://huggingface.co/briaai/RMBG-2.0/tree/main/onnx",
             "folder": "rmbg2"
+        }
+    },
+
+    "InSPyReNet (Ultra High Resolution)": {
+        "SwinB Plus Ultra (FP32 - 478 MB)": {
+            "file": "inspyrenet_ultra.onnx",
+            "url": "https://huggingface.co/OS-Software/InSPyReNet-SwinB-Plus-Ultra-ONNX/resolve/main/onnx/model.onnx?download=true",
+            "folder": "inspyrenet"
+        },
+        "SwinB Plus Ultra (FP16 - 240 MB)": {
+            "file": "inspyrenet_ultra_fp16.onnx",
+            "url": "https://huggingface.co/OS-Software/InSPyReNet-SwinB-Plus-Ultra-ONNX/resolve/main/onnx/model_fp16.onnx?download=true",
+            "folder": "inspyrenet"
         }
     }
 }

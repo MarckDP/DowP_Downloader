@@ -1,8 +1,11 @@
 import customtkinter as ctk
 import os
+import sys
+import json
 import threading
 import requests
 import time
+from tkinter import filedialog, messagebox
 from .dialogs import Tooltip
 
 class ConfigTab(ctk.CTkFrame):
@@ -94,137 +97,234 @@ class ConfigTab(ctk.CTkFrame):
         """Inicializa los frames para cada sección pero los oculta por defecto."""
         
         # ===== Sección: General =====
-        frame_general = ctk.CTkFrame(self.content_container, fg_color="transparent")
-        # --- SUB-SECCIÓN: MODELOS DE IA ---
-        ctk.CTkLabel(frame_general, text="Opciones de Modelos de IA", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", pady=(10, 5), padx=5)
-
-        vram_frame = ctk.CTkFrame(frame_general, fg_color=("gray85", "gray20"), corner_radius=8)
-        vram_frame.pack(fill="x", pady=(0, 10), padx=5)
+        frame_general = ctk.CTkScrollableFrame(self.content_container, fg_color="transparent")
         
-        vram_header = ctk.CTkLabel(
-            vram_frame,
-            text="Gestión de Memoria y Rendimiento (ONNX)",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            text_color=("#1F6AA5", "#52A2F2")
+        # --- BLOQUE: APARIENCIA (NUEVO) ---
+        ctk.CTkLabel(frame_general, text="Apariencia", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", pady=(10, 2), padx=10)
+        
+        appearance_frame = ctk.CTkFrame(frame_general, fg_color=("gray85", "gray20"), corner_radius=10, border_width=1, border_color=("gray75", "gray30"))
+        appearance_frame.pack(fill="x", pady=5, padx=5)
+        
+        theme_row = ctk.CTkFrame(appearance_frame, fg_color="transparent")
+        theme_row.pack(fill="x", padx=15, pady=15)
+        
+        ctk.CTkLabel(theme_row, text="Color de Acento del Sistema:", font=ctk.CTkFont(size=14, weight="bold"), text_color=("#1F6AA5", "#52A2F2")).pack(side="left")
+        
+        # Mapeo de nombres para el menú
+        self.theme_display_names = {
+            "blue": "Azul (Estándar)",
+            "dark-blue": "Azul Profundo",
+            "green": "Bosque (Verde Oscuro)"
+        }
+        self.theme_internal_names = {v: k for k, v in self.theme_display_names.items()}
+        
+        current_theme = getattr(self.app, 'selected_theme_accent', 'blue')
+        display_theme = self.theme_display_names.get(current_theme, "Azul (Estándar)")
+        
+        self.theme_menu = ctk.CTkOptionMenu(
+            theme_row, 
+            values=["Azul (Estándar)", "Azul Profundo"], # Placeholder inicial
+            command=self._on_theme_change,
+            width=200
         )
-        vram_header.pack(anchor="w", padx=15, pady=(10, 5))
-        
-        vram_desc = "Controla cómo el programa gestiona los modelos de inteligencia artificial en la memoria de tu tarjeta gráfica (VRAM) o procesador (RAM)."
-        ctk.CTkLabel(vram_frame, text=vram_desc, font=ctk.CTkFont(size=12), text_color="gray60", justify="left", wraplength=550).pack(anchor="w", padx=15, pady=(0, 10))
+        self.theme_menu.pack(side="left", padx=10)
 
-        vram_controls = ctk.CTkFrame(vram_frame, fg_color="transparent")
-        vram_controls.pack(fill="x", padx=15, pady=(0, 15))
+        # --- NUEVA FILA: MODO DE APARIENCIA ---
+        mode_row = ctk.CTkFrame(appearance_frame, fg_color="transparent")
+        mode_row.pack(fill="x", padx=15, pady=(0, 15))
         
-        # Switch para persistencia
+        ctk.CTkLabel(mode_row, text="Modo de Apariencia:", font=ctk.CTkFont(size=14, weight="bold"), text_color=("#1F6AA5", "#52A2F2")).pack(side="left")
+        
+        self.appearance_mode_menu = ctk.CTkOptionMenu(
+            mode_row,
+            values=["Sistema", "Claro", "Oscuro"],
+            command=self._on_appearance_mode_change,
+            width=200
+        )
+        self.appearance_mode_menu.pack(side="left", padx=10)
+        
+        # Cargar valor guardado
+        current_mode = getattr(self.app, 'appearance_mode', 'System')
+        mode_map = {"System": "Sistema", "Light": "Claro", "Dark": "Oscuro"}
+        self.appearance_mode_menu.set(mode_map.get(current_mode, "Sistema"))
+        
+        # Botón Importar (NUEVO)
+        self.import_theme_btn = ctk.CTkButton(
+            theme_row, 
+            text="Importar Tema 📂", 
+            width=120,
+            fg_color="transparent",
+            border_width=1,
+            command=self._import_theme
+        )
+        self.import_theme_btn.pack(side="left", padx=5)
+
+        # Cargar lista real de temas
+        self._refresh_theme_list()
+
+        # --- TÍTULO SECCIÓN ---
+        ctk.CTkLabel(frame_general, text="Herramientas de Imagen", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", pady=(10, 2), padx=10)
+        ctk.CTkLabel(frame_general, text="Ajustes de procesamiento, modelos de IA y motores vectoriales.", font=ctk.CTkFont(size=11), text_color="gray60").pack(anchor="w", pady=(0, 10), padx=10)
+
+        # CUADRO MAESTRO
+        master_frame = ctk.CTkFrame(frame_general, fg_color=("gray85", "gray20"), corner_radius=10, border_width=1, border_color=("gray75", "gray30"))
+        master_frame.pack(fill="x", pady=5, padx=5)
+        
+        # 1. GESTIÓN DE IA (VRAM)
+        vram_group = ctk.CTkFrame(master_frame, fg_color="transparent")
+        vram_group.pack(fill="x", padx=15, pady=15)
+        
+        vram_header = ctk.CTkLabel(vram_group, text="Motor de Inteligencia Artificial (ONNX)", font=ctk.CTkFont(size=15, weight="bold"), text_color=("#1F6AA5", "#52A2F2"))
+        vram_header.pack(anchor="w", pady=(0, 5))
+        
+        vram_controls = ctk.CTkFrame(vram_group, fg_color="transparent")
+        vram_controls.pack(fill="x")
+        
         self.keep_vram_var = ctk.BooleanVar(value=getattr(self.app, 'keep_ai_models_in_memory', False))
-        self.keep_vram_switch = ctk.CTkSwitch(
-            vram_controls,
-            text="Mantener modelos cargados en VRAM al terminar",
-            variable=self.keep_vram_var,
-            command=self._on_vram_persistence_toggle
-        )
-        self.keep_vram_switch.pack(side="left", padx=(5, 10))
+        self.keep_vram_switch = ctk.CTkSwitch(vram_controls, text="Mantener modelos cargados en memoria (VRAM)", variable=self.keep_vram_var, command=self._on_vram_persistence_toggle)
+        self.keep_vram_switch.pack(side="left")
         
-        # Botón para limpieza manual (Ajustado)
-        self.clear_vram_btn = ctk.CTkButton(
-            vram_controls,
-            text="Liberar Memoria VRAM Ahora",
-            width=230, # Más ancho
-            height=28,
-            font=ctk.CTkFont(size=11, weight="bold"), # Texto un poco más pequeño
-            fg_color=("#DC3545", "#c0392b"),
-            hover_color=("#C82333", "#a93226"),
-            command=self._manual_vram_clear
-        )
+        self.clear_vram_btn = ctk.CTkButton(vram_controls, text="Liberar VRAM Ahora", width=160, height=26, font=ctk.CTkFont(size=11, weight="bold"), fg_color=("#DC3545", "#c0392b"), hover_color=("#C82333", "#a93226"), command=self._manual_vram_clear)
         self.clear_vram_btn.pack(side="right")
-        # --- SUB-SECCIÓN: OPCIONES DE IMAGEN (RENDER FINAL) ---
-        ctk.CTkLabel(frame_general, text="Calidad de Renderizado Final", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", pady=(10, 5), padx=5)
-
-        img_opt_frame = ctk.CTkFrame(frame_general, fg_color=("gray85", "gray20"), corner_radius=8)
-        img_opt_frame.pack(fill="x", pady=(0, 10), padx=5)
         
-        img_opt_header = ctk.CTkLabel(
-            img_opt_frame,
-            text="Calidad de Renderizado Vectorial",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            text_color=("#1F6AA5", "#52A2F2")
-        )
-        img_opt_header.pack(anchor="w", padx=15, pady=(10, 5))
+        # SEPARADOR
+        ctk.CTkFrame(master_frame, height=2, fg_color=("gray80", "gray25")).pack(fill="x", padx=15)
         
-        img_opt_desc = "Ajusta la densidad de píxeles (DPI) para la conversión de archivos PDF, AI y EPS. 300 DPI es el estándar de impresión. Valores más altos aumentan el detalle pero también el uso de RAM."
-        ctk.CTkLabel(img_opt_frame, text=img_opt_desc, font=ctk.CTkFont(size=12), text_color="gray60", justify="left", wraplength=550).pack(anchor="w", padx=15, pady=(0, 10))
-
-        dpi_controls = ctk.CTkFrame(img_opt_frame, fg_color="transparent")
-        dpi_controls.pack(fill="x", padx=15, pady=(0, 15))
+        # 2. RESOLUCIÓN Y DPI (LADO A LADO)
+        dpi_group = ctk.CTkFrame(master_frame, fg_color="transparent")
+        dpi_group.pack(fill="x", padx=15, pady=15)
+        
+        dpi_header = ctk.CTkLabel(dpi_group, text="Calidad de Renderizado y Previsualización", font=ctk.CTkFont(size=15, weight="bold"), text_color=("#1F6AA5", "#52A2F2"))
+        dpi_header.pack(anchor="w", pady=(0, 10))
+        
+        dpi_row = ctk.CTkFrame(dpi_group, fg_color="transparent")
+        dpi_row.pack(fill="x")
+        dpi_row.grid_columnconfigure(0, weight=1)
+        dpi_row.grid_columnconfigure(1, weight=1)
+        
+        # --- LADO IZQUIERDO: RENDER DPI ---
+        render_frame = ctk.CTkFrame(dpi_row, fg_color="transparent")
+        render_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        
+        ctk.CTkLabel(render_frame, text="Calidad Final (DPI):", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w")
+        
+        render_controls = ctk.CTkFrame(render_frame, fg_color="transparent")
+        render_controls.pack(fill="x", pady=5)
         
         self.vector_dpi_var = ctk.IntVar(value=self.app.vector_dpi)
+        self.dpi_slider = ctk.CTkSlider(render_controls, from_=70, to=1200, variable=self.vector_dpi_var, command=self._on_vector_dpi_change)
+        self.dpi_slider.pack(side="left", fill="x", expand=True, padx=(0, 5))
         
-        self.dpi_slider = ctk.CTkSlider(
-            dpi_controls, 
-            from_=70, to=1200, 
-            variable=self.vector_dpi_var,
-            command=self._on_vector_dpi_change
-        )
-        self.dpi_slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        
-        self.dpi_entry = ctk.CTkEntry(
-            dpi_controls, 
-            width=65,
-            placeholder_text="300"
-        )
+        self.dpi_entry = ctk.CTkEntry(render_controls, width=55, height=24)
         self.dpi_entry.insert(0, str(self.app.vector_dpi))
-        self.dpi_entry.pack(side="right", padx=(5, 0))
+        self.dpi_entry.pack(side="right")
         self.dpi_entry.bind("<KeyRelease>", self._on_dpi_entry_change)
         
-        ctk.CTkLabel(dpi_controls, text="DPI", font=ctk.CTkFont(size=12, weight="bold")).pack(side="right", padx=(5, 0))
-
-        # Etiqueta de advertencia para DPI alto
+        # --- LADO DERECHO: PREVIEW DPI ---
+        preview_frame = ctk.CTkFrame(dpi_row, fg_color="transparent")
+        preview_frame.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        
+        ctk.CTkLabel(preview_frame, text="Nitidez Visor (DPI):", font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w")
+        
+        preview_controls = ctk.CTkFrame(preview_frame, fg_color="transparent")
+        preview_controls.pack(fill="x", pady=5)
+        
+        self.preview_dpi_var = ctk.IntVar(value=self.app.preview_vector_dpi)
+        self.preview_slider = ctk.CTkSlider(preview_controls, from_=72, to=150, variable=self.preview_dpi_var, command=self._on_preview_dpi_change)
+        self.preview_slider.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        self.preview_dpi_label = ctk.CTkLabel(preview_controls, text=f"{self.app.preview_vector_dpi} DPI", font=ctk.CTkFont(size=12, weight="bold"), width=55)
+        self.preview_dpi_label.pack(side="right")
+        
+        # EXPLICACIÓN DPI
+        dpi_desc = "El DPI de renderizado define la calidad del archivo exportado (estándar: 300), mientras que el de previsualización controla la nitidez y velocidad de las miniaturas en el visor."
+        ctk.CTkLabel(dpi_group, text=dpi_desc, font=ctk.CTkFont(size=11), text_color="gray60", justify="left", wraplength=550).pack(anchor="w", pady=(5, 0))
+        
+        # ADVERTENCIA DPI ALTO (Ahora es un atributo de clase para manejarlo bien)
         self.dpi_warning_label = ctk.CTkLabel(
-            img_opt_frame,
-            text="⚠️ Valores superiores a 1200 DPI no son recomendables y pueden agotar la RAM. Usar con precaución.",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#FF8C00", # Naranja
+            dpi_group, 
+            text="⚠️ Valores > 1200 DPI pueden agotar la RAM. Usar con precaución.", 
+            font=ctk.CTkFont(size=11, weight="bold"), 
+            text_color="#FF8C00",
             wraplength=550,
             justify="left"
         )
-        # Mostrar solo si el valor actual ya es alto
         if self.app.vector_dpi > 1200:
-            self.dpi_warning_label.pack(anchor="w", padx=15, pady=(0, 10))
+            self.dpi_warning_label.pack(anchor="w", pady=(5, 0))
 
-        # --- SUB-SECCIÓN: OPCIONES DE PREVISUALIZACIÓN ---
-        ctk.CTkLabel(frame_general, text="Calidad de Previsualización (Vectores)", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", pady=(15, 5), padx=5)
+        # SEPARADOR
+        ctk.CTkFrame(master_frame, height=2, fg_color=("gray80", "gray25")).pack(fill="x", padx=15)
+        
+        # 3. AVANZADO (INKSCAPE Y FONDO)
+        adv_group = ctk.CTkFrame(master_frame, fg_color="transparent")
+        adv_group.pack(fill="x", padx=15, pady=15)
+        
+        adv_header = ctk.CTkLabel(adv_group, text="Opciones Avanzadas y Compatibilidad", font=ctk.CTkFont(size=15, weight="bold"), text_color=("#1F6AA5", "#52A2F2"))
+        adv_header.pack(anchor="w", pady=(0, 10))
+        
+        # --- FILA 1: FONDO SÓLIDO ---
+        self.vector_bg_var = ctk.BooleanVar(value=self.app.vector_force_background)
+        self.vector_bg_switch = ctk.CTkSwitch(adv_group, text="Forzar fondo sólido (Aplanado) en vectores", variable=self.vector_bg_var, command=self._on_vector_bg_toggle)
+        self.vector_bg_switch.pack(anchor="w", pady=(0, 5))
+        ctk.CTkLabel(adv_group, text="Añade un fondo blanco a archivos AI, EPS y PS (como en los PDF) para evitar transparencias no deseadas.", font=ctk.CTkFont(size=11), text_color="gray60").pack(anchor="w", padx=25, pady=(0, 15))
 
-        preview_opt_frame = ctk.CTkFrame(frame_general, fg_color=("gray85", "gray20"), corner_radius=8)
-        preview_opt_frame.pack(fill="x", pady=(0, 10), padx=5)
-
-        preview_opt_desc = "Ajusta la nitidez de la vista previa para archivos PDF, AI y EPS. Un valor bajo (72-100) es mucho más rápido y fluido al navegar."
-        ctk.CTkLabel(preview_opt_frame, text=preview_opt_desc, font=ctk.CTkFont(size=12), text_color="gray60", justify="left", wraplength=550).pack(anchor="w", padx=15, pady=(10, 10))
-
-        preview_controls = ctk.CTkFrame(preview_opt_frame, fg_color="transparent")
-        preview_controls.pack(fill="x", padx=15, pady=(0, 15))
-
-        self.preview_dpi_var = ctk.IntVar(value=self.app.preview_vector_dpi)
-
-        self.preview_slider = ctk.CTkSlider(
-            preview_controls, 
-            from_=72, to=150, 
-            variable=self.preview_dpi_var,
-            command=self._on_preview_dpi_change
+        # --- FILA 2: INKSCAPE ---
+        ink_header_row = ctk.CTkFrame(adv_group, fg_color="transparent")
+        ink_header_row.pack(fill="x")
+        
+        self.inkscape_enabled_var = ctk.BooleanVar(value=self.app.inkscape_enabled)
+        self.inkscape_switch = ctk.CTkSwitch(ink_header_row, text="Usar Inkscape para conversiones profesionales", variable=self.inkscape_enabled_var, command=self._on_inkscape_toggle)
+        self.inkscape_switch.pack(side="left")
+        
+        # Botón de descarga (URL desde constantes o directa si no existe)
+        import webbrowser
+        INKSCAPE_URL = "https://inkscape.org/release/1.4/windows/"
+        self.ink_download_btn = ctk.CTkButton(
+            ink_header_row, 
+            text="Descargar Inkscape 🌐", 
+            width=140, height=24, 
+            font=ctk.CTkFont(size=11), 
+            fg_color="transparent", 
+            border_width=1, 
+            command=lambda: webbrowser.open(INKSCAPE_URL)
         )
-        self.preview_slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.ink_download_btn.pack(side="right")
+        
+        ink_path_frame = ctk.CTkFrame(adv_group, fg_color="transparent")
+        ink_path_frame.pack(fill="x", pady=(10, 5))
+        
+        self.inkscape_path_entry = ctk.CTkEntry(ink_path_frame, placeholder_text=r"C:\Program Files\Inkscape")
+        self.inkscape_path_entry.insert(0, self.app.inkscape_custom_path)
+        self.inkscape_path_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.inkscape_path_entry.bind("<KeyRelease>", self._on_inkscape_path_change)
+        
+        self.ink_browse_btn = ctk.CTkButton(ink_path_frame, text="Examinar...", width=90, height=28, command=self._browse_inkscape_path)
+        self.ink_browse_btn.pack(side="right")
+        
+        ink_status_row = ctk.CTkFrame(adv_group, fg_color="transparent")
+        ink_status_row.pack(fill="x", pady=(5, 0))
+        
+        self.ink_verify_btn = ctk.CTkButton(ink_status_row, text="Verificar Instalación", width=130, height=26, fg_color="#28A745", hover_color="#218838", command=self._check_inkscape_status)
+        self.ink_verify_btn.pack(side="left", padx=(0, 10))
+        
+        # Estado Inkscape
+        initial_status = "Inkscape desactivado."
+        initial_color = "gray50"
+        if self.app.inkscape_enabled:
+             if self.app.inkscape_version:
+                 initial_status = f"✅ Detectado: {self.app.inkscape_version}"
+                 initial_color = "#28A745"
+             else:
+                 initial_status = "⚠️ Pendiente de verificación."
+                 initial_color = "#FFC107"
 
-        self.preview_dpi_label = ctk.CTkLabel(
-            preview_controls, 
-            text=f"{self.app.preview_vector_dpi} DPI",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            width=70
-        )
-        self.preview_dpi_label.pack(side="right")
+        self.ink_status_label = ctk.CTkLabel(ink_status_row, text=initial_status, font=ctk.CTkFont(size=11, weight="bold"), text_color=initial_color)
+        self.ink_status_label.pack(side="left")
 
         self.sections["general"] = frame_general
         
         # ===== Sección: Cookies =====
-        frame_cookies = ctk.CTkFrame(self.content_container, fg_color="transparent")
+        frame_cookies = ctk.CTkScrollableFrame(self.content_container, fg_color="transparent")
         ctk.CTkLabel(frame_cookies, text="Gestión de Cookies", font=ctk.CTkFont(size=20, weight="bold")).pack(anchor="w", pady=(0, 10))
         
         cookie_desc = "Configura las cookies para acceder a contenido protegido por edad, videos privados, o contenido restringido que requiera haber iniciado sesión en el servicio."
@@ -379,9 +479,8 @@ class ConfigTab(ctk.CTkFrame):
         self.fixed_frame = ctk.CTkFrame(frame_deps, fg_color=("gray85", "gray20"))
         self.fixed_frame.pack(fill="x", padx=5)
         
-        # Crear filas (Ghostscript, Inkscape)
+        # Crear filas (Ghostscript)
         self._create_fixed_dependency_row(self.fixed_frame, "Ghostscript", "Motor de renderizado de vectores", "ghostscript", "https://ghostscript.com/releases/gsdnld.html")
-        self._create_fixed_dependency_row(self.fixed_frame, "Inkscape", "Editor de gráficos vectoriales", "inkscape", "https://inkscape.org/release/1.4/windows/")
         
         # --- Aviso Final de Recuperación ---
         recovery_frame = ctk.CTkFrame(frame_deps, fg_color=("#FCF2CE", "#3D3725"), corner_radius=6)
@@ -908,6 +1007,112 @@ class ConfigTab(ctk.CTkFrame):
         except ValueError:
             pass # Ignorar si no es número mientras escribe
 
+    def _on_theme_change(self, display_name):
+        """Maneja el cambio de tema de color con actualización dinámica."""
+        internal_name = self.theme_internal_names.get(display_name)
+        if not internal_name or internal_name == getattr(self.app, 'selected_theme_accent', 'blue'):
+            return
+            
+        self.app.selected_theme_accent = internal_name
+        self.app.save_settings()
+        
+        # 🎨 ACTUALIZACIÓN DINÁMICA (NUEVO)
+        # Esto actualizará los colores personalizados al instante
+        self.app.refresh_theme()
+        
+        # Diálogo de reinicio (Opcional, para un cambio 100% completo)
+        from tkinter import messagebox
+        import sys
+        if messagebox.askyesno("Tema Actualizado", 
+                               "Se han actualizado los colores personalizados de forma dinámica.\n\n"
+                               "¿Deseas reiniciar DowP ahora para aplicar el cambio de acento de forma completa en toda la interfaz (marcos, barras, etc)?"):
+            # Cerrar limpiamente
+            self.app.on_closing()
+            
+            # Lanzar nueva instancia
+            import subprocess
+            if getattr(sys, 'frozen', False):
+                subprocess.Popen([sys.executable])
+            else:
+                subprocess.Popen([sys.executable] + sys.argv)
+            
+            # Salir de la actual
+            sys.exit(0)
+
+    def _on_appearance_mode_change(self, mode_display):
+        """Maneja el cambio entre Claro, Oscuro y Sistema."""
+        mode_map = {"Sistema": "System", "Claro": "Light", "Oscuro": "Dark"}
+        internal_mode = mode_map.get(mode_display, "System")
+        
+        ctk.set_appearance_mode(internal_mode)
+        self.app.appearance_mode = internal_mode
+        self.app.save_settings()
+        
+        print(f"DEBUG: Modo de apariencia cambiado a: {internal_mode}")
+
+    def _refresh_theme_list(self):
+        """Escanea las carpetas de temas y actualiza el menú desplegable."""
+        # Temas base de CTK
+        self.theme_display_names = {
+            "blue": "Azul (Estándar)",
+            "dark-blue": "Azul Profundo"
+        }
+        
+        # 1. Escaneo de Temas Internos
+        base_path = getattr(sys, '_MEIPASS', self.app.APP_BASE_PATH)
+        internal_dir = os.path.join(base_path, "src", "gui", "themes")
+        
+        # 2. Escaneo de Temas de Usuario
+        user_dir = getattr(self.app, 'USER_THEMES_DIR', None)
+        
+        for directory in [internal_dir, user_dir]:
+            if directory and os.path.exists(directory):
+                for file in os.listdir(directory):
+                    if file.endswith(".json"):
+                        name = file[:-5] # Quitar .json
+                        # Formatear nombre para mostrar (ej: verde_bosque -> Verde Bosque)
+                        display = name.replace("_", " ").replace("-", " ").title()
+                        self.theme_display_names[name] = display
+        
+        self.theme_internal_names = {v: k for k, v in self.theme_display_names.items()}
+        
+        # Actualizar Menu
+        sorted_display = sorted(self.theme_display_names.values())
+        self.theme_menu.configure(values=sorted_display)
+        
+        current_internal = getattr(self.app, 'selected_theme_accent', 'blue')
+        current_display = self.theme_display_names.get(current_internal, "Azul (Estándar)")
+        self.theme_menu.set(current_display)
+
+    def _import_theme(self):
+        """Abre un diálogo para copiar un archivo JSON a la carpeta de temas."""
+        from customtkinter import filedialog
+        from tkinter import messagebox
+        import shutil
+        
+        file_path = filedialog.askopenfilename(
+            title="Seleccionar Tema de CustomTkinter",
+            filetypes=[("Archivos JSON", "*.json")]
+        )
+        
+        if not file_path:
+            return
+            
+        try:
+            filename = os.path.basename(file_path)
+            dest_path = os.path.join(self.app.USER_THEMES_DIR, filename)
+            
+            if os.path.exists(dest_path):
+                if not messagebox.askyesno("Sobrescribir", f"El tema '{filename}' ya existe. ¿Quieres sobrescribirlo?"):
+                    return
+            
+            shutil.copy(file_path, dest_path)
+            messagebox.showinfo("Éxito", f"Tema '{filename}' importado correctamente.")
+            self._refresh_theme_list()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo importar el tema: {e}")
+
     def _update_dpi_warning(self, val):
         """Muestra u oculta la advertencia según el valor de DPI."""
         if val > 1200:
@@ -1304,7 +1509,15 @@ class ConfigTab(ctk.CTkFrame):
     def _open_family_folder(self, family_name):
         from main import MODELS_DIR
         import subprocess
-        folder_name = "rmbg2" if "RMBG 2.0" in family_name else "rembg"
+        
+        # Determinar carpeta según familia
+        if "RMBG 2.0" in family_name:
+            folder_name = "rmbg2"
+        elif "InSPyReNet" in family_name:
+            folder_name = "inspyrenet"
+        else:
+            folder_name = "rembg"
+            
         target_dir = os.path.join(MODELS_DIR, folder_name)
         os.makedirs(target_dir, exist_ok=True)
         try:
@@ -1970,3 +2183,56 @@ class ConfigTab(ctk.CTkFrame):
             
         Tooltip.hide_all()
         messagebox.showinfo("Limpieza Completada", f"Se han eliminado {success_count} modelos correctamente.")
+    def _on_vector_bg_toggle(self):
+        self.app.vector_force_background = self.vector_bg_var.get()
+        self.app.save_settings()
+
+    def _on_inkscape_toggle(self):
+        self.app.inkscape_enabled = self.inkscape_enabled_var.get()
+        self._check_inkscape_status()
+        self.app.save_settings()
+
+    def _on_inkscape_path_change(self, event=None):
+        self.app.inkscape_custom_path = self.inkscape_path_entry.get()
+        # Resetear versión guardada si la ruta cambia
+        self.app.inkscape_version = ""
+        self.ink_status_label.configure(text="⚠️ La ruta cambió. Por favor, vuelve a comprobar.", text_color="#FFC107")
+        self.app.save_settings()
+
+    def _browse_inkscape_path(self):
+        path = filedialog.askdirectory(title="Selecciona la carpeta de instalación de Inkscape")
+        if path:
+            self.inkscape_path_entry.delete(0, "end")
+            self.inkscape_path_entry.insert(0, path)
+            self._on_inkscape_path_change()
+
+    def _check_inkscape_status(self):
+        """Valida si la ruta de Inkscape es correcta y actualiza el estado visual."""
+        self.ink_status_label.configure(text="⏳ Verificando...", text_color="gray50")
+        self.update_idletasks() # Forzar actualización visual
+        
+        from src.core.inkscape_service import InkscapeService
+        service = InkscapeService(self.app.inkscape_custom_path)
+        
+        if service.is_available():
+            v_text = service.version_info.split("(")[0].strip() if service.version_info else "Disponible"
+            self.ink_status_label.configure(text=f"✅ Inkscape detectado: {v_text}", text_color="#28A745")
+            self.app.inkscape_version = v_text
+            self.app.inkscape_service = service
+        else:
+            self.app.inkscape_version = ""
+            if self.app.inkscape_enabled:
+                self.ink_status_label.configure(text="❌ No se encontró Inkscape en la ruta especificada.", text_color="#DC3545")
+            else:
+                self.ink_status_label.configure(text="Inkscape desactivado. Se usarán motores nativos.", text_color="gray50")
+            self.app.inkscape_service = None
+        
+        # 🔄 PROPAGAR CAMBIO DINÁMICAMENTE (Sin reiniciar app)
+        if hasattr(self.app, 'image_tab'):
+            if hasattr(self.app.image_tab, 'image_processor'):
+                self.app.image_tab.image_processor.inkscape_service = self.app.inkscape_service
+            if hasattr(self.app.image_tab, 'image_converter'):
+                self.app.image_tab.image_converter.inkscape_service = self.app.inkscape_service
+            print("DEBUG: Referencias de Inkscape actualizadas en ImageToolsTab.")
+        
+        self.app.save_settings()

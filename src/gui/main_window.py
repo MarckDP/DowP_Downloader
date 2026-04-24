@@ -43,6 +43,9 @@ except ImportError:
     TkBase = ctk.CTk
 
 from datetime import datetime, timedelta
+from src.core.image_converter import ImageConverter
+from src.core.image_processor import ImageProcessor
+from src.core.inkscape_service import InkscapeService
 from src.core.downloader import get_video_info, download_media
 from src.core.processor import FFmpegProcessor, CODEC_PROFILES
 from src.core.exceptions import UserCancelledError, LocalRecodeFailedError
@@ -462,8 +465,10 @@ class MainWindow(TkBase):
                 "• Intentar más tarde si hay límite de peticiones"
             )
 
-    def __init__(self, launch_target=None, project_root=None, poppler_path=None, inkscape_path=None, splash_screen=None, app_version="0.0.0"):
+    def __init__(self, launch_target=None, project_root=None, poppler_path=None, inkscape_path=None, splash_screen=None, app_version="0.0.0", theme_data=None, theme_warnings=None):
         super().__init__()
+        self.theme_data = theme_data or {}
+        self.theme_warnings = theme_warnings or []
         
         # Guardamos la versión que recibimos de main.py
         self.APP_VERSION = app_version 
@@ -495,7 +500,6 @@ class MainWindow(TkBase):
         # Aplicar estilos de CustomTkinter manualmente
         if TKDND_AVAILABLE:
             ctk.set_appearance_mode("Dark")
-            ctk.set_default_color_theme("blue")
             self.configure(bg="#2B2B2B")
 
         self.VIDEO_EXTENSIONS = VIDEO_EXTENSIONS
@@ -548,6 +552,8 @@ class MainWindow(TkBase):
         # 3. Definir las rutas usando la nueva carpeta de datos
         self.SETTINGS_FILE = os.path.join(self.APP_DATA_DIR, "app_settings.json")
         self.PRESETS_FILE = os.path.join(self.APP_DATA_DIR, "presets.json") 
+        self.USER_THEMES_DIR = os.path.join(self.APP_DATA_DIR, "themes")
+        os.makedirs(self.USER_THEMES_DIR, exist_ok=True)
         
         # 4. MIGRACIÓN AUTOMÁTICA (Para evitar que los usuarios pierdan configuraciones antiguas)
         import shutil
@@ -674,6 +680,11 @@ class MainWindow(TkBase):
         self.vector_dpi = 300 # Calidad de renderizado para PDF/AI/EPS (Estándar: 300)
         self.preview_vector_dpi = 100 # Calidad de previsualización para vectores (Rápida: 100)
         
+        self.inkscape_enabled = False
+        self.inkscape_custom_path = r"C:\Program Files\Inkscape"
+        self.selected_theme_accent = "blue"
+        self.appearance_mode = "System" # Default
+        
         # --- INTENTAR CARGAR CONFIGURACIÓN GUARDADA ---
         try:
             print(f"DEBUG: Intentando cargar configuración desde: {self.SETTINGS_FILE}")
@@ -707,9 +718,24 @@ class MainWindow(TkBase):
                     self.show_onnx_warning = settings.get("show_onnx_warning", True)
                     self.vector_dpi = settings.get("vector_dpi", 300)
                     self.preview_vector_dpi = settings.get("preview_vector_dpi", 100)
+                    self.vector_force_background = settings.get("vector_force_background", False)
+                    
+                    # Cargar ajustes de Inkscape externo
+                    self.inkscape_enabled = settings.get("inkscape_enabled", False)
+                    self.inkscape_custom_path = settings.get("inkscape_path", r"C:\Program Files\Inkscape")
+                    self.inkscape_version = settings.get("inkscape_version", "")
+                    self.selected_theme_accent = settings.get("selected_theme_accent", "blue")
+                    self.appearance_mode = settings.get("appearance_mode", "System")
                 print(f"DEBUG: Configuración cargada exitosamente.")
             else:
                 print("DEBUG: Archivo de configuración no encontrado. Usando valores por defecto.")
+            
+            # Inicializar servicio de Inkscape
+            self.inkscape_service = InkscapeService(self.inkscape_custom_path) if self.inkscape_enabled else None
+            
+            # --- NUEVO: Crear plantilla de tema si no existe ---
+            self._ensure_theme_template()
+            
         except (json.JSONDecodeError, IOError) as e:
             print(f"ERROR: Fallo al cargar configuración: {e}. Usando valores por defecto.")
             # No se necesita 'pass' porque los valores por defecto ya están establecidos
@@ -719,6 +745,10 @@ class MainWindow(TkBase):
         self.tab_view = ctk.CTkTabview(self, anchor="nw", command=self._on_tab_view_change)
         self.tab_view.pack(expand=True, fill="both", padx=5, pady=(0, 5))
         
+        # --- NUEVO: MOSTRAR ADVERTENCIAS DEL TEMA AL INICIO ---
+        if self.theme_warnings:
+            self.after(1000, self._show_theme_warnings)
+
         # (Cargará la clase de nuestro nuevo archivo)
         self.tab_view.add("Proceso Único")
         self.single_tab = SingleDownloadTab(master=self.tab_view.tab("Proceso Único"), app=self)
@@ -1548,6 +1578,14 @@ class MainWindow(TkBase):
             # Optimización de VRAM
             "keep_ai_models_in_memory": self.keep_ai_models_in_memory,
             "show_onnx_warning": self.show_onnx_warning,
+
+            # Inkscape Externo
+            "inkscape_enabled": self.inkscape_enabled,
+            "inkscape_path": self.inkscape_custom_path,
+            "inkscape_version": getattr(self, 'inkscape_version', ""),
+            "vector_force_background": getattr(self, 'vector_force_background', False),
+            "selected_theme_accent": self.selected_theme_accent,
+            "appearance_mode": self.appearance_mode,
         }
 
         # 4. Escribir en el archivo
@@ -2163,3 +2201,256 @@ class MainWindow(TkBase):
                 models = self.image_tab._scan_upscayl_models()
                 if not models: models = ["- No hay modelos -"]
                 self.image_tab.upscale_model_menu.configure(values=models)
+
+    def _ensure_theme_template(self):
+        """Crea o actualiza el archivo de plantilla con notas detalladas para el usuario."""
+        template_path = os.path.join(self.USER_THEMES_DIR, "plantilla_tema.json")
+        TEMPLATE_VERSION = "2.0"
+        
+        should_update = not os.path.exists(template_path)
+        
+        if not should_update:
+            try:
+                import json
+                with open(template_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                    # Verificar versión en las instrucciones
+                    version = existing_data.get("_INSTRUCCIONES_DOWP", {}).get("VERSION", "0.0")
+                    if version != TEMPLATE_VERSION:
+                        should_update = True
+                        print(f"INFO: Plantilla de tema antigua ({version}) detectada. Actualizando a v{TEMPLATE_VERSION}...")
+            except:
+                should_update = True
+
+        if should_update:
+            try:
+                import json
+                base_path = getattr(sys, '_MEIPASS', self.APP_BASE_PATH)
+                green_path = os.path.join(base_path, "src", "gui", "themes", "green.json")
+                
+                theme_data = {}
+                if os.path.exists(green_path):
+                    with open(green_path, 'r', encoding='utf-8') as f:
+                        theme_data = json.load(f)
+                
+                # Insertar instrucciones al principio del JSON
+                instructions = {
+                    "VERSION": TEMPLATE_VERSION,
+                    "INFO_1": "GUIA DE TEMAS DOWP: Edita este archivo para crear tu propio estilo.",
+                    "INFO_2": "FORMATO DUAL: Casi todos los valores aceptan una lista: ['Color Modo Claro', 'Color Modo Oscuro'].",
+                    "INFO_3": "MODO CLARO: Si el texto o botones no se ven bien en modo claro, ajusta el PRIMER valor de la lista.",
+                    "INFO_4": "FONDO GENERAL: Puedes cambiar 'CTkFrame' y 'CTk' en este JSON para cambiar el color de las ventanas y paneles.",
+                    "AVISO_IMPORTANTE": "No uses 'transparent' en 'border_color', causará errores. Usa un color sólido.",
+                    "CONSEJO": "Usa códigos Hexadecimales (ej: #AF52DE) para máxima precisión.",
+                    "CUSTOM_COLORS": "Usa la sección 'CustomColors' para botones específicos (Descargar, Analizar, etc)."
+                }
+                
+                # Ejemplo de colores personalizados para la plantilla
+                custom_colors_example = {
+                    "DOWNLOAD_BTN": ["#28A745", "#218838"],
+                    "DOWNLOAD_BTN_HOVER": ["#218838", "#1E7E34"],
+                    "ANALYZE_BTN": ["#007BFF", "#0069D9"],
+                    "ANALYZE_BTN_HOVER": ["#0069D9", "#0062CC"],
+                    "CANCEL_BTN": ["#DC3545", "#C82333"],
+                    "CANCEL_BTN_HOVER": ["#C82333", "#BD2130"],
+                    "PROCESS_BTN": ["#6F42C1", "#59369A"],
+                    "PROCESS_BTN_HOVER": ["#59369A", "#51318D"],
+                    "SECONDARY_BTN": ["#555555", "#444444"],
+                    "SECONDARY_BTN_HOVER": ["#444444", "#333333"],
+                    "DOWNLOAD_BTN_TEXT": ["white", "white"],
+                    "ANALYZE_BTN_TEXT": ["white", "white"],
+                    "CANCEL_BTN_TEXT": ["white", "white"],
+                    "PROCESS_BTN_TEXT": ["white", "white"],
+                    "SECONDARY_BTN_TEXT": ["white", "white"],
+                    "DND_BORDER": ["#007BFF", "#00BFFF"],
+                    "DND_BG": ["#1a3d5c", "#0d1f2e"],
+                    "DND_TEXT": ["#00BFFF", "#FFFFFF"],
+                    "STATUS_SUCCESS": ["#28A745", "#218838"],
+                    "STATUS_ERROR": ["#DC3545", "#C82333"],
+                    "STATUS_WARNING": ["#FFA500", "#FF8C00"],
+                    "STATUS_PENDING": ["#565B5E", "#565B5E"],
+                    "JOB_ACTION_ICON_COLOR": ["black", "white"],
+                    "JOB_CANCEL_ICON_COLOR": ["#DC3545", "#DC3545"],
+                    "LISTBOX_BG": ["#FFFFFF", "#1D1D1D"],
+                    "LISTBOX_TEXT": ["black", "white"],
+                    "LISTBOX_SELECTED_BG": ["#1F6AA5", "#1F6AA5"],
+                    "LISTBOX_SELECTED_TEXT": ["white", "white"],
+                    "VIEWER_BG": ["#F0F0F0", "#1D1D1D"],
+                    "HUD_BG": ["#333333", "#222222"],
+                    "HUD_TEXT": ["white", "white"],
+                    "SEPARATOR_COLOR": ["gray75", "gray35"],
+                    "OPTIONS_PANEL_BG": ["#E5E5E5", "#2B2B2B"],
+                    "TRANSPARENCY_GRID_1": ["#E1E1E1", "#252525"],
+                    "TRANSPARENCY_GRID_2": ["#F0F0F0", "#1D1D1D"]
+                }
+                
+                # Crear nuevo diccionario con instrucciones primero
+                from collections import OrderedDict
+                final_template = OrderedDict()
+                final_template["_INSTRUCCIONES_DOWP"] = instructions
+                
+                # Añadir CustomColors de ejemplo si no existen
+                if "CustomColors" not in theme_data:
+                    final_template["CustomColors"] = custom_colors_example
+                
+                for k, v in theme_data.items():
+                    if k != "CustomColors":
+                        final_template[k] = v
+                
+                with open(template_path, 'w', encoding='utf-8') as f:
+                    json.dump(final_template, f, indent=2)
+                    
+                print(f"INFO: Plantilla de tema con notas creada en: {template_path}")
+            except Exception as e:
+                print(f"ERROR: No se pudo crear la plantilla de tema: {e}")
+
+    def get_theme_color(self, key, default_color):
+        """
+        Recupera un color personalizado del tema JSON.
+        'key' es el nombre del color en la sección 'CustomColors'.
+        'default_color' es el valor de fallback si no existe.
+        """
+        if not self.theme_data or "CustomColors" not in self.theme_data:
+            return default_color
+        
+        color_val = self.theme_data["CustomColors"].get(key, default_color)
+        
+        # Sanitización extra de seguridad para "transparent" en border_color
+        # (Aunque main.py ya lo hace, esto protege accesos directos futuros)
+        if "border_color" in key.lower():
+            if isinstance(color_val, list):
+                color_val = [c if c != "transparent" else "gray65" for c in color_val]
+            elif color_val == "transparent":
+                color_val = "gray65"
+                
+        return color_val
+
+    def _load_active_theme_data(self):
+        """Recarga los datos del tema actual desde el archivo JSON."""
+        try:
+            import json
+            # El nombre del tema suele estar en self.selected_theme_accent (cargado de settings)
+            theme = getattr(self, 'selected_theme_accent', 'blue')
+            
+            # Rutas de búsqueda (Usuario e Internas)
+            user_themes_dir = self.USER_THEMES_DIR
+            base_path = getattr(sys, '_MEIPASS', self.APP_BASE_PATH)
+            internal_themes_dir = os.path.join(base_path, "src", "gui", "themes")
+            
+            found_path = None
+            for _dir in [user_themes_dir, internal_themes_dir]:
+                json_path = os.path.join(_dir, f"{theme}.json")
+                if os.path.exists(json_path):
+                    found_path = json_path
+                    break
+            
+            if found_path:
+                # 1. Cargar tema base (Green) como red de seguridad
+                base_theme_path = os.path.join(internal_themes_dir, "green.json")
+                final_data = {}
+                if os.path.exists(base_theme_path):
+                    with open(base_theme_path, 'r', encoding='utf-8') as f:
+                        final_data = json.load(f)
+
+                # 2. Cargar tema del usuario
+                with open(found_path, 'r', encoding='utf-8') as f:
+                    user_data = json.load(f)
+                    
+                # Detectar claves faltantes antes de mezclar para informar al usuario
+                missing = [k for k in final_data if k not in user_data and not k.startswith("_") and k != "CustomColors"]
+                if missing:
+                    print(f"⚠️ ADVERTENCIA: El tema '{theme}' está incompleto.")
+                    print(f"   Claves faltantes: {', '.join(missing)}")
+                    self.theme_warnings = [f"El tema '{theme}' está incompleto. Faltan {len(missing)} secciones técnicas (ej: {', '.join(missing[:3])}). Se usaron valores por defecto."]
+                    self.after(500, self._show_theme_warnings)
+
+                # 3. Mezclar (Deep Update)
+                def _deep_update(base, over):
+                    for k, v in over.items():
+                        if isinstance(v, dict) and k in base and isinstance(base[k], dict):
+                            _deep_update(base[k], v)
+                        else:
+                            base[k] = v
+                
+                _deep_update(final_data, user_data)
+                self.theme_data = final_data
+                print(f"INFO: Tema '{theme}' completado y recargado.")
+                def _sanitize(obj):
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            if "border_color" in k:
+                                if isinstance(v, list):
+                                    obj[k] = [c if c != "transparent" else "gray65" for c in v]
+                                elif v == "transparent":
+                                    obj[k] = "gray65"
+                            else:
+                                _sanitize(v)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            _sanitize(item)
+                
+                _sanitize(final_data)
+                self.theme_data = final_data
+                print(f"INFO: Tema '{theme}' completado y recargado.")
+            else:
+                self.theme_data = {}
+        except Exception as e:
+            print(f"ERROR recargando datos del tema: {e}")
+            self.theme_data = {}
+
+    def refresh_theme(self):
+        """Propaga el cambio de tema a todas las pestañas de forma dinámica."""
+        self._load_active_theme_data()
+        
+        # Aplicar el tema de acento a nivel de CTk (Afecta a nuevos widgets)
+        # Nota: CTk no actualiza widgets existentes automáticamente, por eso llamamos a refresh_theme()
+        import customtkinter as ctk
+        try:
+            # Si es un tema de usuario, necesitamos la ruta completa
+            theme = getattr(self, 'selected_theme_accent', 'blue')
+            user_json = os.path.join(self.USER_THEMES_DIR, f"{theme}.json")
+            if os.path.exists(user_json):
+                ctk.set_default_color_theme(user_json)
+            else:
+                ctk.set_default_color_theme(theme)
+        except:
+            pass
+
+        # Actualizar pestañas que ya tienen implementado refresh_theme()
+        if hasattr(self, 'single_tab'):
+            try:
+                self.single_tab.refresh_theme()
+            except Exception as e:
+                print(f"ERROR actualizando SingleDownloadTab: {e}")
+        
+        if hasattr(self, 'batch_tab'):
+            try:
+                self.batch_tab.refresh_theme()
+            except Exception as e:
+                print(f"ERROR actualizando BatchDownloadTab: {e}")
+
+        if hasattr(self, 'image_tab'):
+            try:
+                self.image_tab.refresh_theme()
+            except Exception as e:
+                print(f"ERROR actualizando ImageToolsTab: {e}")
+
+    def _show_theme_warnings(self):
+        """Muestra un mensaje al usuario si el tema tiene problemas."""
+        if not self.theme_warnings:
+            return
+            
+        # Imprimir en consola interna (se asegura de que aparezcan tras activarse el logger)
+        for warn in self.theme_warnings:
+            print(f"⚠️ ADVERTENCIA DE TEMA: {warn}")
+
+        from tkinter import messagebox
+        warn_text = "\n\n".join(self.theme_warnings)
+        messagebox.showwarning(
+            "Aviso de Tema Visual",
+            f"Se han detectado problemas menores con el tema cargado:\n\n{warn_text}\n\n"
+            "La aplicación funcionará correctamente usando valores por defecto para las partes faltantes."
+        )
+                
+        # (Aquí se añadirán el resto de pestañas cuando se refactoricen)
+        print("INFO: Tema actualizado dinámicamente en las pestañas compatibles.")

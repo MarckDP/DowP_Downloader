@@ -2,6 +2,7 @@ import os
 import io
 import re
 import subprocess
+import tempfile
 from PIL import Image, ImageChops
 
 class HideCmdWindow:
@@ -48,9 +49,9 @@ RASTER_EXT = tuple(f.lower() for f in IMAGE_RASTER_FORMATS)
 VECTOR_EXT = tuple(f.lower() for f in IMAGE_INPUT_FORMATS)
 
 class ImageProcessor:
-    def __init__(self, poppler_path=None, inkscape_path=None, ffmpeg_path=None):
+    def __init__(self, poppler_path=None, inkscape_service=None, ffmpeg_path=None):
         self.poppler_path = poppler_path
-        self.inkscape_path = inkscape_path
+        self.inkscape_service = inkscape_service
         self.ffmpeg_path = ffmpeg_path
         
         # ✅ NUEVO: Caché para almacenar el conteo de páginas y evitar bloqueos
@@ -58,11 +59,16 @@ class ImageProcessor:
         
         if CAN_PDF and self.poppler_path:
             print(f"INFO: ImageProcessor usará Poppler desde: {self.poppler_path}")
+            
+        # ✅ NUEVO: Detectar Ghostscript para EPS transparentes
+        self.gs_exe = self._find_ghostscript()
+        if self.gs_exe:
+            print(f"INFO: ImageProcessor usará Ghostscript desde: {self.gs_exe}")
         
-        if self.inkscape_path:
-            print(f"INFO: ImageProcessor usará Inkscape desde: {self.inkscape_path}")
+        if self.inkscape_service:
+            print(f"INFO: ImageProcessor usará Inkscape Service")
         else:
-            print("ADVERTENCIA: Inkscape no configurado. Archivos vectoriales dependerán del PATH.")
+            print("INFO: Inkscape no habilitado. Usando motores nativos.")
 
     def _command_exists(self, cmd):
         """Verifica si un comando está disponible en el PATH."""
@@ -208,6 +214,7 @@ class ImageProcessor:
         OPTIMIZADO: Prioriza velocidad sobre calidad.
         """
         original_path = os.environ.get('PATH', '')
+        print(f"DEBUG: [Thumb] Iniciando generación para: {os.path.basename(filepath)} (Size: {size}, Page: {page_number}, DPI: {dpi})")
 
         try:
             ext = os.path.splitext(filepath)[1].lower()
@@ -271,381 +278,227 @@ class ImageProcessor:
 
             # ===== RASTER: Carga directa (RÁPIDO) =====
             elif ext in RASTER_EXT: 
+                print(f"DEBUG: [Thumb] Procesando como RASTER: {ext}")
                 pil_image = Image.open(filepath)
             
-            # ===== SVG: CairoSVG primero (MUY RÁPIDO) =====
-            elif ext == ".svg" and CAN_SVG:
-                temp_svg = None
-                try:
-                    png_data = cairosvg.svg2png(url=filepath, output_width=size[0], output_height=size[1])
-                    pil_image = Image.open(io.BytesIO(png_data))
-                except (ValueError, TypeError) as e:
-                    print(f"DEBUG: CairoSVG falló: {e}. Intentando corrección...")
-                    temp_svg = self._fix_svg_attributes(filepath)
-                    if temp_svg:
-                        try:
-                            png_data = cairosvg.svg2png(url=temp_svg, output_width=size[0], output_height=size[1])
-                            pil_image = Image.open(io.BytesIO(png_data))
-                        except Exception:
-                            pil_image = self._generate_thumbnail_with_inkscape(temp_svg, size, 1, dpi=dpi)
-                    else:
-                        pil_image = self._generate_thumbnail_with_inkscape(filepath, size, 1, dpi=dpi)
-                finally:
-                    if temp_svg and os.path.exists(temp_svg):
-                        try: os.remove(temp_svg)
-                        except: pass
-
-            # ===== PDF/AI: Poppler (Diferenciado) =====
-            elif ext in (".pdf", ".ai") and CAN_PDF:
-                if page_number is None: page_number = 1
-                
-                # --- LÓGICA DIFERENCIADA ---
-                # Usar el DPI solicitado o 100 por defecto para velocidad
-                render_dpi = dpi if dpi is not None else 100  
-                render_fmt = "png"
-                use_transparent = (ext == ".ai") # Solo transparente para .ai
-                
-                print(f"DEBUG: Renderizando {ext} a {render_dpi} DPI para previsualización rápida...")
-
-                try:
-                    with HideCmdWindow():
-                        images = convert_from_path(
-                            filepath, 
-                            first_page=page_number,
-                            last_page=page_number,
-                            dpi=render_dpi,
-                            fmt=render_fmt, 
-                            transparent=use_transparent,
-                            poppler_path=self.poppler_path
-                        )
-                    
-                    if images:
-                        pil_image = images[0]
-                        
-                        if pil_image.mode != 'RGBA':
-                            pil_image = pil_image.convert('RGBA')
-                        
-                        # ✅ LÓGICA DE CALIDAD CORREGIDA:
-                        # Si la imagen es para el visor principal (size grande), NO la reducimos.
-                        # Devolvemos la imagen completa (ej: 2480x3508) para permitir zoom real.
-                        
-                        req_w, req_h = size
-                        
-                        # Si la solicitud es pequeña (ej: <200px para la lista lateral), sí reducimos.
-                        if req_w < 250:
-                            pil_image.thumbnail(size, Image.Resampling.LANCZOS)
-                        
-                        # Protección de RAM: Solo reducir si es monstruosa (> 4000px)
-                        # De lo contrario, devolver la imagen RAW de 300 DPI tal cual.
-                        elif pil_image.width > 4000 or pil_image.height > 4000:
-                            pil_image.thumbnail((4000, 4000), Image.Resampling.LANCZOS)
-                            print("DEBUG: Imagen limitada a 4K para proteger RAM")
-                        
-                        # (Si no entra en los 'if' anteriores, se devuelve la imagen gigante original)
-                        
-                        return pil_image
-
-                except Exception as e:
-                    print(f"ADVERTENCIA: Error optimizado Poppler ({e}). Reintentando modo seguro...")
-                    try:
-                        with HideCmdWindow():
-                            images = convert_from_path(
-                                filepath, first_page=page_number, last_page=page_number,
-                                poppler_path=self.poppler_path
-                            )
-                        if images:
-                            pil_image = images[0].convert("RGBA")
-                            pil_image.thumbnail(size, Image.Resampling.LANCZOS)
-                    except:
-                         # Último recurso: Inkscape (solo útil para .ai corruptos o pdfs raros)
-                         pil_image = self._generate_thumbnail_with_inkscape(filepath, size, page_number)
-            
-            # ===== EPS/PS: Prioridad Ghostscript (Velocidad) -> Fallback Inkscape =====
-            elif ext in (".eps", ".ps"):
-                if page_number is None: page_number = 1
-                pil_image = None
-                
-                # 1. Intentar Ghostscript (Pillow) PRIMERO
-                # Es mucho más rápido para generar vistas previas.
-                try:
-                    print(f"DEBUG: Intentando EPS con Ghostscript (Pillow) para velocidad...")
-                    
-                    # ✅ ENVOLVER CON HideCmdWindow (Pillow llama a gs.exe aquí)
-                    with HideCmdWindow():
-                        pil_image = Image.open(filepath)
-                        
-                        # ✅ TRUCO 1: Escala x10. 
-                        # Ghostscript renderiza vectores. Al pedirle x10, generamos una imagen gigante.
-                        pil_image.load(scale=5)
-                    
-                    # Asegurar modo RGB para poder detectar el blanco
-                    if pil_image.mode not in ('RGB', 'RGBA'):
-                        pil_image = pil_image.convert('RGB')
-
-                    # ✅ TRUCO 2: Auto-Crop (Recorte Inteligente de la Mesa de Trabajo)
-                    # Creamos una imagen blanca pura para comparar
-                    bg = Image.new(pil_image.mode, pil_image.size, (255, 255, 255))
-                    # Calculamos la diferencia entre la imagen y el fondo blanco
-                    diff = ImageChops.difference(pil_image, bg)
-                    # Obtenemos la caja delimitadora (bounding box) del contenido real (lo que no es blanco)
-                    bbox = diff.getbbox()
-                    
-                    if bbox:
-                        # Recortamos la imagen para quedarnos SOLO con el dibujo
-                        # Esto elimina los márgenes gigantes y hace que la miniatura se vea grande.
-                        pil_image = pil_image.crop(bbox)
-                        print(f"DEBUG: EPS recortado al contenido (bbox: {bbox})")
-
-                    # Convertir a RGBA para consistencia
-                    pil_image = pil_image.convert('RGBA')
-                    
-                    # Finalmente reducimos al tamaño de la miniatura (con antialiasing de alta calidad)
-                    pil_image.thumbnail(size, Image.Resampling.LANCZOS)
-                    print(f"DEBUG: ✅ EPS generado con Ghostscript")
-                    
-                except Exception as e:
-                    print(f"DEBUG: Ghostscript falló ({e}). Probando fallback con Inkscape...")
-                    pil_image = None
-
-                # 2. Si Ghostscript falló, usar Inkscape (Más lento, pero máxima compatibilidad)
-                if not pil_image:
-                     pil_image = self._generate_thumbnail_with_inkscape(filepath, size, page_number)
+            # ===== VECTORIAL: Poppler / CairoSVG / Inkscape (Centralizado) =====
+            elif ext in VECTOR_EXT:
+                print(f"DEBUG: [Thumb] Procesando como VECTORIAL: {ext}")
+                pil_image = self._generate_vector_thumbnail(filepath, size, page_number, dpi=dpi)
 
             # ===== Fallback General (Raster, JP2, BMP, etc) =====
             else:
                 try:
+                    print(f"DEBUG: [Thumb] Procesando como RASTER/FALLBACK: {ext}")
                     # Image.open es "lazy" (no lee datos), hay que llamar a load() para detectar corrupción
                     temp_img = Image.open(filepath)
                     temp_img.load() # <--- AQUÍ es donde salta el error de "broken data stream"
                     pil_image = temp_img
                 except OSError as e:
                     # Capturar errores de archivos corruptos (ej. el JP2 roto)
-                    print(f"ADVERTENCIA: Archivo corrupto o ilegible '{os.path.basename(filepath)}': {e}")
+                    print(f"ADVERTENCIA: [Thumb] Archivo corrupto o ilegible '{os.path.basename(filepath)}': {e}")
                     return None # Retornar None para que la UI muestre el icono de error ❌
                 except Exception as e:
                     # Otros errores
-                    print(f"ADVERTENCIA: Formato no soportado o error desconocido en '{filepath}': {e}")
+                    print(f"ADVERTENCIA: [Thumb] Formato no soportado o error desconocido en '{filepath}': {e}")
                     return None
 
             if not pil_image:
+                print(f"DEBUG: [Thumb] ❌ Falló la carga de imagen para {os.path.basename(filepath)}")
                 return None
 
             if pil_image.mode != "RGBA":
                 pil_image = pil_image.convert("RGBA")
 
-            # ❌ CORRECCIÓN FINAL: No aplicar thumbnail destructivo a los RAW.
+            # ❌ CORRECCIÓN FINAL: No aplicar thumbnail destructivo a los RAW o Previews Vectoriales Grandes.
             # Queremos que el visor reciba la resolución completa para permitir Zoom fluido.
             ext_upper = ext.upper() if 'ext' in locals() else ""
+            is_large_preview = max(size) > 500
             
-            if ext_upper not in IMAGE_RAW_FORMATS:
-                pil_image.thumbnail(size, Image.Resampling.LANCZOS)
-            else:
+            if ext_upper in IMAGE_RAW_FORMATS:
                 print(f"DEBUG: [RAW] Saltando thumbnail final para mantener resolución: {pil_image.size}")
+            elif ext in VECTOR_EXT and is_large_preview:
+                print(f"DEBUG: [Thumb] Saltando thumbnail final para Vector (Preview HD): {pil_image.size}")
+            else:
+                # Solo para iconos pequeños de la lista o archivos raster normales
+                pil_image.thumbnail(size, Image.Resampling.LANCZOS)
                 
+            print(f"DEBUG: [Thumb] ✅ Miniatura generada exitosamente ({pil_image.size})")
             return pil_image
 
         except Exception as e:
-            print(f"ERROR: No se pudo generar miniatura para {filepath}: {e}")
+            print(f"ERROR: No se pudo generar miniatura para {filepath}")
             return None
-        finally:
-            os.environ['PATH'] = original_path
 
-    def _generate_thumbnail_with_inkscape(self, filepath, size, page_number, dpi=None):
-        """Helper para generar miniaturas con Inkscape (DPI bajo)."""
-        render_dpi = dpi if dpi is not None else 100
-        import subprocess
-        import tempfile
+    def _generate_vector_thumbnail(self, filepath, size, page_number=1, dpi=None):
+        """
+        Genera miniatura para archivos vectoriales con fondo inteligente:
+        - PDF: Fondo Blanco (Documento)
+        - AI, EPS, SVG: Transparente (Logo/Icono)
+        - SIEMPRE usa motores nativos para velocidad.
+        """
+        ext = os.path.splitext(filepath)[1].lower()
         
         try:
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_png:
-                tmp_png_path = tmp_png.name
+            # Motores Nativos (Rápidos para previsualización)
+            if ext == ".svg":
+                return self._generate_svg_thumbnail(filepath, size)
+            elif ext == ".pdf":
+                return self._generate_pdf_thumbnail(filepath, size, page_number, transparent=False, dpi=dpi)
+            elif ext == ".ai":
+                return self._generate_pdf_thumbnail(filepath, size, page_number, transparent=True, dpi=dpi)
+            elif ext in (".eps", ".ps"):
+                return self._generate_eps_thumbnail(filepath, size, page_number, dpi=dpi)
+                
+            return None
+        except Exception as e:
+            print(f"DEBUG: Error generando miniatura vectorial ({ext}): {e}")
+            return None
+
+    def _generate_thumbnail_with_inkscape(self, filepath, size, page_number, dpi=96):
+        """Usa Inkscape para la miniatura (Lento pero preciso)."""
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_png:
+            tmp_png_path = tmp_png.name
+        
+        # 🗑️ IMPORTANTE: Borramos el archivo vacío creado por tempfile.
+        # Así, si Inkscape falla, el archivo NO existirá y no intentaremos abrirlo.
+        if os.path.exists(tmp_png_path):
+            os.remove(tmp_png_path)
             
-            cmd = self._build_inkscape_command(
-                filepath, tmp_png_path, page_number, dpi=render_dpi 
-            )
+        try:
+            render_dpi = dpi if dpi else 96
+            cmd = self.inkscape_service.build_command(filepath, tmp_png_path, page_number, dpi=render_dpi)
             
-            subprocess.run(
-                cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=30, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            )
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                           env=self.inkscape_service.get_env(), cwd=self.inkscape_service.get_cwd(), 
+                           timeout=20, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
             
-            if not os.path.exists(tmp_png_path) or os.path.getsize(tmp_png_path) == 0:
+            if os.path.exists(tmp_png_path) and os.path.getsize(tmp_png_path) > 0:
+                img = Image.open(tmp_png_path)
+                img.load()
+                img.thumbnail(size, Image.Resampling.LANCZOS)
+                return img
+            else:
                 return None
-            
-            pil_image = Image.open(tmp_png_path)
-            pil_image.load()
-            pil_image.thumbnail(size, Image.Resampling.LANCZOS)
-            
+        finally:
             if os.path.exists(tmp_png_path):
                 try: os.remove(tmp_png_path)
                 except: pass
-            
-            return pil_image
-            
-        except Exception as e:
-            print(f"ERROR Inkscape miniatura: {e}")
-            return None
-        
-    def _build_inkscape_command(self, filepath, output_path, page_number=1, dpi=96, artboard_id=None):
-        """Construye el comando de Inkscape."""
-        ink_exe = "inkscape.exe" if os.name == "nt" else "inkscape"
-        ink_cmd = os.path.join(self.inkscape_path, ink_exe) if self.inkscape_path else ink_exe
-        ext = os.path.splitext(filepath)[1].lower()
-        
-        cmd = [ink_cmd, filepath, f"--export-filename={output_path}", f"--export-dpi={dpi}", "--export-type=png"]
-        
-        if ext == ".ai":
-            # Detección rápida de páginas para comando
-            if filepath in self._page_count_cache and self._page_count_cache[filepath] > 1:
-                cmd.insert(2, "--pdf-poppler")
-                cmd.insert(2, f"--pages={page_number}")
-                # Si es multipágina, mantenemos 'page' para respetar la maquetación del documento
-                cmd.insert(4, "--export-area-page")
-            else:
-                # ✅ CAMBIO: Para archivo único, recortar al dibujo (quita el espacio blanco extra)
-                cmd.insert(2, "--export-area-drawing")
+        return None
 
-        elif ext in (".eps", ".ps"):
-            # ✅ CAMBIO: EPS siempre al dibujo (BoundingBox)
-            cmd.insert(2, "--export-area-drawing")
-            
-        elif ext == ".svg" and artboard_id:
-            cmd.insert(2, f"--export-id={artboard_id}")
-            cmd.insert(3, "--export-id-only")
-        else:
-            # ✅ CAMBIO: SVG genérico también al dibujo para que se vea grande
-            cmd.insert(2, "--export-area-drawing")
-        
-        return cmd
-    
-    def _get_ai_artboard_ids(self, filepath):
-        """
-        Obtiene los IDs de las mesas de trabajo de un archivo .ai.
-        Busca patrones como 'layer-MCN' o 'pageN'.
-        """
-        import subprocess
-        import re
-        
+    def _generate_svg_thumbnail(self, filepath, size):
+        """Usa CairoSVG para la miniatura con corrección automática y fallback a Inkscape."""
+        if not CAN_SVG:
+            if self.inkscape_service:
+                return self._generate_thumbnail_with_inkscape(filepath, size, 1)
+            return None
+
+        temp_svg = None
         try:
-            ink_exe = "inkscape.exe" if os.name == "nt" else "inkscape"
-            if self.inkscape_path:
-                ink_cmd = os.path.join(self.inkscape_path, ink_exe)
-            else:
-                ink_cmd = ink_exe
-            
-            # Obtener lista de todos los objetos
-            cmd = [ink_cmd, filepath, "--query-all"]
-            
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=30,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            )
-            
-            # ✅ Decodificar con UTF-8 e ignorar errores
-            stdout = result.stdout.decode('utf-8', errors='ignore')
-            stderr = result.stderr.decode('utf-8', errors='ignore')
-            
-            if result.returncode != 0:
-                print(f"DEBUG: --query-all falló (código {result.returncode})")
-                if stderr:
-                    print(f"DEBUG: STDERR: {stderr[:200]}")
-                return None
-            
-            # Parsear la salida para encontrar artboards
-            artboard_ids = []
-            
-            for line in stdout.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
+            w, h = size
+            # 1. Intento normal con CairoSVG
+            try:
+                out = cairosvg.svg2png(url=filepath, output_width=w, output_height=h)
+                img = Image.open(io.BytesIO(out))
+                img.load()
+                return img
+            except (ValueError, TypeError, Exception) as e:
+                print(f"DEBUG: [Thumb] CairoSVG falló para {os.path.basename(filepath)}: {e}. Intentando corrección...")
                 
-                # Formato: ID,X,Y,WIDTH,HEIGHT
-                parts = line.split(',')
-                if len(parts) >= 5:
-                    obj_id = parts[0]
-                    
-                    # ✅ PATRÓN 1: "layer-MCN" (donde N es el número)
-                    match = re.match(r'^layer-MC(\d+)$', obj_id)
-                    if match:
-                        page_num = int(match.group(1))
-                        artboard_ids.append((page_num, obj_id))
-                        continue
-                    
-                    # ✅ PATRÓN 2: "pageN" (fallback)
-                    match = re.match(r'^page(\d+)$', obj_id)
-                    if match:
-                        page_num = int(match.group(1))
-                        artboard_ids.append((page_num, obj_id))
+            # 2. Intentar corregir atributos (width/height inválidos)
+            temp_svg = self._fix_svg_attributes(filepath)
+            if temp_svg:
+                try:
+                    out = cairosvg.svg2png(url=temp_svg, output_width=w, output_height=h)
+                    img = Image.open(io.BytesIO(out))
+                    img.load()
+                    return img
+                except:
+                    print(f"DEBUG: [Thumb] CairoSVG también falló con SVG corregido.")
             
-            if artboard_ids:
-                # Ordenar por número de página
-                artboard_ids.sort(key=lambda x: x[0])
-                # Retornar solo los IDs (sin el número)
-                sorted_ids = [obj_id for _, obj_id in artboard_ids]
-                print(f"DEBUG: ✅ {len(sorted_ids)} artboards encontrados: {sorted_ids[:5]}...")
-                return sorted_ids
-            
-            print(f"DEBUG: No se encontraron artboards con patrón 'layer-MCN' o 'pageN'")
-            
-            # ✅ FALLBACK: Buscar grupos principales grandes (estrategia de área)
-            print(f"DEBUG: Intentando detectar por tamaño de objetos...")
-            objects = []
-            
-            for line in stdout.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
+            # 3. Fallback final a Inkscape (si está habilitado)
+            if self.inkscape_service:
+                print(f"DEBUG: [Thumb] Usando Inkscape como fallback para vista previa de SVG.")
+                return self._generate_thumbnail_with_inkscape(temp_svg if temp_svg else filepath, size, 1)
                 
-                parts = line.split(',')
-                if len(parts) >= 5:
-                    obj_id = parts[0]
-                    try:
-                        width = float(parts[3])
-                        height = float(parts[4])
-                        area = width * height
-                        
-                        # Filtrar objetos pequeños (probablemente no son artboards)
-                        if area > 100:  # Umbral bajo para capturar todo
-                            objects.append((obj_id, area, width, height))
-                    except (ValueError, IndexError):
-                        continue
-            
-            if not objects:
-                print(f"DEBUG: No se encontraron objetos válidos en --query-all")
-                return None
-            
-            # Ordenar por área (descendente)
-            objects.sort(key=lambda x: x[1], reverse=True)
-            
-            # Imprimir los 10 objetos más grandes para diagnóstico
-            print(f"DEBUG: Top 10 objetos más grandes:")
-            for i, (obj_id, area, w, h) in enumerate(objects[:10]):
-                print(f"  {i+1}. {obj_id}: {w:.1f}x{h:.1f} (área: {area:.1f})")
-            
-            # Estrategia: Los artboards suelen tener tamaños similares
-            # Agrupar objetos con tamaños similares (±20% de variación)
-            if objects:
-                # Usar el objeto más grande como referencia
-                ref_area = objects[0][1]
-                threshold = ref_area * 0.2  # ±20%
-                
-                candidate_artboards = []
-                for obj_id, area, w, h in objects:
-                    if abs(area - ref_area) <= threshold:
-                        candidate_artboards.append(obj_id)
-                
-                if candidate_artboards:
-                    print(f"DEBUG: ✅ {len(candidate_artboards)} candidatos detectados por área similar")
-                    return candidate_artboards[:40]  # Limitar a 40 (el número que reportó Poppler)
-            
-            print(f"DEBUG: No se pudieron detectar artboards automáticamente")
             return None
-            
         except Exception as e:
-            print(f"DEBUG: Error obteniendo artboards: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"DEBUG: [Thumb] Error total en vista previa SVG: {e}")
             return None
+        finally:
+            if temp_svg and os.path.exists(temp_svg):
+                try: os.remove(temp_svg)
+                except: pass
+
+    def _generate_pdf_thumbnail(self, filepath, size, page_number, transparent=False, dpi=None):
+        """Usa Poppler para la miniatura con fondo controlado."""
+        if not CAN_PDF or not self.poppler_path: return None
+        try:
+            # 📈 LÓGICA DE CALIDAD:
+            # Si el tamaño solicitado es grande (>500px), es para el VISOR.
+            # En ese caso, queremos una resolución que se vea perfecta.
+            is_large_preview = max(size) > 500
+            
+            if is_large_preview:
+                # Para el visor, usamos un DPI que garantice nitidez (mínimo 200, idealmente lo que pida el usuario)
+                render_dpi = max(200, dpi if dpi else 300)
+            else:
+                # Para la lista de archivos, algo rápido (100 DPI)
+                render_dpi = 100
+
+            images = convert_from_path(filepath, dpi=render_dpi, first_page=page_number, last_page=page_number, 
+                                       poppler_path=self.poppler_path, transparent=transparent, use_pdftocairo=True)
+            if images:
+                img = images[0].convert("RGBA")
+                
+                # Solo aplicamos thumbnail destructivo si NO es la previsualización grande
+                if not is_large_preview:
+                    img.thumbnail(size, Image.Resampling.LANCZOS)
+                else:
+                    print(f"DEBUG: [Thumb] Render de alta calidad para visor ({img.size})")
+                    
+                return img
+        except Exception as e:
+            print(f"DEBUG: [Thumb] Error en render PDF/EPS: {e}")
+            return None
+        return None
+
+    def _find_ghostscript(self):
+        """Busca Ghostscript localmente para miniaturas EPS."""
+        try:
+            base_path = os.getcwd()
+            possible_dirs = [
+                os.path.join(base_path, "bin", "ghostscript", "bin"),
+                os.path.join(base_path, "bin", "ghostscript"),
+            ]
+            binaries = ["gswin64c.exe", "gswin32c.exe", "gs.exe", "gs"]
+            for folder in possible_dirs:
+                if os.path.exists(folder):
+                    for binary in binaries:
+                        path = os.path.join(folder, binary)
+                        if os.path.exists(path): return path
+            return None
+        except: return None
+
+    def _generate_eps_thumbnail(self, filepath, size, page_number, dpi=None):
+        """Genera miniatura EPS con transparencia usando Ghostscript."""
+        import re # Fail-safe
+        if self.gs_exe and CAN_PDF:
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_pdf:
+                temp_pdf = tmp_pdf.name
+            try:
+                cmd = [self.gs_exe, "-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=pdfwrite", 
+                       f"-sOutputFile={temp_pdf}", "-dEPSCrop", filepath]
+                subprocess.run(cmd, check=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+                return self._generate_pdf_thumbnail(temp_pdf, size, page_number, transparent=True, dpi=dpi)
+            except: pass
+            finally:
+                if os.path.exists(temp_pdf):
+                    try: os.remove(temp_pdf)
+                    except: pass
+        try:
+            img = Image.open(filepath)
+            img.load()
+            img.thumbnail(size, Image.Resampling.LANCZOS)
+            return img
+        except: return None

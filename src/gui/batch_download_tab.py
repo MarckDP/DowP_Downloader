@@ -62,6 +62,7 @@ class BatchDownloadTab(ctk.CTkFrame):
         
         self.app = app
         self.is_initializing = True
+        self._load_theme_colors()
         self.last_download_path = None
         self.thumbnail_label = None
         self.current_thumbnail_url = None
@@ -120,6 +121,96 @@ class BatchDownloadTab(ctk.CTkFrame):
         self._initialize_ui_settings()
 
         self._save_timer = None
+        self.is_initializing = False
+
+    def _load_theme_colors(self):
+        """Carga los colores desde el sistema de temas de la aplicación."""
+        # Colores Principales
+        self.DOWNLOAD_BTN_COLOR = self.app.get_theme_color("DOWNLOAD_BTN", ["#28A745", "#218838"])
+        self.DOWNLOAD_BTN_HOVER = self.app.get_theme_color("DOWNLOAD_BTN_HOVER", ["#218838", "#1E7E34"])
+        self.DOWNLOAD_BTN_TEXT = self.app.get_theme_color("DOWNLOAD_BTN_TEXT", "white")
+        
+        self.ANALYZE_BTN_COLOR = self.app.get_theme_color("ANALYZE_BTN", ["#007BFF", "#0069D9"])
+        self.ANALYZE_BTN_HOVER = self.app.get_theme_color("ANALYZE_BTN_HOVER", ["#0069D9", "#0062CC"])
+        self.ANALYZE_BTN_TEXT = self.app.get_theme_color("ANALYZE_BTN_TEXT", "white")
+        
+        self.CANCEL_BTN_COLOR = self.app.get_theme_color("CANCEL_BTN", ["#DC3545", "#C82333"])
+        self.CANCEL_BTN_HOVER = self.app.get_theme_color("CANCEL_BTN_HOVER", ["#C82333", "#BD2130"])
+        self.CANCEL_BTN_TEXT = self.app.get_theme_color("CANCEL_BTN_TEXT", "white")
+        
+        self.PROCESS_BTN_COLOR = self.app.get_theme_color("PROCESS_BTN", ["#6F42C1", "#59369A"])
+        self.PROCESS_BTN_HOVER = self.app.get_theme_color("PROCESS_BTN_HOVER", ["#59369A", "#51318D"])
+        self.PROCESS_BTN_TEXT = self.app.get_theme_color("PROCESS_BTN_TEXT", "white")
+        
+        self.SECONDARY_BTN_COLOR = self.app.get_theme_color("SECONDARY_BTN", ["#555555", "#444444"])
+        self.SECONDARY_BTN_HOVER = self.app.get_theme_color("SECONDARY_BTN_HOVER", ["#444444", "#333333"])
+        self.SECONDARY_BTN_TEXT = self.app.get_theme_color("SECONDARY_BTN_TEXT", "white")
+        
+        # Colores de la Cola / DND
+        self.QUEUE_BG = self.app.get_theme_color("DND_BG", ["#F0F0F0", "#1D1D1D"])
+        self.QUEUE_BORDER = self.app.get_theme_color("DND_BORDER", ["#565B5E", "#565B5E"])
+        self.QUEUE_TEXT = self.app.get_theme_color("DND_TEXT", ["gray", "gray"])
+
+        # Colores de Estado (Nuevas claves para personalización total)
+        self.STATUS_SUCCESS = self.app.get_theme_color("STATUS_SUCCESS", ["#28A745", "#218838"])
+        self.STATUS_ERROR = self.app.get_theme_color("STATUS_ERROR", ["#DC3545", "#C82333"])
+        self.STATUS_WARNING = self.app.get_theme_color("STATUS_WARNING", ["#FFA500", "#FF8C00"])
+        self.STATUS_PENDING = self.app.get_theme_color("STATUS_PENDING", ["#565B5E", "#565B5E"])
+
+        # Colores de Texto de los Trabajos
+        self.JOB_TITLE_COLOR = self.app.get_theme_color("JOB_TITLE_TEXT", ["black", "white"])
+        self.JOB_STATUS_COLOR = self.app.get_theme_color("DND_TEXT", ["gray", "gray"]) 
+        self.JOB_RUNNING_COLOR = self.app.get_theme_color("ANALYZE_BTN", ["#52a2f2", "#52a2f2"])
+        
+        # Colores de Iconos de Acción
+        self.JOB_ACTION_ICON_COLOR = self.app.get_theme_color("JOB_ACTION_ICON_COLOR", ["black", "white"])
+        self.JOB_CANCEL_ICON_COLOR = self.app.get_theme_color("JOB_CANCEL_ICON_COLOR", ["#DC3545", "#DC3545"])
+
+        self.DISABLED_TEXT_COLOR = self.app.get_theme_color("DISABLED_TEXT", ["#A0A0A0", "#D3D3D3"])
+
+    def refresh_theme(self):
+        """Actualiza los colores de los widgets críticos según el tema actual."""
+        if self.is_initializing: return
+        self._load_theme_colors()
+        
+        # 1. Botones Principales de Entrada
+        if hasattr(self, 'analyze_button'):
+            self.analyze_button.configure(fg_color=self.ANALYZE_BTN_COLOR, hover_color=self.ANALYZE_BTN_HOVER, text_color=self.ANALYZE_BTN_TEXT)
+        if hasattr(self, 'import_button'):
+            self.import_button.configure(fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, text_color=self.DOWNLOAD_BTN_TEXT)
+            
+        # 2. Acciones de Cola
+        if hasattr(self, 'clear_list_button'):
+            self.clear_list_button.configure(fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER, text_color=self.CANCEL_BTN_TEXT)
+        if hasattr(self, 'reset_status_button'):
+            self.reset_status_button.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)
+        
+        # 3. Botones de Presets
+        if hasattr(self, 'batch_import_preset_button'):
+            self.batch_import_preset_button.configure(fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, text_color=self.DOWNLOAD_BTN_TEXT)
+        if hasattr(self, 'batch_export_preset_button'):
+            self.batch_export_preset_button.configure(fg_color=self.ANALYZE_BTN_COLOR, hover_color=self.ANALYZE_BTN_HOVER, text_color=self.ANALYZE_BTN_TEXT)
+        if hasattr(self, 'batch_delete_preset_button'):
+            self.batch_delete_preset_button.configure(fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER, text_color=self.CANCEL_BTN_TEXT)
+            
+        # 4. Botón Iniciar/Detener Cola
+        if hasattr(self, 'start_queue_button'):
+            # Nota: El color puede cambiar según el estado (Iniciar/Detener), pero el refresh usa el base
+            self.start_queue_button.configure(fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, text_color=self.DOWNLOAD_BTN_TEXT)
+
+        # 5. Colores de la Lista (Cola)
+        if hasattr(self, 'queue_scroll_frame'):
+            self.queue_scroll_frame.configure(fg_color=self.QUEUE_BG, border_color=self.QUEUE_BORDER)
+        if hasattr(self, 'queue_placeholder_label'):
+            self.queue_placeholder_label.configure(text_color=self.QUEUE_TEXT)
+            
+        # 6. Otros
+        if hasattr(self, 'open_folder_button'):
+            self.open_folder_button.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)
+        if hasattr(self, 'select_folder_button'):
+            self.select_folder_button.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)
+        if hasattr(self, 'save_thumbnail_button'):
+            self.save_thumbnail_button.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)
 
     def _create_widgets(self):
         """Crea los componentes visuales de la pestaña."""
@@ -135,7 +226,10 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.url_entry.bind("<Return>", lambda event: self._on_analyze_click())
         self.url_entry.grid(row=0, column=1, padx=5, pady=0, sticky="ew")
 
-        self.analyze_button = ctk.CTkButton(self.input_frame, text="Analizar", width=100, command=self._on_analyze_click)
+        self.analyze_button = ctk.CTkButton(
+            self.input_frame, text="Analizar", width=100, command=self._on_analyze_click,
+            fg_color=self.ANALYZE_BTN_COLOR, hover_color=self.ANALYZE_BTN_HOVER, text_color=self.ANALYZE_BTN_TEXT
+        )
         self.analyze_button.grid(row=0, column=2, padx=5, pady=0)
         # ✅ CAMBIO: El comando ahora abre un menú de opciones
         self.import_button = ctk.CTkButton(
@@ -143,7 +237,8 @@ class BatchDownloadTab(ctk.CTkFrame):
             text="Importar ▼", # Indicador visual de menú
             width=100, 
             state="normal", 
-            command=self._show_import_menu # Nueva función
+            command=self._show_import_menu, # Nueva función
+            fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, text_color=self.DOWNLOAD_BTN_TEXT
         )
         self.import_button.grid(row=0, column=3, padx=(0, 10), pady=0)
 
@@ -290,7 +385,7 @@ class BatchDownloadTab(ctk.CTkFrame):
             height=24,
             font=ctk.CTkFont(size=12),
             command=self._on_clear_list_click,
-            # width=120 # Opcional: ancho fijo
+            fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER, text_color=self.CANCEL_BTN_TEXT
         )
         self.clear_list_button.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
         
@@ -300,7 +395,7 @@ class BatchDownloadTab(ctk.CTkFrame):
             height=24,
             font=ctk.CTkFont(size=12),
             command=self._on_reset_status_click,
-            # width=120 # Opcional: ancho fijo
+            fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT
         )
         self.reset_status_button.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
@@ -333,9 +428,9 @@ class BatchDownloadTab(ctk.CTkFrame):
         # --- 4. Panel de Cola (IZQUIERDA) ---
         self.queue_scroll_frame = ctk.CTkScrollableFrame(
             self, 
-            fg_color="#1D1D1D", 
+            fg_color=self.QUEUE_BG, 
             border_width=1, 
-            border_color="#565B5E"
+            border_color=self.QUEUE_BORDER
         )
         self.queue_scroll_frame.grid(row=3, column=0, padx=(10, 5), pady=(0, 10), sticky="nsew")
         
@@ -343,7 +438,7 @@ class BatchDownloadTab(ctk.CTkFrame):
             self.queue_scroll_frame, 
             text="Arrastra videos/carpetas aquí\no pega una URL arriba", 
             font=ctk.CTkFont(size=14),
-            text_color="gray"
+            text_color=self.QUEUE_TEXT
         )
         self.queue_placeholder_label.pack(expand=True, pady=50, padx=20)
 
@@ -391,7 +486,8 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.save_thumbnail_button = ctk.CTkButton(
             self.miniature_frame, 
             text="Guardar Miniatura...",
-            command=self._on_save_thumbnail_click
+            command=self._on_save_thumbnail_click,
+            fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT
         )
         self.save_thumbnail_button.pack(fill="x", pady=5)
 
@@ -501,8 +597,9 @@ class BatchDownloadTab(ctk.CTkFrame):
             batch_preset_actions_frame,
             text="📥 Importar",
             command=self.app.single_tab.import_preset_file,
-            fg_color="#28A745",
-            hover_color="#218838",
+            fg_color=self.DOWNLOAD_BTN_COLOR,
+            hover_color=self.DOWNLOAD_BTN_HOVER,
+            text_color=self.DOWNLOAD_BTN_TEXT,
             state="disabled" # ✅ Nace deshabilitado
         )
         self.batch_import_preset_button.grid(row=0, column=0, padx=(0, 5), sticky="ew")
@@ -512,8 +609,9 @@ class BatchDownloadTab(ctk.CTkFrame):
             text="📤 Exportar",
             command=self.app.single_tab.export_preset_file, # <-- Llama a la función de single_tab
             state="disabled",
-            fg_color="#007BFF",
-            hover_color="#0069D9"
+            fg_color=self.ANALYZE_BTN_COLOR,
+            hover_color=self.ANALYZE_BTN_HOVER,
+            text_color=self.ANALYZE_BTN_TEXT
         )
         self.batch_export_preset_button.grid(row=0, column=1, padx=5, sticky="ew")
 
@@ -522,8 +620,9 @@ class BatchDownloadTab(ctk.CTkFrame):
             text="🗑️ Eliminar",
             command=self.app.single_tab.delete_preset_file, # <-- Llama a la función de single_tab
             state="disabled",
-            fg_color="#DC3545",
-            hover_color="#C82333"
+            fg_color=self.CANCEL_BTN_COLOR,
+            hover_color=self.CANCEL_BTN_HOVER,
+            text_color=self.CANCEL_BTN_TEXT
         )
         self.batch_delete_preset_button.grid(row=0, column=2, padx=(5, 0), sticky="ew")
         # --- FIN DE LA REORDENACIÓN Y ADICIÓN ---
@@ -541,14 +640,18 @@ class BatchDownloadTab(ctk.CTkFrame):
         self.output_path_entry.bind("<Button-3>", lambda e: self.create_entry_context_menu(self.output_path_entry))
         self.output_path_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
-        self.select_folder_button = ctk.CTkButton(line1_frame, text="...", width=40, command=self.select_output_folder)
+        self.select_folder_button = ctk.CTkButton(
+            line1_frame, text="...", width=40, command=self.select_output_folder,
+            fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT
+        )
         self.select_folder_button.grid(row=0, column=2, padx=(0, 5), pady=5)
         
         # Comprobar si el path por defecto es válido para habilitar el botón
         self.open_folder_button = ctk.CTkButton(
             line1_frame, text="📁", width=40, font=ctk.CTkFont(size=16), 
             command=self._open_batch_output_folder,
-            state="disabled" 
+            state="disabled",
+            fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT
         )
         self.open_folder_button.grid(row=0, column=3, padx=(0, 5), pady=5)
         
@@ -628,7 +731,7 @@ class BatchDownloadTab(ctk.CTkFrame):
         
         self.start_queue_button = ctk.CTkButton(
             line2_frame, text="Iniciar Cola", state="disabled", command=self.start_queue_processing, 
-            fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, 
+            fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, text_color=self.DOWNLOAD_BTN_TEXT,
             text_color_disabled=self.DISABLED_TEXT_COLOR, width=120
         )
         self.start_queue_button.grid(row=0, column=6, padx=(5, 10), pady=5, sticky="e") 
@@ -1026,7 +1129,7 @@ class BatchDownloadTab(ctk.CTkFrame):
             if not job_exists:
                 return
 
-            job_frame = ctk.CTkFrame(self.queue_scroll_frame, border_width=1, border_color="#555")
+            job_frame = ctk.CTkFrame(self.queue_scroll_frame, border_width=1, border_color=self.STATUS_PENDING)
             job_frame.pack(fill="x", padx=5, pady=(0, 5))
             
             # 1. Definir Columnas (Estructura Fija)
@@ -1037,10 +1140,10 @@ class BatchDownloadTab(ctk.CTkFrame):
             job_frame.grid_columnconfigure(4, weight=0) # Cerrar (⨉)
             
             # 2. Labels
-            job_frame.title_label = ctk.CTkLabel(job_frame, text=message, anchor="w", wraplength=400)
+            job_frame.title_label = ctk.CTkLabel(job_frame, text=message, anchor="w", wraplength=400, text_color=self.JOB_TITLE_COLOR)
             job_frame.title_label.grid(row=0, column=0, padx=10, pady=(5,0), sticky="ew")
             
-            job_frame.status_label = ctk.CTkLabel(job_frame, text="Pendiente...", anchor="w", text_color="gray", font=ctk.CTkFont(size=11))
+            job_frame.status_label = ctk.CTkLabel(job_frame, text="Pendiente...", anchor="w", text_color=self.JOB_STATUS_COLOR, font=ctk.CTkFont(size=11))
             job_frame.status_label.grid(row=1, column=0, padx=10, pady=(0,5), sticky="ew")
 
             job_frame.progress_bar = ctk.CTkProgressBar(job_frame, height=4)
@@ -1054,7 +1157,8 @@ class BatchDownloadTab(ctk.CTkFrame):
             job_frame.config_button = ctk.CTkButton(
                 job_frame, text="⚙️", width=28, height=28,
                 font=ctk.CTkFont(size=14),
-                fg_color="transparent", hover_color="#555",
+                fg_color="transparent", hover_color=self.SECONDARY_BTN_HOVER,
+                text_color=self.JOB_ACTION_ICON_COLOR,
                 command=lambda jid=job_id: self._reconfigure_playlist_job(jid)
             )
             job_frame.config_button.grid(row=0, column=1, rowspan=2, padx=(0, 0), pady=5)
@@ -1063,7 +1167,8 @@ class BatchDownloadTab(ctk.CTkFrame):
             job_frame.folder_button = ctk.CTkButton(
                 job_frame, text="📂", width=28, height=28,
                 font=ctk.CTkFont(size=14),
-                fg_color="transparent", hover_color="#555",
+                fg_color="transparent", hover_color=self.SECONDARY_BTN_HOVER,
+                text_color=self.JOB_ACTION_ICON_COLOR,
                 command=lambda jid=job_id: self._open_job_folder(jid)
             )
             job_frame.folder_button.grid(row=0, column=2, rowspan=2, padx=(0, 0), pady=5)
@@ -1072,7 +1177,8 @@ class BatchDownloadTab(ctk.CTkFrame):
             job_frame.restore_button = ctk.CTkButton(
                 job_frame, text="◁", width=28, height=28,
                 font=ctk.CTkFont(size=16),
-                fg_color="transparent", hover_color="#555",
+                fg_color="transparent", hover_color=self.SECONDARY_BTN_HOVER,
+                text_color=self.JOB_ACTION_ICON_COLOR,
                 command=lambda jid=job_id: self._on_reset_single_job(jid)
             )
             job_frame.restore_button.grid(row=0, column=3, rowspan=2, padx=(0, 0), pady=5)
@@ -1080,7 +1186,8 @@ class BatchDownloadTab(ctk.CTkFrame):
             # Columna 4: Cerrar
             job_frame.close_button = ctk.CTkButton(
                 job_frame, text="⨉", width=28, height=28, 
-                fg_color="transparent", hover_color="#555",
+                fg_color="transparent", hover_color=self.CANCEL_BTN_HOVER,
+                text_color=self.JOB_CANCEL_ICON_COLOR,
                 command=lambda jid=job_id: self._remove_job(jid)
             )
             job_frame.close_button.grid(row=0, column=4, rowspan=2, padx=(0, 5), pady=5)
@@ -1106,8 +1213,9 @@ class BatchDownloadTab(ctk.CTkFrame):
         # --- ACTUALIZACIÓN DE ESTADO ---
 
         if status == "RUNNING":
-            job_frame.title_label.configure(text_color="white")
-            job_frame.status_label.configure(text=message, text_color="#52a2f2") 
+            job_frame.configure(border_color=self.ANALYZE_BTN_COLOR)
+            job_frame.title_label.configure(text_color=self.JOB_TITLE_COLOR)
+            job_frame.status_label.configure(text=message, text_color=self.JOB_RUNNING_COLOR) 
             job_frame.progress_bar.grid() 
             
             # Usar valor numérico directo si es válido
@@ -1123,8 +1231,9 @@ class BatchDownloadTab(ctk.CTkFrame):
                     pass
 
         elif status == "COMPLETED":
-            job_frame.title_label.configure(text_color="#90EE90")
-            job_frame.status_label.configure(text=message, text_color="#28A745") 
+            job_frame.configure(border_color=self.STATUS_SUCCESS)
+            job_frame.title_label.configure(text_color=self.STATUS_SUCCESS)
+            job_frame.status_label.configure(text=message, text_color=self.STATUS_SUCCESS) 
             job_frame.progress_bar.set(1)
             job_frame.progress_bar.grid()
             
@@ -1143,30 +1252,34 @@ class BatchDownloadTab(ctk.CTkFrame):
                         self.app.image_tab._process_imported_files([job_obj.thumbnail_path])
 
         elif status == "SKIPPED":
-            job_frame.title_label.configure(text_color="#FFA500")
-            job_frame.status_label.configure(text=message, text_color="#FF8C00")
+            job_frame.configure(border_color=self.STATUS_WARNING)
+            job_frame.title_label.configure(text_color=self.STATUS_WARNING)
+            job_frame.status_label.configure(text=message, text_color=self.STATUS_WARNING)
             job_frame.progress_bar.grid_remove()
             job_frame.restore_button.grid()
 
         elif status == "NO_AUDIO":
-            job_frame.title_label.configure(text_color="#FFA500")
-            job_frame.status_label.configure(text=message, text_color="#FF8C00")
+            job_frame.configure(border_color=self.STATUS_WARNING)
+            job_frame.title_label.configure(text_color=self.STATUS_WARNING)
+            job_frame.status_label.configure(text=message, text_color=self.STATUS_WARNING)
             job_frame.progress_bar.grid_remove()
             job_frame.restore_button.grid()   
 
         elif status == "FAILED":
+            job_frame.configure(border_color=self.STATUS_ERROR)
             if job_frame.title_label.cget("text") == "Analizando...":
-                job_frame.title_label.configure(text="Error de Análisis", text_color="#F08080")
+                job_frame.title_label.configure(text="Error de Análisis", text_color=self.STATUS_ERROR)
             else:
-                job_frame.title_label.configure(text_color="#F08080")
+                job_frame.title_label.configure(text_color=self.STATUS_ERROR)
 
-            job_frame.status_label.configure(text=message, text_color="#DC3545", wraplength=400)
+            job_frame.status_label.configure(text=message, text_color=self.STATUS_ERROR, wraplength=400)
             job_frame.progress_bar.grid_remove()
             job_frame.restore_button.grid()
 
         elif status == "PENDING":
-            job_frame.title_label.configure(text_color="white")
-            job_frame.status_label.configure(text=message, text_color="gray")
+            job_frame.configure(border_color=self.STATUS_PENDING)
+            job_frame.title_label.configure(text_color=self.JOB_TITLE_COLOR)
+            job_frame.status_label.configure(text=message, text_color=self.JOB_STATUS_COLOR)
             job_frame.progress_bar.grid_remove()
             job_frame.restore_button.grid_remove()
             job_frame.folder_button.grid_remove()
@@ -1240,12 +1353,12 @@ class BatchDownloadTab(ctk.CTkFrame):
         # 1. Selección visual inmediata (para que se sienta responsivo)
         if self.selected_job_id and self.selected_job_id in self.job_widgets:
             try:
-                self.job_widgets[self.selected_job_id].configure(border_color="#555")
+                self.job_widgets[self.selected_job_id].configure(border_color=self.QUEUE_BORDER)
             except: pass
 
         new_frame = self.job_widgets.get(job_id)
         if new_frame:
-            new_frame.configure(border_color="#007BFF")
+            new_frame.configure(border_color=self.ANALYZE_BTN_COLOR)
         
         # Si es el mismo, no hacer nada más
         if job_id == self.selected_job_id:

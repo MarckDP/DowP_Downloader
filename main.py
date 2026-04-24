@@ -12,6 +12,44 @@ from PIL import Image, ImageTk
 
 APP_VERSION = "1.4.1"
 
+# ==============================================================================
+# 🔕 PARCHE GLOBAL: OCULTAR CONSOLAS (WINDOWS)
+# ==============================================================================
+# Este parche intercepta todas las llamadas a subprocesos (Ghostscript, Poppler, etc.)
+# y les inyecta la bandera CREATE_NO_WINDOW. Esto evita que salten ventanas de CMD
+# negras en la versión compilada (.exe), incluso desde librerías externas.
+if sys.platform == "win32":
+    import subprocess
+    # Evitar aplicar el parche múltiples veces si se importa main.py de nuevo
+    if not hasattr(subprocess.Popen, "_is_patched"):
+        _original_popen = subprocess.Popen
+        class _PatchedPopen(_original_popen):
+            _is_patched = True
+            def __init__(self, *args, **kwargs):
+                # 🔍 INSPECCIÓN DE COMANDO:
+                # Obtenemos el comando (ya sea por args posicionales o por keyword)
+                cmd = args[0] if args else kwargs.get('args', "")
+                cmd_str = ""
+                if isinstance(cmd, (list, tuple)):
+                    cmd_str = " ".join(map(str, cmd)).lower()
+                elif isinstance(cmd, str):
+                    cmd_str = cmd.lower()
+
+                # 🚫 Herramientas que SÍ queremos ver (excluidas del parche de ocultación)
+                # Esto permite que ffmpeg y yt-dlp muestren su progreso en consola si es necesario.
+                exclude_list = ["ffmpeg", "yt-dlp", "ffprobe"]
+                is_excluded = any(tool in cmd_str for tool in exclude_list)
+
+                # Inyectar bandera de ocultación SOLO si no está excluido y no tiene flags
+                if not is_excluded and 'creationflags' not in kwargs:
+                    kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+                
+                super().__init__(*args, **kwargs)
+        
+        subprocess.Popen = _PatchedPopen
+        print("INFO: Parche de ocultación selectiva aplicado (FFmpeg/yt-dlp visibles).")
+# ==============================================================================
+
 if getattr(sys, 'frozen', False):
     PROJECT_ROOT = os.path.dirname(sys.executable)
 else:
@@ -242,6 +280,106 @@ if __name__ == "__main__":
     
     # 3. Actualizar justo antes de la carga pesada
     splash.update_status("Cargando módulos e interfaz...")
+
+    # --- NUEVO: CARGAR TEMA (Acento) ANTES DE LA UI ---
+    _theme_data = {} # 🎨 Almacena los datos crudos del tema para colores personalizados
+    _theme_warnings = [] # ⚠️ Lista de advertencias sobre el tema cargado
+    try:
+        import json
+        import customtkinter as ctk
+        _appdata = os.getenv('APPDATA') or os.path.expanduser('~\\AppData\\Roaming')
+        _settings_path = os.path.join(_appdata, 'DowP', "app_settings.json")
+        _theme = "blue"
+        _appearance = "System"
+        if os.path.exists(_settings_path):
+            with open(_settings_path, 'r') as f:
+                _settings = json.load(f)
+                _theme = _settings.get("selected_theme_accent", "blue")
+                _appearance = _settings.get("appearance_mode", "System")
+        
+        ctk.set_appearance_mode(_appearance)
+        
+        # ✅ SOPORTE PARA TEMAS PERSONALIZADOS DINÁMICOS
+        # 1. Rutas de búsqueda (Usuario e Internas)
+        _base_path = getattr(sys, '_MEIPASS', PROJECT_ROOT)
+        _user_themes_dir = os.path.join(_appdata, 'DowP', "themes")
+        _internal_themes_dir = os.path.join(_base_path, "src", "gui", "themes")
+        
+        # 2. Buscar si el tema seleccionado corresponde a un archivo JSON
+        # Prioridad: Usuario > Interno
+        _found_path = None
+        for _dir in [_user_themes_dir, _internal_themes_dir]:
+            _json_path = os.path.join(_dir, f"{_theme}.json")
+            if os.path.exists(_json_path):
+                _found_path = _json_path
+                break
+        
+        if _found_path:
+            # --- NUEVO: COMPLETADOR Y SANITIZADOR DE TEMAS ---
+            try:
+                # 1. Cargar tema base (Green) como red de seguridad para completar claves faltantes
+                _base_theme_path = os.path.join(_internal_themes_dir, "green.json")
+                _final_theme_data = {}
+                if os.path.exists(_base_theme_path):
+                    with open(_base_theme_path, 'r', encoding='utf-8') as f:
+                        _final_theme_data = json.load(f)
+                
+                # 2. Cargar el tema del usuario/seleccionado
+                with open(_found_path, 'r', encoding='utf-8') as f:
+                    _user_theme_data = json.load(f)
+                
+                # 3. Mezclar profundamente (Deep Update) para evitar KeyError en CTK
+                def _deep_update(base, over):
+                    for k, v in over.items():
+                        if isinstance(v, dict) and k in base and isinstance(base[k], dict):
+                            _deep_update(base[k], v)
+                        else:
+                            base[k] = v
+                
+                # Detectar claves faltantes antes de mezclar para informar al usuario
+                _missing = [k for k in _final_theme_data if k not in _user_theme_data and not k.startswith("_") and k != "CustomColors"]
+                if _missing:
+                    print(f"⚠️ ADVERTENCIA: El tema '{_theme}' está incompleto.")
+                    print(f"   Claves faltantes: {', '.join(_missing)}")
+                    _theme_warnings.append(f"El tema '{_theme}' está incompleto. Faltan {len(_missing)} secciones técnicas (ej: {', '.join(_missing[:3])}). Se usaron valores por defecto.")
+
+                _deep_update(_final_theme_data, _user_theme_data)
+                _theme_data = _final_theme_data
+
+                # 4. Función recursiva para limpiar "transparent" de lugares prohibidos
+                def _sanitize_node(obj):
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            if "border_color" in k:
+                                if isinstance(v, list):
+                                    obj[k] = [c if c != "transparent" else "gray65" for c in v]
+                                elif v == "transparent":
+                                    obj[k] = "gray65"
+                            else:
+                                _sanitize_node(v)
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            _sanitize_node(item)
+
+                _sanitize_node(_theme_data)
+                
+                # 5. Guardar en un archivo temporal seguro para cargar
+                _temp_theme_path = os.path.join(_user_themes_dir, ".active_theme_sanitized.json")
+                with open(_temp_theme_path, 'w', encoding='utf-8') as f:
+                    json.dump(_theme_data, f)
+                
+                _theme = _temp_theme_path
+                print(f"INFO: Tema visual completado y sanitizado desde: {_found_path}")
+            except Exception as e:
+                print(f"ADVERTENCIA: No se pudo procesar el tema, intentando carga normal: {e}")
+                _theme = _found_path
+        
+        ctk.set_default_color_theme(_theme)
+        print(f"INFO: Tema de acento pre-cargado.")
+    except Exception as e:
+        print(f"ADVERTENCIA: No se pudo pre-cargar el tema: {e}")
+        import customtkinter as ctk
+        ctk.set_default_color_theme("blue")
     
     # Aquí ocurre la "pausa" de carga, pero el usuario verá la ventana flotante
     from src.gui.main_window import MainWindow 
@@ -252,6 +390,8 @@ if __name__ == "__main__":
                      poppler_path=POPPLER_BIN_DIR,
                      inkscape_path=INKSCAPE_BIN_DIR,
                      splash_screen=splash,
-                     app_version=APP_VERSION)
+                     app_version=APP_VERSION,
+                     theme_data=_theme_data,
+                     theme_warnings=_theme_warnings)
     
     app.mainloop()

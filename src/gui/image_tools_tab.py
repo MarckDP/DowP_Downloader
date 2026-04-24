@@ -48,9 +48,6 @@ class InteractiveImageViewer(ctk.CTkCanvas):
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
         
-        # Configuración visual para integrarse con el tema oscuro
-        self.configure(bg="#1D1D1D", highlightthickness=0)
-        
         # Estado interno
         self.original_image = None  # La imagen PIL en resolución completa
         self.tk_image = None        # Referencia para evitar garbage collection
@@ -217,6 +214,19 @@ class InteractiveImageViewer(ctk.CTkCanvas):
         # Dimensiones finales teóricas
         final_w = int(self.original_image.width * self.scale)
         final_h = int(self.original_image.height * self.scale)
+
+        # 1. Dibujar Fondo de Cuadrícula (Transparencia)
+        grid_size = 20
+        c1 = getattr(self, 'grid_color1', "#E1E1E1")
+        c2 = getattr(self, 'grid_color2', "#F0F0F0")
+        self.create_rectangle(0, 0, cw, ch, fill=self.cget("bg"), width=0)
+        
+        for y in range(0, ch, grid_size):
+            offset = (y // grid_size) % 2
+            for x in range(offset * grid_size, cw, grid_size * 2):
+                self.create_rectangle(x, y, x + grid_size, y + grid_size, fill=c1, width=0)
+            for x in range((1 - offset) * grid_size, cw, grid_size * 2):
+                self.create_rectangle(x, y, x + grid_size, y + grid_size, fill=c2, width=0)
         
         # Optimización: Determinar la región visible (Viewport)
         # Inversa: (0,0) pantalla -> (-pan_x/scale, -pan_y/scale) imagen
@@ -265,6 +275,14 @@ class InteractiveImageViewer(ctk.CTkCanvas):
                 print(f"Error redibujando: {e}")
         
         self.configure(cursor="arrow") # Restaurar cursor
+    
+    def refresh_theme(self, bg_color, grid_color1=None, grid_color2=None):
+        """Actualiza el color de fondo y de la cuadrícula del canvas."""
+        self.configure(bg=bg_color)
+        if grid_color1 and grid_color2:
+            self.grid_color1 = grid_color1
+            self.grid_color2 = grid_color2
+        self._redraw()
 
 class ComparisonViewer(ctk.CTkCanvas):
     """
@@ -275,7 +293,6 @@ class ComparisonViewer(ctk.CTkCanvas):
     """
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
-        self.configure(bg="#1D1D1D", highlightthickness=0)
 
         # Datos de imágenes (PIL)
         self.img_before = None # Original
@@ -373,6 +390,11 @@ class ComparisonViewer(ctk.CTkCanvas):
         else:
             self._redraw()
 
+    def refresh_theme(self, bg_color):
+        """Actualiza el color de fondo del canvas."""
+        self.configure(bg=bg_color)
+        self._redraw()
+
     # --- LÓGICA DE DIBUJADO (EL NÚCLEO) ---
     def _redraw(self):
         if not self.img_after: return
@@ -404,10 +426,22 @@ class ComparisonViewer(ctk.CTkCanvas):
         if vis_right <= vis_left or vis_bottom <= vis_top:
             return # Nada visible
 
-        # Dibujar Fondo Ajedrez (Tiles)
-        # Tkinter tilea automáticamente si la imagen es menor que el area
-        # Pero para simplificar y rendimiento, dibujamos un rectángulo gris de fondo
-        self.create_rectangle(0, 0, cw, ch, fill="#1D1D1D", width=0)
+        # 1. Dibujar Fondo de Cuadrícula (Transparencia)
+        grid_size = 20
+        # Solo dibujar cuadrícula en el área visible para rendimiento
+        c1 = getattr(self, 'grid_color1', "#E1E1E1")
+        c2 = getattr(self, 'grid_color2', "#F0F0F0")
+        
+        # Dibujar base
+        self.create_rectangle(0, 0, cw, ch, fill=self.cget("bg"), width=0)
+        
+        # Dibujar cuadros del patrón (Optimizado para el viewport visible)
+        for y in range(0, ch, grid_size):
+            offset = (y // grid_size) % 2
+            for x in range(offset * grid_size, cw, grid_size * 2):
+                self.create_rectangle(x, y, x + grid_size, y + grid_size, fill=c1, width=0)
+            for x in range((1 - offset) * grid_size, cw, grid_size * 2):
+                self.create_rectangle(x, y, x + grid_size, y + grid_size, fill=c2, width=0)
         
         # --- DIBUJAR IMAGEN IZQUIERDA (RESULTADO / AFTER) ---
         # Se ve desde el borde izquierdo de la imagen (0) hasta el slider
@@ -595,12 +629,6 @@ class ImageToolsTab(ctk.CTkFrame):
         # --- NUEVO: Formatos RAW de cámara ---
         ".cr2", ".dng", ".arw", ".nef", ".orf", ".rw2", ".sr2", ".raf", ".cr3", ".pef"
     )
-    
-    # Colores de botones (copiados de tus otras pestañas para consistencia)
-    PROCESS_BTN_COLOR = "#6F42C1"        
-    PROCESS_BTN_HOVER = "#59369A"        
-    DISABLED_TEXT_COLOR = "#D3D3D3"
-    DISABLED_FG_COLOR = "#565b5f" 
 
     def __init__(self, master, app, poppler_path=None, inkscape_path=None): 
         super().__init__(master, fg_color="transparent")
@@ -613,17 +641,18 @@ class ImageToolsTab(ctk.CTkFrame):
         self.conversion_complete_event = threading.Event()
 
         # Crear la instancia del motor de procesamiento
-        # --- NUEVO: Pasamos ffmpeg_path ---
         self.image_processor = ImageProcessor(
             poppler_path=poppler_path, 
-            inkscape_path=inkscape_path,
+            inkscape_service=self.app.inkscape_service,
             ffmpeg_path=self.app.ffmpeg_processor.ffmpeg_path
         )
         
         # Crear la instancia del conversor
-        self.image_converter = ImageConverter(poppler_path=poppler_path,
-                                            inkscape_path=inkscape_path,
-                                            ffmpeg_processor=self.app.ffmpeg_processor)
+        self.image_converter = ImageConverter(
+            poppler_path=poppler_path,
+            inkscape_service=self.app.inkscape_service,
+            ffmpeg_processor=self.app.ffmpeg_processor
+        )
         
         # Variable para rastrear la última miniatura solicitada
         self.last_preview_path = None
@@ -634,6 +663,9 @@ class ImageToolsTab(ctk.CTkFrame):
         self.thumbnail_queue = queue.Queue()
         self.active_thumbnail_thread = None
         self.thumbnail_lock = threading.Lock()
+
+        # --- 🔧 SISTEMA DE TEMAS ---
+        self._load_theme_colors()
 
         self.temp_image_dir = self._get_temp_dir()
         self.is_analyzing_url = False
@@ -667,6 +699,141 @@ class ImageToolsTab(ctk.CTkFrame):
         self._initialize_ui_settings()
 
     # ==================================================================
+    # --- SISTEMA DE TEMAS ---
+    # ==================================================================
+
+    def _resolve_color(self, color):
+        """Convierte un color dual ['light', 'dark'] en un solo string de forma fiable."""
+        if isinstance(color, (list, tuple)) and len(color) >= 2:
+            # Preguntar a CTK el modo real (incluyendo si está en 'System')
+            mode = ctk.get_appearance_mode().lower()
+            return color[1] if mode == "dark" else color[0]
+        return color
+
+    def _load_theme_colors(self):
+        """Carga los colores desde el motor de temas de la aplicación."""
+        # Botones Principales
+        self.DOWNLOAD_BTN_COLOR = self.app.get_theme_color("DOWNLOAD_BTN", ["#28A745", "#218838"])
+        self.DOWNLOAD_BTN_HOVER = self.app.get_theme_color("DOWNLOAD_BTN_HOVER", ["#218838", "#1E7E34"])
+        self.DOWNLOAD_BTN_TEXT = self.app.get_theme_color("DOWNLOAD_BTN_TEXT", ["white", "white"])
+
+        self.ANALYZE_BTN_COLOR = self.app.get_theme_color("ANALYZE_BTN", ["#007BFF", "#0069D9"])
+        self.ANALYZE_BTN_HOVER = self.app.get_theme_color("ANALYZE_BTN_HOVER", ["#0069D9", "#0062CC"])
+        self.ANALYZE_BTN_TEXT = self.app.get_theme_color("ANALYZE_BTN_TEXT", ["white", "white"])
+
+        self.CANCEL_BTN_COLOR = self.app.get_theme_color("CANCEL_BTN", ["#DC3545", "#C82333"])
+        self.CANCEL_BTN_HOVER = self.app.get_theme_color("CANCEL_BTN_HOVER", ["#C82333", "#BD2130"])
+        self.CANCEL_BTN_TEXT = self.app.get_theme_color("CANCEL_BTN_TEXT", ["white", "white"])
+
+        self.PROCESS_BTN_COLOR = self.app.get_theme_color("PROCESS_BTN", ["#6F42C1", "#59369A"])
+        self.PROCESS_BTN_HOVER = self.app.get_theme_color("PROCESS_BTN_HOVER", ["#59369A", "#51318D"])
+        self.PROCESS_BTN_TEXT = self.app.get_theme_color("PROCESS_BTN_TEXT", ["white", "white"])
+
+        self.SECONDARY_BTN_COLOR = self.app.get_theme_color("SECONDARY_BTN", ["#555555", "#444444"])
+        self.SECONDARY_BTN_HOVER = self.app.get_theme_color("SECONDARY_BTN_HOVER", ["#444444", "#333333"])
+        self.SECONDARY_BTN_TEXT = self.app.get_theme_color("SECONDARY_BTN_TEXT", ["white", "white"])
+
+        # Colores de la Lista (Listbox)
+        self.LISTBOX_BG = self.app.get_theme_color("LISTBOX_BG", ["#FFFFFF", "#1D1D1D"])
+        self.LISTBOX_TEXT = self.app.get_theme_color("LISTBOX_TEXT", ["black", "white"])
+        self.LISTBOX_SELECTED_BG = self.app.get_theme_color("LISTBOX_SELECTED_BG", ["#1F6AA5", "#1F6AA5"])
+        self.LISTBOX_SELECTED_TEXT = self.app.get_theme_color("LISTBOX_SELECTED_TEXT", ["white", "white"])
+        self.LISTBOX_BORDER = self.app.get_theme_color("DND_BORDER", ["#565B5E", "#565B5E"])
+
+        # Colores de Visores
+        self.VIEWER_BG = self.app.get_theme_color("VIEWER_BG", ["#F0F0F0", "#1D1D1D"])
+        self.HUD_BG = self.app.get_theme_color("HUD_BG", ["#333333", "#222222"])
+        self.HUD_TEXT = self.app.get_theme_color("HUD_TEXT", ["white", "white"])
+        self.SEPARATOR_COLOR = self.app.get_theme_color("SEPARATOR_COLOR", ["gray75", "gray35"])
+        self.OPTIONS_PANEL_BG = self.app.get_theme_color("OPTIONS_PANEL_BG", ["#E5E5E5", "#2B2B2B"])
+        
+        # Colores de la Cuadrícula de Transparencia
+        self.GRID_COLOR_1 = self.app.get_theme_color("TRANSPARENCY_GRID_1", ["#E1E1E1", "#252525"])
+        self.GRID_COLOR_2 = self.app.get_theme_color("TRANSPARENCY_GRID_2", ["#F0F0F0", "#1D1D1D"])
+
+        self.DISABLED_TEXT_COLOR = self.app.get_theme_color("DISABLED_TEXT", ["#A0A0A0", "#D3D3D3"])
+        self.DISABLED_FG_COLOR = self.app.get_theme_color("DISABLED_FG", ["#565b5f", "#565b5f"])
+
+    def refresh_theme(self):
+        """Aplica los colores del tema actual a todos los widgets de la pestaña."""
+        # Forzar a que la interfaz procese cambios pendientes antes de resolver colores
+        self.update_idletasks()
+        self._load_theme_colors()
+
+        # 1. Actualizar Visores y Contenedores
+        if hasattr(self, 'viewer_canvas'):
+            self.viewer_canvas.refresh_theme(self.VIEWER_BG, self.GRID_COLOR_1, self.GRID_COLOR_2)
+        if hasattr(self, 'comparison_canvas'):
+            self.comparison_canvas.refresh_theme(self.VIEWER_BG, self.GRID_COLOR_1, self.GRID_COLOR_2)
+        
+        # El frame del visor también tiene fondo
+        if hasattr(self, 'viewer_frame'):
+            self.viewer_frame.configure(fg_color=self.VIEWER_BG)
+
+        # Panel izquierdo (Lista)
+        if hasattr(self, 'left_panel'):
+            self.left_panel.configure(fg_color=self.OPTIONS_PANEL_BG)
+        if hasattr(self, 'list_frame'):
+            # El frame de la lista debe coincidir con el fondo de la lista nativa
+            self.list_frame.configure(fg_color=self._resolve_color(self.LISTBOX_BG))
+
+        # 2. Barra Superior
+        if hasattr(self, 'paste_button'):
+            self.paste_button.configure(fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, text_color=self.DOWNLOAD_BTN_TEXT)
+        if hasattr(self, 'import_button'):
+            self.import_button.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)
+        if hasattr(self, 'analyze_button'):
+            self.analyze_button.configure(fg_color=self.ANALYZE_BTN_COLOR, hover_color=self.ANALYZE_BTN_HOVER, text_color=self.ANALYZE_BTN_TEXT)
+
+            # 3. Lista de Archivos (FIJA OSCURA para estabilidad)
+            self.file_list_box.configure(
+                bg="#18181A",
+                fg="#DCE4EE",
+                selectbackground="#B8860B",
+                selectforeground="white",
+                highlightbackground="#3F3F46"
+            )
+            # Sincronizar etiqueta de ayuda y scrollbars (Fijos)
+            if hasattr(self, 'drag_hint_label'):
+                self.drag_hint_label.configure(fg_color="#18181A")
+            
+            if hasattr(self, 'file_list_scrollbar_y'):
+                self.file_list_scrollbar_y.configure(button_color="#444444", button_hover_color="#555555")
+            if hasattr(self, 'file_list_scrollbar_x'):
+                self.file_list_scrollbar_x.configure(button_color="#444444", button_hover_color="#555555")
+        
+        if hasattr(self, 'clear_button'):
+            self.clear_button.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)
+        
+        if hasattr(self, 'delete_button'):
+            # Si está deshabilitado, ctk maneja el color, pero actualizamos los colores base
+            self.delete_button.configure(fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER, text_color=self.CANCEL_BTN_TEXT)
+
+        # 4. Botones de Acción (Bottom)
+        if hasattr(self, 'process_button'):
+            self.process_button.configure(fg_color=self.PROCESS_BTN_COLOR, hover_color=self.PROCESS_BTN_HOVER, text_color=self.PROCESS_BTN_TEXT)
+        
+        if hasattr(self, 'save_thumbnail_button'):
+            self.save_thumbnail_button.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)
+
+        # 5. Paneles de Opciones (Frames maestros)
+        if hasattr(self, 'options_frame'):
+             self.options_frame.configure(fg_color=self.OPTIONS_PANEL_BG)
+        
+        # Actualizar frames maestros de todas las secciones para que no queden "parches"
+        frames_to_fix = [
+            'format_master_frame', 'format_options_frame', 'resize_master_frame', 
+            'canvas_master_frame', 'rembg_master_frame', 'upscale_master_frame', 
+            'background_master_frame', 'output_frame',
+            'png_options_frame', 'jpg_options_frame', 'webp_options_frame', 
+            'avif_options_frame', 'pdf_options_frame', 'video_options_frame'
+        ]
+        for attr in frames_to_fix:
+            if hasattr(self, attr):
+                getattr(self, attr).configure(fg_color=self.OPTIONS_PANEL_BG)
+
+
+    # ==================================================================
     # --- CREACIÓN DE PANELES DE UI ---
     # ==================================================================
 
@@ -678,7 +845,8 @@ class ImageToolsTab(ctk.CTkFrame):
         # 1. Botón Pegar (Verde)
         self.paste_button = ctk.CTkButton(
             self.top_bar, text="Pegar", width=80, 
-            fg_color="#28A745", hover_color="#218838",
+            fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER,
+            text_color=self.DOWNLOAD_BTN_TEXT,
             command=self._on_paste_list
         )
         self.paste_button.pack(side="left", padx=(10, 5), pady=0)
@@ -701,7 +869,7 @@ class ImageToolsTab(ctk.CTkFrame):
 
     def _create_viewer_panel(self):
         """Crea el panel del visor."""
-        self.viewer_frame = ctk.CTkFrame(self, fg_color="#1D1D1D")
+        self.viewer_frame = ctk.CTkFrame(self, fg_color=self.VIEWER_BG)
         self.viewer_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="nsew")
         self.viewer_frame.grid_propagate(False) 
 
@@ -725,8 +893,8 @@ class ImageToolsTab(ctk.CTkFrame):
                 
             res_orig = ctk.CTkLabel(
                 self.viewer_frame, text=text_orig,
-                fg_color=bg_color, text_color="white",
-                corner_radius=6, font=label_font,
+                fg_color=self.HUD_BG, text_color=self.HUD_TEXT,
+                corner_radius=0, font=label_font,
                 height=22, padx=8
             )
             res_orig.place(relx=0.98, rely=0.03, anchor="ne")
@@ -736,8 +904,8 @@ class ImageToolsTab(ctk.CTkFrame):
             w, h = result_size
             res_res = ctk.CTkLabel(
                 self.viewer_frame, text=f"Resultado: {w}x{h} px",
-                fg_color=bg_color, text_color="white",
-                corner_radius=6, font=label_font,
+                fg_color=self.HUD_BG, text_color=self.HUD_TEXT,
+                corner_radius=0, font=label_font,
                 height=22, padx=8
             )
             res_res.place(relx=0.02, rely=0.03, anchor="nw")
@@ -758,10 +926,10 @@ class ImageToolsTab(ctk.CTkFrame):
         self.list_buttons_frame.grid(row=0, column=0, padx=5, pady=(5, 2), sticky="ew")
         self.list_buttons_frame.grid_columnconfigure((0, 1), weight=1)
 
-        self.clear_button = ctk.CTkButton(self.list_buttons_frame, text="Limpiar Lista", height=28, command=self._on_clear_list)
+        self.clear_button = ctk.CTkButton(self.list_buttons_frame, text="Limpiar Lista", height=28, fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT, command=self._on_clear_list)
         self.clear_button.grid(row=0, column=0, padx=(0, 2), sticky="ew")
         
-        self.delete_button = ctk.CTkButton(self.list_buttons_frame, text="Borrar Selecc.", height=28, fg_color="#DC3545", hover_color="#C82333", command=self._on_delete_selected, state="disabled")
+        self.delete_button = ctk.CTkButton(self.list_buttons_frame, text="Borrar Selecc.", height=28, fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER, text_color=self.CANCEL_BTN_TEXT, command=self._on_delete_selected, state="disabled")
         self.delete_button.grid(row=0, column=1, padx=(2, 0), sticky="ew")
 
         # --- 2. Checkbox "Omitir" ---
@@ -784,17 +952,17 @@ class ImageToolsTab(ctk.CTkFrame):
         self.file_list_scrollbar_x = ctk.CTkScrollbar(self.list_frame, orientation="horizontal")
         self.file_list_scrollbar_x.grid(row=1, column=0, sticky="ew")
 
-        # Listbox Nativo
+        # Listbox Nativo (Tkinter)
         self.file_list_box = tkinter.Listbox(
             self.list_frame,
-            font=ctk.CTkFont(size=12),
-            bg="#1D1D1D",
-            fg="#FFFFFF",
-            selectbackground="#1F6AA5",
-            selectforeground="#FFFFFF",
+            bg="#18181A",
+            fg="#DCE4EE",
+            selectbackground="#B8860B",
+            selectforeground="white",
             borderwidth=0,
             highlightthickness=1,
-            highlightbackground="#565B5E",
+            highlightbackground="#3F3F46",
+            font=("Segoe UI", 10),
             activestyle="none",
             selectmode="extended",
             exportselection=False,
@@ -812,10 +980,11 @@ class ImageToolsTab(ctk.CTkFrame):
             self.list_frame,
             text="Arrastra archivos o carpetas aquí\no usa 'Importar Archivos'",
             text_color="gray",
-            bg_color="#1D1D1D",
+            fg_color="#18181A",
             font=ctk.CTkFont(size=12, weight="bold")
         )
         self.drag_hint_label.place(relx=0.5, rely=0.5, anchor="center")
+        self.drag_hint_label.lift()
 
         # Configurar Drag & Drop
         if DND_FILES:
@@ -889,7 +1058,7 @@ class ImageToolsTab(ctk.CTkFrame):
         
         # 3.1: Módulo "Cuadrito" Maestro de Formato
         # Usamos el color de fondo de las opciones para que se vea integrado
-        self.format_master_frame = ctk.CTkFrame(self.options_frame, fg_color="#2B2B2B")
+        self.format_master_frame = ctk.CTkFrame(self.options_frame)
         self.format_master_frame.pack(fill="x", padx=5, pady=(5, 0))
         
         # 3.1a: Frame para el Menú (DENTRO del "cuadrito" maestro)
@@ -925,7 +1094,7 @@ class ImageToolsTab(ctk.CTkFrame):
         self.options_container.pack(fill="x", expand=True, padx=5, pady=0, after=self.format_menu_frame)
 
         # 3.2: Separador (Sigue igual, entre los dos "cuadritos")
-        ctk.CTkFrame(self.options_frame, height=2, fg_color="#333333").pack(fill="x", padx=10, pady=5)
+        ctk.CTkFrame(self.options_frame, height=2, fg_color=self.SEPARATOR_COLOR).pack(fill="x", padx=10, pady=5)
 
         # 3.3: Módulo "Cuadrito" Maestro de Escalado (Sigue igual)
         self.resize_master_frame = ctk.CTkFrame(self.options_frame)
@@ -1109,8 +1278,7 @@ class ImageToolsTab(ctk.CTkFrame):
         self.rembg_checkbox = ctk.CTkCheckBox(
             self.rembg_master_frame,
             text="Eliminar Fondo (IA)",
-            command=self._on_toggle_rembg_frame,
-            fg_color="#E04F5F", hover_color="#C03949"
+            command=self._on_toggle_rembg_frame
         )
         self.rembg_checkbox.pack(fill="x", padx=10, pady=5)
 
@@ -1162,7 +1330,8 @@ class ImageToolsTab(ctk.CTkFrame):
             self.rembg_actions_frame, 
             text="Abrir", 
             height=24,
-            fg_color="#555555", hover_color="#444444",
+            fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER,
+            text_color=self.SECONDARY_BTN_TEXT,
             command=lambda: self._open_model_folder("rembg")
         )
         self.rembg_open_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
@@ -1171,14 +1340,15 @@ class ImageToolsTab(ctk.CTkFrame):
             self.rembg_actions_frame, 
             text="Borrar", 
             height=24,
-            fg_color="#DC3545", hover_color="#C82333",
+            fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER,
+            text_color=self.CANCEL_BTN_TEXT,
             command=lambda: self._delete_current_model("rembg")
         )
         self.rembg_delete_btn.grid(row=0, column=1, padx=(5, 0), sticky="ew")
         # --------------------------------------------------
 
         # --- SEPARADOR POST-PROCESADO ---
-        ctk.CTkFrame(self.rembg_options_frame, height=1, fg_color=("gray75", "gray35")).grid(
+        ctk.CTkFrame(self.rembg_options_frame, height=1, fg_color=self.SEPARATOR_COLOR).grid(
             row=5, column=0, columnspan=2, sticky="ew", padx=10, pady=(8, 4)
         )
 
@@ -1245,8 +1415,7 @@ class ImageToolsTab(ctk.CTkFrame):
         self.upscale_checkbox = ctk.CTkCheckBox(
             self.upscale_master_frame,
             text="Reescalado con IA",
-            command=self._on_toggle_upscale_frame,
-            fg_color="#2cc985", hover_color="#229e68" # Un verde distintivo
+            command=self._on_toggle_upscale_frame
         )
         self.upscale_checkbox.pack(fill="x", padx=10, pady=5)
 
@@ -1286,8 +1455,9 @@ class ImageToolsTab(ctk.CTkFrame):
             text="+",
             width=30,
             height=28,
-            fg_color="#28A745",
-            hover_color="#218838",
+            fg_color=self.DOWNLOAD_BTN_COLOR,
+            hover_color=self.DOWNLOAD_BTN_HOVER,
+            text_color=self.DOWNLOAD_BTN_TEXT,
             font=ctk.CTkFont(size=16, weight="bold"),
             command=self._on_add_custom_model
         )
@@ -1309,41 +1479,52 @@ class ImageToolsTab(ctk.CTkFrame):
         # Tile Size (Movido aquí arriba)
         ctk.CTkLabel(self.upscale_options_frame, text="Tile Size:").grid(row=2, column=2, padx=(5, 5), pady=5, sticky="e")
         self.upscale_tile_entry = ctk.CTkEntry(self.upscale_options_frame, width=60, placeholder_text="0")
-        self.upscale_tile_entry.insert(0, "200") # 200 = Recomendado
+        self.upscale_tile_entry.insert(0, "0") # 0 = Automático
         self.upscale_tile_entry.grid(row=2, column=3, padx=(0, 10), pady=5, sticky="w") # Sticky W
         
-        Tooltip(self.upscale_tile_entry, "Tamaño del bloque de procesamiento (VRAM).\n200 es el valor recomendado.\nUsa 0 para Automático o 100 si tienes errores de memoria.", delay_ms=1000)
+        Tooltip(self.upscale_tile_entry, "Tamaño del bloque de procesamiento (VRAM).\n0 = Automático (Recomendado).\nPrueba 128 o 256 si tienes errores de GPU.", delay_ms=1000)
 
-        # --- FILA 3: Reducción de Ruido (Solo Waifu2x) ---
+        # Potencia (Hilos)
+        ctk.CTkLabel(self.upscale_options_frame, text="Potencia:").grid(row=3, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.upscale_threads_menu = ctk.CTkOptionMenu(
+            self.upscale_options_frame, 
+            values=["Automático", "Seguro (Estabilidad)", "Equilibrado", "Máximo (Potente)"],
+            width=150
+        )
+        self.upscale_threads_menu.set("Automático")
+        self.upscale_threads_menu.grid(row=3, column=1, columnspan=3, padx=(0, 10), pady=5, sticky="w")
+        Tooltip(self.upscale_threads_menu, "Control de hilos (concurrencia).\n'Seguro' evita crashes en GPUs modestas.\n'Máximo' usa toda la potencia pero puede colgar el PC.", delay_ms=1000)
+
+        # --- FILA 4: Reducción de Ruido (Solo Waifu2x) ---
         self.upscale_denoise_label = ctk.CTkLabel(self.upscale_options_frame, text="Reducir Ruido:")
-        self.upscale_denoise_label.grid(row=3, column=0, padx=(10, 5), pady=5, sticky="w")
+        self.upscale_denoise_label.grid(row=4, column=0, padx=(10, 5), pady=5, sticky="w")
         
         self.upscale_denoise_menu = ctk.CTkOptionMenu(
             self.upscale_options_frame, 
             values=["-1 (Ninguna)", "0 (Baja)", "1 (Media)", "2 (Alta)", "3 (Máxima)"],
-            # Ahora tiene toda la fila para él solo si quiere
         )
         self.upscale_denoise_menu.set("2 (Alta)")
-        self.upscale_denoise_menu.grid(row=3, column=1, columnspan=3, padx=(0, 10), pady=5, sticky="ew")
+        self.upscale_denoise_menu.grid(row=4, column=1, columnspan=3, padx=(0, 10), pady=5, sticky="ew")
 
-        # --- FILA 4: TTA ---
+        # --- FILA 5: TTA ---
         self.upscale_tta_check = ctk.CTkCheckBox(self.upscale_options_frame, text="TTA (Mejor calidad, muy lento)")
-        self.upscale_tta_check.grid(row=4, column=0, columnspan=4, padx=10, pady=5, sticky="w")
+        self.upscale_tta_check.grid(row=5, column=0, columnspan=4, padx=10, pady=5, sticky="w")
 
-        # --- FILA 5: Label de Estado ---
+        # --- FILA 6: Label de Estado ---
         self.upscale_status_label = ctk.CTkLabel(self.upscale_options_frame, text="", font=ctk.CTkFont(size=10))
-        self.upscale_status_label.grid(row=5, column=0, columnspan=4, padx=10, pady=(5, 5), sticky="ew")
+        self.upscale_status_label.grid(row=6, column=0, columnspan=4, padx=10, pady=(5, 5), sticky="ew")
 
-        # --- FILA 6: Botones de Gestión ---
+        # --- FILA 7: Botones de Gestión ---
         self.upscale_actions_frame = ctk.CTkFrame(self.upscale_options_frame, fg_color="transparent")
-        self.upscale_actions_frame.grid(row=6, column=0, columnspan=4, padx=10, pady=(0, 10), sticky="ew")
+        self.upscale_actions_frame.grid(row=7, column=0, columnspan=4, padx=10, pady=(0, 10), sticky="ew")
         self.upscale_actions_frame.grid_columnconfigure((0, 1, 2), weight=1)
 
         self.upscale_open_btn = ctk.CTkButton(
             self.upscale_actions_frame, 
             text="Abrir", 
             height=24,
-            fg_color="#555555", hover_color="#444444",
+            fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER,
+            text_color=self.SECONDARY_BTN_TEXT,
             command=lambda: self._open_model_folder("upscale")
         )
         self.upscale_open_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
@@ -1352,7 +1533,8 @@ class ImageToolsTab(ctk.CTkFrame):
             self.upscale_actions_frame, 
             text="Borrar", 
             height=24,
-            fg_color="#DC3545", hover_color="#C82333",
+            fg_color=self.CANCEL_BTN_COLOR, hover_color=self.CANCEL_BTN_HOVER,
+            text_color=self.CANCEL_BTN_TEXT,
             command=lambda: self._delete_current_model("upscale")
         )
         self.upscale_delete_btn.grid(row=0, column=1, padx=(5, 0), sticky="ew")
@@ -1685,7 +1867,7 @@ class ImageToolsTab(ctk.CTkFrame):
 
     def _create_png_options(self):
         """Crea el frame de opciones para PNG."""
-        png_frame = ctk.CTkFrame(self.options_container, fg_color="#2B2B2B")
+        png_frame = ctk.CTkFrame(self.options_container, fg_color="transparent")
         
         self.png_transparency = ctk.CTkCheckBox(png_frame, text="Mantener Transparencia")
         self.png_transparency.pack(fill="x", padx=10, pady=5)
@@ -1697,11 +1879,16 @@ class ImageToolsTab(ctk.CTkFrame):
             min_val=0, max_val=9, default_val=6, step=1
         )
         
+        # --- NUEVO: Transparencia en PDF (Solo aplica si el origen es PDF) ---
+        self.png_pdf_transparent = ctk.CTkCheckBox(png_frame, text="PDF Transparente", font=ctk.CTkFont(size=11))
+        self.png_pdf_transparent.pack(fill="x", padx=10, pady=(5, 5))
+        Tooltip(self.png_pdf_transparent, "Si importas un PDF, activa esto para exportarlo sin fondo blanco.\n(Solo funciona si el PDF original tiene capas transparentes).", delay_ms=800)
+
         self.option_frames["PNG"] = png_frame
 
     def _create_jpg_options(self):
         """Crea el frame de opciones para JPG/JPEG."""
-        jpg_frame = ctk.CTkFrame(self.options_container, fg_color="#2B2B2B")
+        jpg_frame = ctk.CTkFrame(self.options_container, fg_color="transparent")
         
         self.jpg_quality_slider, self.jpg_quality_label = self._create_slider_with_label(
             parent=jpg_frame,
@@ -1727,7 +1914,7 @@ class ImageToolsTab(ctk.CTkFrame):
 
     def _create_webp_options(self):
         """Crea el frame de opciones para WEBP."""
-        webp_frame = ctk.CTkFrame(self.options_container, fg_color="#2B2B2B")
+        webp_frame = ctk.CTkFrame(self.options_container, fg_color="transparent")
         
         self.webp_lossless = ctk.CTkCheckBox(
             webp_frame, 
@@ -1757,11 +1944,16 @@ class ImageToolsTab(ctk.CTkFrame):
         self.webp_metadata = ctk.CTkCheckBox(webp_frame, text="Guardar Metadatos (EXIF, XMP)")
         self.webp_metadata.pack(fill="x", padx=10, pady=5)
         
+        # --- NUEVO: Transparencia en PDF ---
+        self.webp_pdf_transparent = ctk.CTkCheckBox(webp_frame, text="PDF Transparente", font=ctk.CTkFont(size=11))
+        self.webp_pdf_transparent.pack(fill="x", padx=10, pady=(0, 5))
+        Tooltip(self.webp_pdf_transparent, "Si importas un PDF, activa esto para exportarlo sin fondo blanco.", delay_ms=800)
+
         self.option_frames["WEBP"] = webp_frame
 
     def _create_avif_options(self):
         """Crea el frame de opciones para AVIF."""
-        avif_frame = ctk.CTkFrame(self.options_container, fg_color="#2B2B2B")
+        avif_frame = ctk.CTkFrame(self.options_container, fg_color="transparent")
         
         self.avif_lossless = ctk.CTkCheckBox(
             avif_frame, 
@@ -1796,6 +1988,11 @@ class ImageToolsTab(ctk.CTkFrame):
         self.avif_transparency.pack(fill="x", padx=10, pady=5)
         self.avif_transparency.select()
         
+        # --- NUEVO: Transparencia en PDF ---
+        self.avif_pdf_transparent = ctk.CTkCheckBox(avif_frame, text="PDF Transparente", font=ctk.CTkFont(size=11))
+        self.avif_pdf_transparent.pack(fill="x", padx=10, pady=(0, 5))
+        Tooltip(self.avif_pdf_transparent, "Si importas un PDF, activa esto para exportarlo sin fondo blanco.", delay_ms=800)
+
         self.option_frames["AVIF"] = avif_frame
 
     def _toggle_avif_quality(self):
@@ -1942,7 +2139,7 @@ class ImageToolsTab(ctk.CTkFrame):
 
     def _create_pdf_options(self):
         """Crea el frame de opciones para PDF."""
-        pdf_frame = ctk.CTkFrame(self.options_container, fg_color="#2B2B2B")
+        pdf_frame = ctk.CTkFrame(self.options_container, fg_color="transparent")
         
         self.pdf_combine = ctk.CTkCheckBox(
             pdf_frame, 
@@ -1972,7 +2169,7 @@ class ImageToolsTab(ctk.CTkFrame):
 
     def _create_tiff_options(self):
         """Crea el frame de opciones para TIFF."""
-        tiff_frame = ctk.CTkFrame(self.options_container, fg_color="#2B2B2B")
+        tiff_frame = ctk.CTkFrame(self.options_container, fg_color="transparent")
         
         comp_frame = ctk.CTkFrame(tiff_frame, fg_color="transparent")
         comp_frame.pack(fill="x", padx=10, pady=5, anchor="w")
@@ -1995,12 +2192,17 @@ class ImageToolsTab(ctk.CTkFrame):
         )
         self.tiff_transparency.pack(fill="x", padx=10, pady=5)
         self.tiff_transparency.select()
+
+        # --- NUEVO: Transparencia en PDF ---
+        self.tiff_pdf_transparent = ctk.CTkCheckBox(tiff_frame, text="PDF Transparente", font=ctk.CTkFont(size=11))
+        self.tiff_pdf_transparent.pack(fill="x", padx=10, pady=(0, 5))
+        Tooltip(self.tiff_pdf_transparent, "Si importas un PDF, activa esto para exportarlo sin fondo blanco.", delay_ms=800)
         
         self.option_frames["TIFF"] = tiff_frame
 
     def _create_ico_options(self):
         """Crea el frame de opciones para ICO."""
-        ico_frame = ctk.CTkFrame(self.options_container, fg_color="#2B2B2B")
+        ico_frame = ctk.CTkFrame(self.options_container, fg_color="transparent")
         
         ctk.CTkLabel(ico_frame, text="Tamaños a incluir en el .ico:").pack(fill="x", padx=10, pady=5)
         
@@ -2030,11 +2232,16 @@ class ImageToolsTab(ctk.CTkFrame):
             chk.grid(row=row, column=col, sticky="w")
             self.ico_sizes[size] = chk # Guardar el widget
             
+        # --- NUEVO: Transparencia en PDF ---
+        self.ico_pdf_transparent = ctk.CTkCheckBox(ico_frame, text="PDF Transparente", font=ctk.CTkFont(size=11))
+        self.ico_pdf_transparent.pack(fill="x", padx=10, pady=(5, 5))
+        Tooltip(self.ico_pdf_transparent, "Si importas un PDF, activa esto para exportarlo sin fondo blanco.", delay_ms=800)
+
         self.option_frames["ICO"] = ico_frame
 
     def _create_bmp_options(self):
         """Crea el frame de opciones para BMP."""
-        bmp_frame = ctk.CTkFrame(self.options_container, fg_color="#2B2B2B")
+        bmp_frame = ctk.CTkFrame(self.options_container, fg_color="transparent")
         
         self.bmp_rle = ctk.CTkCheckBox(bmp_frame, text="Comprimir (RLE)")
         self.bmp_rle.pack(fill="x", padx=10, pady=5)
@@ -2345,7 +2552,7 @@ class ImageToolsTab(ctk.CTkFrame):
 
     def _create_video_options(self):
         """Crea el frame de opciones para 'Convertir a Video'."""
-        video_frame = ctk.CTkFrame(self.options_container, fg_color="#2B2B2B")
+        video_frame = ctk.CTkFrame(self.options_container, fg_color="transparent")
         
         # --- 0. NUEVO: Nombre del Video ---
         self.video_name_frame = ctk.CTkFrame(video_frame, fg_color="transparent")
@@ -3821,7 +4028,13 @@ class ImageToolsTab(ctk.CTkFrame):
             
             self.image_converter.prepare_ai_sessions(options, progress_callback=init_callback)
 
+            # 🔧 NUEVO: Iniciar sesión persistente de Inkscape si está activo
+            inkscape_active = self.app.inkscape_enabled and self.app.inkscape_service
+            if inkscape_active:
+                self.app.inkscape_service.start_session()
+
             for i, item_data in enumerate(self.file_list_data):
+                # ... (resto del bucle)
                 
                 if cancel_event.is_set():
                     print("INFO: Proceso cancelado por el usuario")
@@ -3873,8 +4086,11 @@ class ImageToolsTab(ctk.CTkFrame):
                         self.app.after(0, lambda t=message: self.progress_label.configure(text=t))
                 
                 # Actualizar texto inicial del archivo
-                self.app.after(0, lambda t=f"Procesando ({i+1}/{total_files}): {filename}": 
-                            self.progress_label.configure(text=t))
+                status_text = f"Procesando ({i+1}/{total_files}): {filename}"
+                if self.app.inkscape_enabled and self.app.inkscape_service:
+                    status_text = f"[Inkscape] Convirtiendo ({i+1}/{total_files}): {filename}"
+                
+                self.app.after(0, lambda t=status_text: self.progress_label.configure(text=t))
                 
                 # 2. Generar el nombre de salida PASANDO EL TÍTULO
                 output_filename = self._get_output_filename(input_path, options, page_num, custom_title)
@@ -4027,6 +4243,10 @@ class ImageToolsTab(ctk.CTkFrame):
             self.app.after(0, lambda: messagebox.showerror("Error", error_msg))
         
         finally:
+            # 🔧 NUEVO: Detener sesión persistente de Inkscape
+            if self.app.inkscape_service:
+                self.app.inkscape_service.stop_session()
+                
             # REACTIVAR BOTONES Y RESTAURAR TEXTO
             self.is_processing = False
             
@@ -4229,15 +4449,35 @@ class ImageToolsTab(ctk.CTkFrame):
             # --- NUEVAS OPCIONES DE REESCALADO ---
             "upscale_enabled": self.upscale_checkbox.get() == 1,
             "upscale_engine": self.upscale_engine_menu.get(),
-            "upscale_model_friendly": self.upscale_model_menu.get(), # Pasamos nombre amigable, el converter lo traduce
-            "upscale_scale": self.upscale_scale_menu.get().replace("x", ""),
-            "upscale_denoise": self.upscale_denoise_menu.get().split(" ")[0], # "-1", "0", etc.
+            "upscale_model_friendly": self.upscale_model_menu.get(),
+            "upscale_scale": self.upscale_scale_menu.get() if hasattr(self, 'upscale_scale_menu') else "2",
+            "upscale_denoise": self.upscale_denoise_menu.get() if hasattr(self, 'upscale_denoise_menu') else "0",
             "upscale_tile": self.upscale_tile_entry.get(),
-            "upscale_tta": self.upscale_tta_check.get() == 1
+            "upscale_tta": self.upscale_tta_check.get() == 1,
+
+            # 🧠 NUEVAS OPCIONES DE TRANSPARENCIA INTELIGENTE:
+            # 1. Flag Global de fondo forzado (desde Ajustes)
+            "force_background": getattr(self.app, "vector_force_background", False),
+            # 2. Flag Local para PDF Transparente (se busca dinámicamente según el formato de salida)
+            "pdf_transparent": self._get_current_pdf_transparency_flag(format_selected)
         }
         
         return options
     
+    def _get_current_pdf_transparency_flag(self, selected_format):
+        """Busca el valor del checkbox 'PDF Transparente' para el formato actual."""
+        attr_map = {
+            "PNG": "png_pdf_transparent",
+            "WEBP": "webp_pdf_transparent",
+            "AVIF": "avif_pdf_transparent",
+            "TIFF": "tiff_pdf_transparent",
+            "ICO": "ico_pdf_transparent"
+        }
+        attr_name = attr_map.get(selected_format)
+        if attr_name and hasattr(self, attr_name):
+            return getattr(self, attr_name).get()
+        return False
+
     def _get_first_image_dimensions(self):
         """Obtiene (ancho, alto) del primer ítem de la lista. Retorna None si falla."""
         if not self.file_list_data:
@@ -4308,13 +4548,12 @@ class ImageToolsTab(ctk.CTkFrame):
             # Fallback: Generar nombre basado en archivo original
             base_name = os.path.splitext(os.path.basename(input_path))[0]
             base_name = unquote(base_name)
-            if page_num and self.image_processor.get_document_page_count(input_path) > 1:
-                base_name = f"{base_name}_p{page_num}"
         
         # Sanitizar siempre (por si el usuario puso caracteres raros)
         base_name = re.sub(r'[<>:"/\\|?*]', '_', base_name)
         
         # Añadir el sufijo de página SI existe y si el original tenía varias páginas
+        # Solo lo añadimos una vez aquí al final del base_name
         if page_num and self.image_processor.get_document_page_count(input_path) > 1:
             base_name = f"{base_name}_p{page_num}"
             
@@ -4325,6 +4564,7 @@ class ImageToolsTab(ctk.CTkFrame):
             input_ext = os.path.splitext(input_path)[1].lower()
             
             # Si el original era un vector, se rasterizará a PNG
+            from src.core.constants import IMAGE_INPUT_FORMATS
             if input_ext in IMAGE_INPUT_FORMATS: # .svg, .pdf, .ai, .eps
                 extension = "png"
             else:
@@ -4744,8 +4984,11 @@ class ImageToolsTab(ctk.CTkFrame):
         except Exception:
             width, height = 400, 400 # Fallback
             
+        # Obtener el DPI de los ajustes generales
+        general_dpi = self.app.config.get("vector_dpi", 300)
+            
         # Llamar al "motor" de procesamiento
-        pil_image = self.image_processor.generate_thumbnail(filepath, size=(width, height))
+        pil_image = self.image_processor.generate_thumbnail(filepath, size=(width, height), dpi=general_dpi)
         
         # Enviar la imagen (o None) de vuelta al hilo principal (UI)
         self.app.after(0, self._display_thumbnail_in_viewer, pil_image, filepath)
@@ -5666,7 +5909,7 @@ class ImageToolsTab(ctk.CTkFrame):
         info_label = ctk.CTkLabel(
             self.viewer_frame, 
             text="Rueda: Zoom | Clic + Arrastre: Mover Imagen | Línea Blanca: Slider",
-            fg_color="#333333", text_color="white", corner_radius=5,
+            fg_color=self.HUD_BG, text_color=self.HUD_TEXT, corner_radius=0,
             font=ctk.CTkFont(size=11)
         )
         info_label.place(relx=0.5, rely=0.95, anchor="center")
