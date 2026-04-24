@@ -41,6 +41,93 @@ def apply_icon(window):
         
     window.after(200, _set)
 
+def resolve_theme_color(master, key, default_color):
+    """
+    Intenta obtener un color del tema actual desde la aplicación principal.
+    'master' suele ser un Frame o Tab que tiene referencia a 'app'.
+    """
+    # 1. Buscar la instancia de la aplicación (MainWindow)
+    app = master
+    # Si master es un widget, buscar hacia arriba hasta encontrar 'app' o MainWindow
+    if hasattr(master, 'app'):
+        app = master.app
+    elif not hasattr(master, 'get_theme_color'):
+        # Intento de búsqueda recursiva simple hacia el root
+        root = master
+        while hasattr(root, 'master') and root.master:
+            root = root.master
+            if hasattr(root, 'get_theme_color'):
+                app = root
+                break
+    
+    # 2. Obtener el color (puede ser un string o una lista [Light, Dark])
+    color_val = default_color
+    if hasattr(app, 'get_theme_color'):
+        color_val = app.get_theme_color(key, default_color)
+        
+    # 3. Resolver el color final (SIEMPRE devolver un string para evitar errores en tkinter puro)
+    if isinstance(color_val, list) and len(color_val) == 2:
+        mode = ctk.get_appearance_mode() # "Light" o "Dark"
+        return color_val[0] if mode == "Light" else color_val[1]
+        
+    return color_val
+
+def center_and_fit(window, width, height=None, master=None, padding=60):
+    """
+    Calcula dinámicamente el tamaño necesario para que todo el contenido sea visible.
+    Ajusta ANCHO y ALTO basándose en el contenido real tras el renderizado.
+    """
+    window.update_idletasks()
+    
+    # 1. Calcular ancho dinámico
+    # Obtenemos lo que piden los widgets hijos
+    req_w = window.winfo_reqwidth() + padding
+    
+    # IMPORTANTE: Si el ancho solicitado es exagerado (más de 800px), 
+    # es probable que sea un texto sin wraplength. Lo limitamos.
+    if req_w > 800:
+        req_w = 800
+
+    # Asegurar un ancho mínimo pero permitir que crezca si el tema lo pide
+    final_width = max(width, req_w)
+    
+    # Limitar el ancho máximo (90% de pantalla)
+    try:
+        screen_w = window.winfo_screenwidth()
+        if final_width > screen_w * 0.9:
+            final_width = int(screen_w * 0.9)
+    except:
+        if final_width > 950: final_width = 950
+
+    # 2. Calcular alto dinámico
+    window.update_idletasks()
+    final_height = height if height else window.winfo_reqheight() + 30
+    
+    # 3. Centrado
+    try:
+        root = master if master else window.master
+        while hasattr(root, 'master') and root.master is not None:
+            root = root.master
+        
+        master_geo = root.geometry()
+        import re
+        parts = re.split('[x+]', master_geo)
+        if len(parts) >= 4:
+            m_w, m_h, m_x, m_y = map(int, parts[:4])
+            pos_x = m_x + (m_w // 2) - (final_width // 2)
+            pos_y = m_y + (m_h // 2) - (final_height // 2)
+            window.geometry(f"{final_width}x{final_height}+{pos_x}+{pos_y}")
+            return
+    except:
+        pass
+    
+    # Fallback: Pantalla
+    s_w = window.winfo_screenwidth()
+    s_h = window.winfo_screenheight()
+    pos_x = (s_w // 2) - (final_width // 2)
+    pos_y = (s_h // 2) - (final_height // 2)
+    window.geometry(f"{final_width}x{final_height}+{pos_x}+{pos_y}")
+
 class ConflictDialog(ctk.CTkToplevel):
     def __init__(self, master, filename):
         super().__init__(master)
@@ -50,30 +137,54 @@ class ConflictDialog(ctk.CTkToplevel):
         self.lift()
         self.attributes("-topmost", True)
         self.grab_set()
-        self.geometry("500x180")
-        self.resizable(False, False)
-        self.update_idletasks()
-        win_width = 500
-        win_height = 180
-        master_geo = self.master.geometry()
-        master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
-        pos_x = master_x + (master_width // 2) - (win_width // 2)
-        pos_y = master_y + (master_height // 2) - (win_height // 2)
-        self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+        self.win_width = 500
+        self.win_width = 520
+        self.resizable(True, True) # Ahora todas son redimensionables
         self.result = "cancel"
-        main_label = ctk.CTkLabel(self, text=f"El archivo '{filename}' ya existe en la carpeta de destino.", font=ctk.CTkFont(size=14), wraplength=460)
-        main_label.pack(pady=(20, 10), padx=20)
-        question_label = ctk.CTkLabel(self, text="¿Qué deseas hacer?")
-        question_label.pack(pady=5, padx=20)
+        
+        # Vincular el cambio de tamaño para ajustar el wraplength
+        self.bind("<Configure>", self._on_resize)
+
+        # El wraplength ahora es relativo al ancho de la ventana
+        wrap = self.win_width - 60
+        
+        self.main_label = ctk.CTkLabel(self, text=f"El archivo '{filename}' ya existe en la carpeta de destino.", 
+                                 font=ctk.CTkFont(size=14), wraplength=wrap)
+        self.main_label.pack(pady=(25, 10), padx=30)
+        
+        self.question_label = ctk.CTkLabel(self, text="¿Qué deseas hacer?", wraplength=wrap)
+        self.question_label.pack(pady=5, padx=30)
         button_frame = ctk.CTkFrame(self, fg_color="transparent")
         button_frame.pack(pady=15, fill="x", expand=True)
         button_frame.grid_columnconfigure((0, 1, 2), weight=1)
-        overwrite_btn = ctk.CTkButton(button_frame, text="Sobrescribir", command=lambda: self.set_result("overwrite"))
-        rename_btn = ctk.CTkButton(button_frame, text="Conservar Ambos", command=lambda: self.set_result("rename"))
-        cancel_btn = ctk.CTkButton(button_frame, text="Cancelar", fg_color="red", hover_color="#990000", command=lambda: self.set_result("cancel"))
+        overwrite_btn = ctk.CTkButton(button_frame, text="Sobrescribir", 
+                                    fg_color=resolve_theme_color(master, "DOWNLOAD_BTN", ["#28a745", "#218838"]),
+                                    hover_color=resolve_theme_color(master, "DOWNLOAD_BTN_HOVER", ["#218838", "#1e7e34"]),
+                                    command=lambda: self.set_result("overwrite"))
+        rename_btn = ctk.CTkButton(button_frame, text="Conservar Ambos", 
+                                 fg_color=resolve_theme_color(master, "SECONDARY_BTN", ["#6c757d", "#5a6268"]),
+                                 hover_color=resolve_theme_color(master, "SECONDARY_BTN_HOVER", ["#5a6268", "#4e555b"]),
+                                 command=lambda: self.set_result("rename"))
+        cancel_btn = ctk.CTkButton(button_frame, text="Cancelar", 
+                                 fg_color=resolve_theme_color(master, "CANCEL_BTN", ["#dc3545", "#c82333"]), 
+                                 hover_color=resolve_theme_color(master, "CANCEL_BTN_HOVER", ["#c82333", "#bd2130"]), 
+                                 command=lambda: self.set_result("cancel"))
+        
         overwrite_btn.grid(row=0, column=0, padx=10, sticky="ew")
         rename_btn.grid(row=0, column=1, padx=10, sticky="ew")
         cancel_btn.grid(row=0, column=2, padx=10, sticky="ew")
+
+        center_and_fit(self, self.win_width, master=master)
+
+    def _on_resize(self, event):
+        """Ajusta el wraplength de las etiquetas al cambiar el ancho de la ventana."""
+        curr_width = self.winfo_width()
+        if curr_width > 100:
+            wrap = curr_width - 60
+            if hasattr(self, 'main_label'):
+                self.main_label.configure(wraplength=wrap)
+            if hasattr(self, 'question_label'):
+                self.question_label.configure(wraplength=wrap)
 
     def set_result(self, result):
         self.result = result
@@ -85,25 +196,16 @@ class LoadingWindow(ctk.CTkToplevel):
         Tooltip.hide_all()
         self.title("Iniciando...")
         apply_icon(self)
-        self.geometry("350x120")
-        self.resizable(False, False)
-        self.protocol("WM_DELETE_WINDOW", lambda: None) 
-        self.transient(master) 
-        self.lift()
-        self.error_state = False
-        win_width = 350
-        win_height = 120
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        pos_x = (screen_width // 2) - (win_width // 2)
-        pos_y = (screen_height // 2) - (win_height // 2)
-        self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+        self.win_width = 350
+        self.resizable(True, True)
         self.label = ctk.CTkLabel(self, text="Preparando la aplicación, por favor espera...", wraplength=320)
         self.label.pack(pady=(20, 10), padx=20)
         self.progress_bar = ctk.CTkProgressBar(self)
         self.progress_bar.set(0)
         self.progress_bar.pack(pady=10, padx=20, fill="x")
         self.grab_set()
+        
+        center_and_fit(self, self.win_width, master=master)
 
 class CompromiseDialog(ctk.CTkToplevel):
         """Diálogo que pregunta al usuario si acepta una calidad de descarga alternativa."""
@@ -114,35 +216,51 @@ class CompromiseDialog(ctk.CTkToplevel):
             apply_icon(self)
             self.lift()
             self.attributes("-topmost", True)
-            self.grab_set()
             self.result = "cancel"
-            container = ctk.CTkFrame(self, fg_color="transparent")
-            container.pack(padx=20, pady=20, fill="both", expand=True)
-            main_label = ctk.CTkLabel(container, text="No se pudo obtener la calidad seleccionada.", font=ctk.CTkFont(size=15, weight="bold"), wraplength=450)
-            main_label.pack(pady=(0, 10), anchor="w")
-            details_frame = ctk.CTkFrame(container, fg_color="transparent")
+            self.resizable(True, True)
+            self.bind("<Configure>", self._on_resize)
+            
+            self.container = ctk.CTkFrame(self, fg_color="transparent")
+            self.container.pack(padx=20, pady=20, fill="both", expand=True)
+            
+            self.main_label = ctk.CTkLabel(self.container, text="No se pudo obtener la calidad seleccionada.", font=ctk.CTkFont(size=15, weight="bold"), wraplength=450)
+            self.main_label.pack(pady=(0, 10), anchor="w")
+            
+            details_frame = ctk.CTkFrame(self.container, fg_color="transparent")
             details_frame.pack(pady=5, anchor="w")
+            
             ctk.CTkLabel(details_frame, text="La mejor alternativa disponible es:", font=ctk.CTkFont(size=12)).pack(anchor="w")
-            details_label = ctk.CTkLabel(details_frame, text=details_message, font=ctk.CTkFont(size=13, weight="bold"), text_color="#52a2f2", wraplength=450, justify="left")
-            details_label.pack(anchor="w")
-            question_label = ctk.CTkLabel(container, text="¿Deseas descargar esta versión en su lugar?", font=ctk.CTkFont(size=12), wraplength=450)
-            question_label.pack(pady=10, anchor="w")
-            button_frame = ctk.CTkFrame(container, fg_color="transparent")
+            
+            self.details_label = ctk.CTkLabel(details_frame, text=details_message, font=ctk.CTkFont(size=13, weight="bold"), text_color="#52a2f2", wraplength=450, justify="left")
+            self.details_label.pack(anchor="w")
+            
+            self.question_label = ctk.CTkLabel(self.container, text="¿Deseas descargar esta versión en su lugar?", font=ctk.CTkFont(size=12), wraplength=450)
+            self.question_label.pack(pady=10, anchor="w")
+            
+            button_frame = ctk.CTkFrame(self.container, fg_color="transparent")
             button_frame.pack(pady=15, fill="x")
             button_frame.grid_columnconfigure((0, 1), weight=1)
-            accept_btn = ctk.CTkButton(button_frame, text="Sí, Descargar", command=lambda: self.set_result("accept"))
-            cancel_btn = ctk.CTkButton(button_frame, text="No, Cancelar", fg_color="red", hover_color="#990000", command=lambda: self.set_result("cancel"))
+            accept_btn = ctk.CTkButton(button_frame, text="Sí, Descargar", 
+                                     fg_color=resolve_theme_color(master, "DOWNLOAD_BTN", ["#28a745", "#218838"]),
+                                     hover_color=resolve_theme_color(master, "DOWNLOAD_BTN_HOVER", ["#218838", "#1e7e34"]),
+                                     command=lambda: self.set_result("accept"))
+            cancel_btn = ctk.CTkButton(button_frame, text="No, Cancelar", 
+                                     fg_color=resolve_theme_color(master, "CANCEL_BTN", ["#dc3545", "#c82333"]), 
+                                     hover_color=resolve_theme_color(master, "CANCEL_BTN_HOVER", ["#c82333", "#bd2130"]), 
+                                     command=lambda: self.set_result("cancel"))
             accept_btn.grid(row=0, column=0, padx=(0, 10), sticky="ew")
             cancel_btn.grid(row=0, column=1, padx=(10, 0), sticky="ew")
-            self.update()
-            self.update_idletasks()
-            win_width = self.winfo_reqwidth()
-            win_height = self.winfo_reqheight()
-            master_geo = self.master.geometry()
-            master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
-            pos_x = master_x + (master_width // 2) - (win_width // 2)
-            pos_y = master_y + (master_height // 2) - (win_height // 2)
-            self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+            
+            center_and_fit(self, 500, master=master)
+
+        def _on_resize(self, event):
+            """Ajusta el wraplength de las etiquetas al cambiar el ancho de la ventana."""
+            curr_width = self.winfo_width()
+            if curr_width > 100:
+                wrap = curr_width - 60
+                if hasattr(self, 'main_label'): self.main_label.configure(wraplength=wrap)
+                if hasattr(self, 'details_label'): self.details_label.configure(wraplength=wrap)
+                if hasattr(self, 'question_label'): self.question_label.configure(wraplength=wrap)
 
         def set_result(self, result):
             self.result = result
@@ -163,17 +281,9 @@ class SimpleMessageDialog(ctk.CTkToplevel):
         self.message_text = message
 
         # Dimensiones un poco más grandes para acomodar el log
-        win_width = 500
-        win_height = 300
-        
-        # Centrar ventana
+        self.win_width = 500
+        self.geometry(f"{self.win_width}x300")
         self.resizable(True, True) # Permitir redimensionar para leer mejor
-        self.update_idletasks()
-        master_geo = self.master.geometry()
-        master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
-        pos_x = master_x + (master_width // 2) - (win_width // 2)
-        pos_y = master_y + (master_height // 2) - (win_height // 2)
-        self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
 
         # --- CAMBIO PRINCIPAL: Usar CTkTextbox en lugar de Label ---
         # Esto permite seleccionar texto y tener scroll automático
@@ -192,8 +302,8 @@ class SimpleMessageDialog(ctk.CTkToplevel):
         copy_button = ctk.CTkButton(
             button_frame, 
             text="Copiar Error", 
-            fg_color="gray", 
-            hover_color="#555555",
+            fg_color=resolve_theme_color(master, "SECONDARY_BTN", ["#6c757d", "#5a6268"]), 
+            hover_color=resolve_theme_color(master, "SECONDARY_BTN_HOVER", ["#5a6268", "#4e555b"]),
             command=self.copy_to_clipboard
         )
         copy_button.pack(side="left", expand=True, padx=(0, 5))
@@ -202,9 +312,12 @@ class SimpleMessageDialog(ctk.CTkToplevel):
         ok_button = ctk.CTkButton(
             button_frame, 
             text="OK", 
+            fg_color=resolve_theme_color(master, "DOWNLOAD_BTN", ["#28a745", "#218838"]),
             command=self.destroy
         )
         ok_button.pack(side="left", expand=True, padx=(5, 0))
+
+        center_and_fit(self, self.win_width, master=master)
 
     def copy_to_clipboard(self):
         """Copia el contenido del mensaje al portapapeles."""
@@ -227,18 +340,9 @@ class SavePresetDialog(ctk.CTkToplevel):
             self.attributes("-topmost", True)
             self.grab_set()
             self.result = None
+            self.resizable(True, True)
             
-            self.geometry("450x200")
-            self.resizable(False, False)
-            
-            self.update_idletasks()
-            win_width = 450
-            win_height = 200
-            master_geo = self.master.geometry()
-            master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
-            pos_x = master_x + (master_width // 2) - (win_width // 2)
-            pos_y = master_y + (master_height // 2) - (win_height // 2)
-            self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+            self.win_width = 450
             
             label = ctk.CTkLabel(
                 self, 
@@ -263,6 +367,7 @@ class SavePresetDialog(ctk.CTkToplevel):
             save_btn = ctk.CTkButton(
                 button_frame, 
                 text="Guardar",
+                fg_color=resolve_theme_color(master, "DOWNLOAD_BTN", ["#28a745", "#218838"]),
                 command=self.save
             )
             save_btn.grid(row=0, column=0, padx=(0, 10), sticky="ew")
@@ -270,11 +375,13 @@ class SavePresetDialog(ctk.CTkToplevel):
             cancel_btn = ctk.CTkButton(
                 button_frame,
                 text="Cancelar",
-                fg_color="gray",
-                hover_color="#555555",
+                fg_color=resolve_theme_color(master, "CANCEL_BTN", ["#dc3545", "#c82333"]),
+                hover_color=resolve_theme_color(master, "CANCEL_BTN_HOVER", ["#c82333", "#bd2130"]),
                 command=self.cancel
             )
             cancel_btn.grid(row=0, column=1, padx=(10, 0), sticky="ew")
+            
+            center_and_fit(self, self.win_width, master=master)
         
         def save(self):
             preset_name = self.name_entry.get().strip()
@@ -299,31 +406,8 @@ class ModelNicknameDialog(ctk.CTkToplevel):
         self.grab_set()
         self.result = None
         
-        self.geometry("450x220")
-        self.resizable(False, False)
-        
-        # Centrar relativo a la app principal
-        self.update_idletasks()
-        win_width = 450
-        win_height = 220
-        try:
-            # Buscar el root (CTk)
-            root = master
-            while hasattr(root, 'master') and root.master is not None:
-                root = root.master
-            
-            master_geo = root.geometry()
-            master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
-            pos_x = master_x + (master_width // 2) - (win_width // 2)
-            pos_y = master_y + (master_height // 2) - (win_height // 2)
-            self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
-        except:
-            # Fallback
-            screen_width = self.winfo_screenwidth()
-            screen_height = self.winfo_screenheight()
-            pos_x = (screen_width // 2) - (win_width // 2)
-            pos_y = (screen_height // 2) - (win_height // 2)
-            self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+        self.win_width = 450
+        self.resizable(True, True)
 
         label = ctk.CTkLabel(
             self, 
@@ -360,8 +444,8 @@ class ModelNicknameDialog(ctk.CTkToplevel):
         save_btn = ctk.CTkButton(
             button_frame, 
             text="Guardar",
-            fg_color="#28A745",
-            hover_color="#218838",
+            fg_color=resolve_theme_color(master, "DOWNLOAD_BTN", ["#28A745", "#218838"]),
+            hover_color=resolve_theme_color(master, "DOWNLOAD_BTN_HOVER", ["#218838", "#1e7e34"]),
             command=self.save
         )
         save_btn.grid(row=0, column=0, padx=(0, 10), sticky="ew")
@@ -369,12 +453,13 @@ class ModelNicknameDialog(ctk.CTkToplevel):
         cancel_btn = ctk.CTkButton(
             button_frame,
             text="Cancelar",
-            fg_color="transparent",
-            border_width=1,
-            text_color=("gray10", "gray90"),
+            fg_color=resolve_theme_color(master, "CANCEL_BTN", ["#dc3545", "#c82333"]),
+            hover_color=resolve_theme_color(master, "CANCEL_BTN_HOVER", ["#c82333", "#bd2130"]),
             command=self.cancel
         )
         cancel_btn.grid(row=0, column=1, padx=(10, 0), sticky="ew")
+        
+        center_and_fit(self, self.win_width, master=master)
     
     def save(self):
         nickname = self.name_entry.get().strip()
@@ -405,46 +490,53 @@ class PlaylistErrorDialog(ctk.CTkToplevel):
         self.result = "cancel" # Default
         
         # --- Centrar ventana ---
-        self.geometry("500x200")
-        self.resizable(False, False)
-        self.update_idletasks()
-        win_width = 500
-        win_height = self.winfo_reqheight() # Ajustar altura al contenido
-        master_geo = self.master.geometry()
-        master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
-        pos_x = master_x + (master_width // 2) - (win_width // 2)
-        pos_y = master_y + (master_height // 2) - (win_height // 2)
-        self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+        self.win_width = 540
+        self.resizable(True, True)
+        self.bind("<Configure>", self._on_resize)
 
-        container = ctk.CTkFrame(self, fg_color="transparent")
-        container.pack(padx=20, pady=20, fill="both", expand=True)
+        self.container = ctk.CTkFrame(self, fg_color="transparent")
+        self.container.pack(padx=20, pady=20, fill="both", expand=True)
         
-        main_label = ctk.CTkLabel(container, text="Se detectó un problema de colección.", font=ctk.CTkFont(size=15, weight="bold"), wraplength=460)
-        main_label.pack(pady=(0, 10), anchor="w")
+        self.main_label = ctk.CTkLabel(self.container, text="Se detectó un problema de colección.", font=ctk.CTkFont(size=15, weight="bold"), 
+                                  text_color=resolve_theme_color(master, "VIEWER_TEXT", ["#333", "#ccc"]),
+                                  wraplength=480)
+        self.main_label.pack(pady=(0, 10), anchor="w")
         
         # Mostrar solo una parte de la URL
         display_url = (url_fragment[:70] + '...') if len(url_fragment) > 70 else url_fragment
         
-        details_label = ctk.CTkLabel(container, text=f"La URL '{display_url}' parece ser parte de una colección (playlist, set, o hilo) que no se puede descargar en modo individual.", font=ctk.CTkFont(size=13), wraplength=460, justify="left")
-        details_label.pack(pady=5, anchor="w")
+        self.details_label = ctk.CTkLabel(self.container, text=f"La URL '{display_url}' parece ser parte de una colección (playlist, set, o hilo) que no se puede descargar en modo individual.", font=ctk.CTkFont(size=13), wraplength=480, justify="left")
+        self.details_label.pack(pady=5, anchor="w")
         
-        question_label = ctk.CTkLabel(container, text="¿Qué deseas hacer?", font=ctk.CTkFont(size=12), wraplength=450)
-        question_label.pack(pady=10, anchor="w")
+        self.question_label = ctk.CTkLabel(self.container, text="¿Qué deseas hacer?", font=ctk.CTkFont(size=12), wraplength=480)
+        self.question_label.pack(pady=10, anchor="w")
         
-        button_frame = ctk.CTkFrame(container, fg_color="transparent")
+        button_frame = ctk.CTkFrame(self.container, fg_color="transparent")
         button_frame.pack(pady=15, fill="x")
         button_frame.grid_columnconfigure((0, 1), weight=1)
         
-        accept_btn = ctk.CTkButton(button_frame, text="Enviar a Lotes", command=lambda: self.set_result("send_to_batch"))
-        cancel_btn = ctk.CTkButton(button_frame, text="Cancelar", fg_color="red", hover_color="#990000", command=lambda: self.set_result("cancel"))
+        accept_btn = ctk.CTkButton(button_frame, text="Enviar a Lotes", 
+                                  fg_color=resolve_theme_color(master, "PROCESS_BTN", ["#6F42C1", "#59369A"]),
+                                  hover_color=resolve_theme_color(master, "PROCESS_BTN_HOVER", ["#59369A", "#4c2d82"]),
+                                  command=lambda: self.set_result("send_to_batch"))
+        cancel_btn = ctk.CTkButton(button_frame, text="Cancelar", 
+                                 fg_color=resolve_theme_color(master, "CANCEL_BTN", ["#dc3545", "#c82333"]), 
+                                 hover_color=resolve_theme_color(master, "CANCEL_BTN_HOVER", ["#c82333", "#bd2130"]), 
+                                 command=lambda: self.set_result("cancel"))
         
         accept_btn.grid(row=0, column=0, padx=(0, 10), sticky="ew")
         cancel_btn.grid(row=0, column=1, padx=(10, 0), sticky="ew")
         
-        # Ajustar altura de nuevo después de añadir widgets
-        self.update_idletasks()
-        win_height = self.winfo_reqheight()
-        self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+        center_and_fit(self, self.win_width, master=master)
+
+    def _on_resize(self, event):
+        """Ajusta el wraplength de las etiquetas al cambiar el ancho de la ventana."""
+        curr_width = self.winfo_width()
+        if curr_width > 100:
+            wrap = curr_width - 60
+            if hasattr(self, 'main_label'): self.main_label.configure(wraplength=wrap)
+            if hasattr(self, 'details_label'): self.details_label.configure(wraplength=wrap)
+            if hasattr(self, 'question_label'): self.question_label.configure(wraplength=wrap)
 
     def set_result(self, result):
         self.result = result
@@ -500,10 +592,10 @@ class Tooltip:
         if self.tooltip_window and self.tooltip_window.winfo_exists():
             return
 
-        # Colores (Tema Oscuro)
-        bg_color = "#1a1a1a"
-        fg_color = "#e0e0e0"
-        border_color = "#404040"
+        # Colores (Dinámicos)
+        bg_color = resolve_theme_color(self.widget, "LISTBOX_BG", ["#f0f0f0", "#1a1a1a"])
+        fg_color = resolve_theme_color(self.widget, "LISTBOX_TEXT", ["#111", "#e0e0e0"])
+        border_color = resolve_theme_color(self.widget, "SECONDARY_BTN", ["#ccc", "#404040"])
 
         # 1. Crear ventana (Oculta)
         self.tooltip_window = ctk.CTkToplevel(self.widget)
@@ -729,19 +821,9 @@ class MultiPageDialog(ctk.CTkToplevel):
         
         self.result = None # Aquí guardaremos el string del rango
 
-        win_width = 450
-        win_height = 270
-        
-        # Centrar la ventana (código de tus otros diálogos)
+        self.win_width = 450
+        self.geometry(f"{self.win_width}x270")
         self.resizable(False, False)
-        self.update_idletasks()
-        
-        master_geo = self.master.app.geometry() 
-        
-        master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
-        pos_x = master_x + (master_width // 2) - (win_width // 2)
-        pos_y = master_y + (master_height // 2) - (win_height // 2)
-        self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
 
         container = ctk.CTkFrame(self, fg_color="transparent")
         container.pack(padx=20, pady=20, fill="both", expand=True)
@@ -776,8 +858,11 @@ class MultiPageDialog(ctk.CTkToplevel):
         # Usar los colores del botón de proceso de la app principal
         btn_accept = ctk.CTkButton(button_frame, text="Aceptar Rango", 
                                   command=lambda: self.set_result(self.range_entry.get()),
-                                  fg_color="#6F42C1", hover_color="#59369A")
+                                  fg_color=resolve_theme_color(master, "PROCESS_BTN", ["#6F42C1", "#59369A"]), 
+                                  hover_color=resolve_theme_color(master, "PROCESS_BTN_HOVER", ["#59369A", "#4c2d82"]))
         btn_accept.grid(row=0, column=2, padx=(5, 0), sticky="ew")
+
+        center_and_fit(self, self.win_width, master=master)
 
     def set_result(self, range_string):
         if not range_string.strip():
@@ -809,31 +894,16 @@ class ManualDownloadDialog(ctk.CTkToplevel):
         # Asegurar que la carpeta exista
         os.makedirs(target_dir, exist_ok=True)
 
-        self.geometry("500x380")
+        self.win_width = 500
+        self.geometry(f"{self.win_width}x380")
         self.resizable(False, False)
         self.attributes("-topmost", True)
         self.grab_set() # Hace el diálogo modal
 
-        # Centrar ventana
-        self.update_idletasks()
-        # Usamos la geometría del master para centrar
-        try:
-            master_x = master.winfo_rootx()
-            master_y = master.winfo_rooty()
-            master_w = master.winfo_width()
-            master_h = master.winfo_height()
-            
-            x = master_x + (master_w // 2) - (500 // 2)
-            y = master_y + (master_h // 2) - (380 // 2)
-            self.geometry(f"+{x}+{y}")
-        except:
-            # Fallback si falla el cálculo
-            self.geometry("500x380")
-
         # --- Contenido UI ---
         ctk.CTkLabel(self, text="⚠️ Este modelo requiere descarga manual", 
                      font=ctk.CTkFont(size=16, weight="bold"), 
-                     text_color="orange").pack(pady=(15, 5))
+                     text_color=resolve_theme_color(master, "PROCESS_BTN", "orange")).pack(pady=(15, 5))
         
         msg = (
             f"El modelo '{filename}' pertenece a BriaAI y requiere licencia.\n"
@@ -858,14 +928,18 @@ class ManualDownloadDialog(ctk.CTkToplevel):
 
         # Botón Carpeta
         folder_btn = ctk.CTkButton(self, text="📂 Abrir Carpeta de Destino", 
-                                   fg_color="#555555", hover_color="#444444", 
+                                   fg_color=resolve_theme_color(master, "SECONDARY_BTN", ["#555555", "#444444"]), 
+                                   hover_color=resolve_theme_color(master, "SECONDARY_BTN_HOVER", ["#444444", "#333333"]), 
                                    command=self.open_target_folder)
         folder_btn.pack(pady=5)
 
         # Botón Confirmar
         ctk.CTkButton(self, text="Listo, ya lo pegué", 
-                      fg_color="green", hover_color="darkgreen", 
+                      fg_color=resolve_theme_color(master, "DOWNLOAD_BTN", ["#28a745", "#218838"]), 
+                      hover_color=resolve_theme_color(master, "DOWNLOAD_BTN_HOVER", ["#218838", "#1e7e34"]), 
                       command=self.check_and_close).pack(pady=(15, 10))
+
+        center_and_fit(self, self.win_width, master=master)
 
     def open_target_folder(self):
         try:
@@ -922,8 +996,9 @@ class PlaylistSelectionDialog(ctk.CTkToplevel):
         self.visible_range = (0, 0)  # (start_index, end_index)
         
         # Configuración
-        window_width = 500
-        window_height = 700
+        self.win_width = 500
+        self.win_height = 700
+        self.geometry(f"{self.win_width}x{self.win_height}")
         self.resizable(False, False)
         
         # Layout principal
@@ -933,17 +1008,7 @@ class PlaylistSelectionDialog(ctk.CTkToplevel):
         # Construir UI
         self._create_ui()
         
-        # Centrar ventana
-        self.update_idletasks()
-        master_x = master.winfo_rootx()
-        master_y = master.winfo_rooty()
-        master_w = master.winfo_width()
-        master_h = master.winfo_height()
-        
-        pos_x = int(master_x + (master_w // 2) - (window_width // 2))
-        pos_y = int(master_y + (master_h // 2) - (window_height // 2))
-        
-        self.geometry(f"{window_width}x{window_height}+{pos_x}+{pos_y}")
+        center_and_fit(self, self.win_width, height=self.win_height, master=master)
         
         # --- SECUENCIA DE APARICIÓN ROBUSTA ---
         
@@ -1012,9 +1077,13 @@ class PlaylistSelectionDialog(ctk.CTkToplevel):
         
         ctk.CTkLabel(btn_frame, text=f"Total: {len(self.entries)} videos", text_color="gray").pack(side="left")
         ctk.CTkButton(btn_frame, text="Marcar Todos", width=90, height=24, 
-                     command=self._select_all, fg_color="#444", hover_color="#555").pack(side="right", padx=(5, 0))
+                     fg_color=resolve_theme_color(self.master, "SECONDARY_BTN", ["#444", "#555"]),
+                     hover_color=resolve_theme_color(self.master, "SECONDARY_BTN_HOVER", ["#555", "#666"]),
+                     command=self._select_all).pack(side="right", padx=(5, 0))
         ctk.CTkButton(btn_frame, text="Desmarcar", width=90, height=24, 
-                     command=self._deselect_all, fg_color="#444", hover_color="#555").pack(side="right", padx=5)
+                     fg_color=resolve_theme_color(self.master, "SECONDARY_BTN", ["#444", "#555"]),
+                     hover_color=resolve_theme_color(self.master, "SECONDARY_BTN_HOVER", ["#555", "#666"]),
+                     command=self._deselect_all).pack(side="right", padx=5)
         
         # === LISTA VIRTUALIZADA ===
         list_container = ctk.CTkFrame(self)
@@ -1023,32 +1092,23 @@ class PlaylistSelectionDialog(ctk.CTkToplevel):
         list_container.grid_rowconfigure(0, weight=1)
         
         # Canvas + Scrollbar
-        # AÑADIDO: bg="#2b2b2b" para que el fondo no sea blanco
-        self.canvas = ctk.CTkCanvas(list_container, highlightthickness=0, bg="#2b2b2b")
+        list_bg = resolve_theme_color(self.master, "LISTBOX_BG", ["#f9f9fa", "#2b2b2b"])
+        self.canvas = ctk.CTkCanvas(list_container, highlightthickness=0, bg=list_bg)
         self.scrollbar = ctk.CTkScrollbar(list_container, command=self._on_scrollbar_command)
         
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.scrollbar.grid(row=0, column=1, sticky="ns")
         
-        # Frame interno (contiene todos los ítems virtuales)
-        # IMPORTANTE: fg_color="transparent" para que no tape el fondo
-        self.items_container = ctk.CTkFrame(self.canvas, fg_color="transparent")
-        
-        # Creamos la ventana en el canvas
-        self.canvas_window = self.canvas.create_window((0, 0), window=self.items_container, anchor="nw")
-        
         # --- Lógica de Scroll Virtual (Bypass límite 32k pixels) ---
         self.y_offset = 0  # Posición vertical virtual en píxeles
-        
-        # Desvinculamos el set automático. Lo haremos manual en _update_scrollbar
-        # self.canvas.configure(yscrollcommand=self.scrollbar.set) <--- ELIMINADO
         
         # Bind eventos
         self.canvas.bind("<Configure>", self._on_canvas_configure)
         
-        # 🔧 NUEVO: Frame contenedor que NO se mueve
+        # 🔧 FRAME CONTENEDOR (Virtualizado)
         # ✅ CORRECCIÓN CRÍTICA: Usar color sólido (NO transparent) para evitar glitches visuales al hacer scroll
-        self.items_container = ctk.CTkFrame(self.canvas, fg_color="#2b2b2b")
+        # Solo creamos UNO y lo vinculamos una vez al canvas.
+        self.items_container = ctk.CTkFrame(self.canvas, fg_color=list_bg)
         
         # Creamos la ventana anclada siempre en 0,0
         self.canvas_window = self.canvas.create_window((0, 0), window=self.items_container, anchor="nw")
@@ -1063,9 +1123,13 @@ class PlaylistSelectionDialog(ctk.CTkToplevel):
         footer_frame = ctk.CTkFrame(self, fg_color="transparent")
         footer_frame.grid(row=2, column=0, sticky="ew", padx=15, pady=15)
         
-        ctk.CTkButton(footer_frame, text="Cancelar", fg_color="#DC3545", hover_color="#C82333", 
+        ctk.CTkButton(footer_frame, text="Cancelar", 
+                     fg_color=resolve_theme_color(self.master, "CANCEL_BTN", ["#DC3545", "#C82333"]), 
+                     hover_color=resolve_theme_color(self.master, "CANCEL_BTN_HOVER", ["#C82333", "#BD2130"]), 
                      width=100, command=self._on_cancel).pack(side="left")
-        ctk.CTkButton(footer_frame, text="Confirmar y Añadir a Cola", fg_color="#28A745", hover_color="#218838", 
+        ctk.CTkButton(footer_frame, text="Confirmar y Añadir a Cola", 
+                     fg_color=resolve_theme_color(self.master, "DOWNLOAD_BTN", ["#28A745", "#218838"]), 
+                     hover_color=resolve_theme_color(self.master, "DOWNLOAD_BTN_HOVER", ["#218838", "#1e7e34"]), 
                      width=180, command=self._on_confirm).pack(side="right")
         
         # Datos de checkboxes (siempre en memoria, ligero)
@@ -1188,10 +1252,11 @@ class PlaylistSelectionDialog(ctk.CTkToplevel):
         entry = self.entries[idx]
         
         # Frame del ítem
+        list_bg = resolve_theme_color(self.master, "LISTBOX_BG", ["#f9f9fa", "#2b2b2b"])
         item_frame = ctk.CTkFrame(
             self.items_container, 
             height=self.item_height,
-            fg_color="#2b2b2b" # <--- CORRECCIÓN CRÍTICA: Color sólido para evitar glitches visuales
+            fg_color=list_bg # <--- CORRECCIÓN CRÍTICA: Color sólido para evitar glitches visuales
         )
         # NO HACEMOS .place() AQUÍ.
         item_frame.pack_propagate(False)
@@ -1204,8 +1269,9 @@ class PlaylistSelectionDialog(ctk.CTkToplevel):
         chk.grid(row=0, column=0, padx=(5, 5), pady=5, sticky="w")
         
         # 2. Miniatura
+        thumb_bg = resolve_theme_color(self.master, "SECONDARY_BTN", ["#ddd", "#222"])
         thumb_label = ctk.CTkLabel(item_frame, text="", width=80, height=45, 
-                                fg_color="#222", corner_radius=4)
+                                fg_color=thumb_bg, corner_radius=4)
         thumb_label.grid(row=0, column=1, padx=5, pady=5)
         
         # Aplicar miniatura si está en caché
@@ -1492,16 +1558,18 @@ class DependencySetupWindow(ctk.CTkToplevel):
             pos_y = (self.winfo_screenheight() // 2) - (win_height // 2)
             
         self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
-        self.configure(fg_color="#1a1a1a")
+        self.configure(fg_color=resolve_theme_color(self, "LISTBOX_BG", "#1a1a1a"))
 
         # 2. Cola de Comunicación (Thread Safety)
         self.update_queue = queue.Queue()
         
         # 3. Estructura UI (Sin bordes redondeados)
-        self.main_container = ctk.CTkFrame(self, fg_color="#242424", corner_radius=0, border_width=0)
+        self.main_container = ctk.CTkFrame(self, fg_color=resolve_theme_color(self, "SECONDARY_BTN", "#242424"), corner_radius=0, border_width=0)
         self.main_container.pack(fill="both", expand=True)
         
-        ctk.CTkLabel(self.main_container, text="DowP Downloader", font=ctk.CTkFont(size=22, weight="bold"), text_color="#52a2f2").pack(pady=(30, 0))
+        ctk.CTkLabel(self.main_container, text="DowP Downloader", 
+                     font=ctk.CTkFont(size=22, weight="bold"), 
+                     text_color=resolve_theme_color(self, "VIEWER_TEXT", "#52a2f2")).pack(pady=(30, 0))
         ctk.CTkLabel(self.main_container, text="Componentes de Motor y Video", font=ctk.CTkFont(size=12), text_color="gray").pack(pady=(0, 20))
 
         # Lista de dependencias (solo texto)
@@ -1523,8 +1591,14 @@ class DependencySetupWindow(ctk.CTkToplevel):
         self.footer_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         self.footer_frame.pack(fill="x", side="bottom", pady=20, padx=40)
         
-        self.retry_btn = ctk.CTkButton(self.footer_frame, text="Reintentar Errors", fg_color="#6F42C1", hover_color="#59369A", command=self.start_installation)
-        self.close_btn = ctk.CTkButton(self.footer_frame, text="Omitir y Entrar", fg_color="gray", hover_color="#555555", command=self.destroy)
+        self.retry_btn = ctk.CTkButton(self.footer_frame, text="Reintentar Errors", 
+                                      fg_color=resolve_theme_color(self, "PROCESS_BTN", ["#6F42C1", "#59369A"]), 
+                                      hover_color=resolve_theme_color(self, "PROCESS_BTN_HOVER", ["#59369A", "#4c2d82"]), 
+                                      command=self.start_installation)
+        self.close_btn = ctk.CTkButton(self.footer_frame, text="Omitir y Entrar", 
+                                      fg_color=resolve_theme_color(self, "SECONDARY_BTN", ["#6c757d", "#5a6268"]), 
+                                      hover_color=resolve_theme_color(self, "SECONDARY_BTN_HOVER", ["#5a6268", "#4e555b"]), 
+                                      command=self.destroy)
         self.retry_btn.pack_forget()
         self.close_btn.pack_forget()
 
@@ -1700,39 +1774,25 @@ class ONNXWarningDialog(ctk.CTkToplevel):
         self.result_continue = False
         self.dont_show_again = False
         
-        # Dimensiones y centrado
-        win_width = 550
-        win_height = 320
-        self.geometry(f"{win_width}x{win_height}")
-        self.resizable(False, False)
-        
-        self.update_idletasks()
-        try:
-            root = master
-            while hasattr(root, 'master') and root.master is not None:
-                root = root.master
-            master_geo = root.geometry()
-            master_width, master_height, master_x, master_y = map(int, re.split('[x+]', master_geo))
-            pos_x = master_x + (master_width // 2) - (win_width // 2)
-            pos_y = master_y + (master_height // 2) - (win_height // 2)
-            self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
-        except:
-            screen_width = self.winfo_screenwidth()
-            screen_height = self.winfo_screenheight()
-            pos_x = (screen_width // 2) - (win_width // 2)
-            pos_y = (screen_height // 2) - (win_height // 2)
-            self.geometry(f"{win_width}x{win_height}+{pos_x}+{pos_y}")
+        # 1. Definimos solo el ANCHO inicial (el alto será dinámico)
+        self.win_width = 580
+        self.resizable(True, True) # Único diálogo redimensionable
 
         # Contenedor principal
-        container = ctk.CTkFrame(self, fg_color="transparent")
-        container.pack(padx=20, pady=20, fill="both", expand=True)
+        self.container = ctk.CTkFrame(self, fg_color="transparent")
+        self.container.pack(padx=30, pady=25, fill="both", expand=True)
+        
+        # Vincular el cambio de tamaño para ajustar el wraplength
+        self.bind("<Configure>", self._on_resize)
 
         # Título
-        title_label = ctk.CTkLabel(container, text="Aviso de Uso de Recursos (IA)", font=ctk.CTkFont(size=16, weight="bold"), text_color="#E5A04B")
-        title_label.pack(anchor="w", pady=(0, 10))
+        self.title_label = ctk.CTkLabel(self.container, text="Aviso de Uso de Recursos (IA)", 
+                                  font=ctk.CTkFont(size=18, weight="bold"), 
+                                  text_color="#E5A04B")
+        self.title_label.pack(anchor="w", pady=(0, 15))
 
         # Texto explicativo
-        info_text = (
+        self.info_text_str = (
             "Estás a punto de usar una herramienta basada en modelos de Inteligencia Artificial (ONNX).\n\n"
             "Estos modelos requieren una carga pesada en la memoria de tu tarjeta gráfica (VRAM) o procesador (RAM). "
             "Es completamente NORMAL que durante los primeros segundos la aplicación parezca congelarse o que tu "
@@ -1740,27 +1800,29 @@ class ONNXWarningDialog(ctk.CTkToplevel):
             "Tip: Puedes activar la opción 'Mantener modelos cargados' en Ajustes > General para evitar que "
             "esto suceda repetidamente si vas a procesar varias cosas seguidas."
         )
-        info_label = ctk.CTkLabel(container, text=info_text, font=ctk.CTkFont(size=13), justify="left", wraplength=510)
-        info_label.pack(anchor="w", pady=(0, 15))
+        # Ponemos un wraplength inicial para evitar que la ventana intente ocupar toda la pantalla al nacer
+        self.info_label = ctk.CTkLabel(self.container, text=self.info_text_str, font=ctk.CTkFont(size=13), 
+                                 justify="left", wraplength=500)
+        self.info_label.pack(anchor="w", pady=(0, 20))
 
         # Checkbox "No volver a mostrar"
         self.checkbox_var = ctk.BooleanVar(value=False)
         self.dont_show_checkbox = ctk.CTkCheckBox(
-            container, 
+            self.container, 
             text="Comprendido, no volver a mostrar este mensaje.",
             variable=self.checkbox_var
         )
         self.dont_show_checkbox.pack(anchor="w", pady=(0, 20))
 
         # Botones
-        button_frame = ctk.CTkFrame(container, fg_color="transparent")
+        button_frame = ctk.CTkFrame(self.container, fg_color="transparent")
         button_frame.pack(fill="x", side="bottom")
         button_frame.grid_columnconfigure((0, 1), weight=1)
 
         continue_btn = ctk.CTkButton(
             button_frame, 
             text="Continuar", 
-            fg_color="#28A745", hover_color="#218838",
+            fg_color=resolve_theme_color(self, "DOWNLOAD_BTN", ["#28a745", "#218838"]),
             command=self._on_continue
         )
         continue_btn.grid(row=0, column=0, padx=(0, 10), sticky="ew")
@@ -1768,10 +1830,24 @@ class ONNXWarningDialog(ctk.CTkToplevel):
         cancel_btn = ctk.CTkButton(
             button_frame, 
             text="Cancelar", 
-            fg_color="gray", hover_color="#555555",
+            fg_color=resolve_theme_color(self, "SECONDARY_BTN", ["#6c757d", "#5a6268"]),
             command=self._on_cancel
         )
         cancel_btn.grid(row=0, column=1, padx=(10, 0), sticky="ew")
+
+        # Ajuste inicial de wraplength y centrado
+        self.after(10, lambda: self._on_resize(None))
+        center_and_fit(self, self.win_width, master=self.master)
+
+    def _on_resize(self, event):
+        """Ajusta el wraplength de las etiquetas al cambiar el ancho de la ventana."""
+        curr_width = self.winfo_width()
+        if curr_width > 100:
+            wrap = curr_width - 80
+            if hasattr(self, 'title_label'):
+                self.title_label.configure(wraplength=wrap)
+            if hasattr(self, 'info_label'):
+                self.info_label.configure(wraplength=wrap)
 
     def _on_continue(self):
         self.result_continue = True
