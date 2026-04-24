@@ -467,6 +467,14 @@ class MainWindow(TkBase):
 
     def __init__(self, launch_target=None, project_root=None, poppler_path=None, inkscape_path=None, splash_screen=None, app_version="0.0.0", theme_data=None, theme_warnings=None):
         super().__init__()
+        
+        # 1. Configuración de ventana inicial (Ocultar y poner icono)
+        self.withdraw()  # Mantener oculta hasta que todo esté listo
+        try:
+            self.iconbitmap(resource_path("DowP-icon.ico"))
+        except:
+            pass
+            
         self.theme_data = theme_data or {}
         self.theme_warnings = theme_warnings or []
         
@@ -481,9 +489,6 @@ class MainWindow(TkBase):
         self.splash_screen = splash_screen 
         if self.splash_screen:
             self.splash_screen.update_status("Inicializando componentes...")
-
-        # ✅ QUITAMOS withdraw() para que la ventana principal sea visible desde el inicio
-        # self.withdraw()
         
         # 📏 ESCALADO INTELIGENTE PARA MONITORES PEQUEÑOS
         # Si la altura de la pantalla es menor a 900px (ej: laptops 1366x768),
@@ -586,7 +591,6 @@ class MainWindow(TkBase):
         self.cancellation_event = threading.Event()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.title(f"DowP {self.APP_VERSION}")
-        self.iconbitmap(resource_path("DowP-icon.ico"))
         
         # Obtener dimensiones de pantalla
         screen_width = self.winfo_screenwidth()
@@ -2205,9 +2209,9 @@ class MainWindow(TkBase):
                 self.image_tab.upscale_model_menu.configure(values=models)
 
     def _ensure_theme_template(self):
-        """Crea o actualiza el archivo de plantilla con notas detalladas para el usuario."""
+        """Crea o actualiza el archivo de plantilla basándose en dorado_premium.json como modelo de referencia."""
         template_path = os.path.join(self.USER_THEMES_DIR, "plantilla_tema.json")
-        TEMPLATE_VERSION = "4.0"
+        TEMPLATE_VERSION = "5.0"
         
         should_update = not os.path.exists(template_path)
         
@@ -2226,125 +2230,46 @@ class MainWindow(TkBase):
         if should_update:
             try:
                 import json
-                base_path = getattr(sys, '_MEIPASS', self.APP_BASE_PATH)
-                green_path = os.path.join(base_path, "src", "gui", "themes", "green.json")
-                
-                theme_data = {}
-                if os.path.exists(green_path):
-                    with open(green_path, 'r', encoding='utf-8') as f:
-                        theme_data = json.load(f)
-                
-                # Instrucciones claras y sin emojis
-                instructions = {
-                    "VERSION": TEMPLATE_VERSION,
-                    "01_GUIA": "GUIA DE TEMAS DOWP v5.0 - Edita este archivo para crear tu propio estilo visual.",
-                    "02_FORMATO": "Casi todos los valores de color aceptan una lista con dos elementos: [Color Modo Claro, Color Modo Oscuro]. Por ejemplo: ['#FFFFFF', '#1D1D1D'].",
-                    "03_MODO_CLARO": "Si algo no se ve bien en modo claro, ajusta el PRIMER valor de la lista.",
-                    "04_MODO_OSCURO": "Si algo no se ve bien en modo oscuro, ajusta el SEGUNDO valor de la lista.",
-                    "05_FONDOS": "Cambia 'CTk', 'CTkToplevel' y 'CTkFrame' en este JSON para modificar el color base de ventanas y paneles.",
-                    "06_AVISO": "IMPORTANTE: No uses 'transparent' en campos 'border_color'. Usa siempre un color solido como '#333333'.",
-                    "07_COLORES": "Usa codigos hexadecimales (ej: #AF52DE) para maxima precision. Tambien se aceptan nombres como 'gray50', 'white', 'black'.",
-                    "08_CUSTOM_COLORS": "La seccion 'CustomColors' controla botones, listas, visores y otros elementos especificos de la interfaz.",
-                    "09_COMO_USAR": "1. Copia este archivo con otro nombre (ej: mi_tema.json). 2. Edita los colores a tu gusto. 3. En DowP, ve a Ajustes > Tema y selecciona tu tema o importalo."
-                }
-                
-                # Colores personalizados con todas las claves activas en la aplicacion
-                custom_colors_example = {
-                    "_NOTA_BOTONES": "Niveles de jerarquia para botones: Principal (Accion), Secundario (Estado), Terciario (Utilidad), Cuaternario (Discreto).",
-
-                    "DOWNLOAD_BTN": ["#28A745", "#218838"],
-                    "DOWNLOAD_BTN_HOVER": ["#218838", "#1E7E34"],
-                    "DOWNLOAD_BTN_TEXT": ["white", "white"],
-
-                    "ANALYZE_BTN": ["#007BFF", "#0069D9"],
-                    "ANALYZE_BTN_HOVER": ["#0069D9", "#0062CC"],
-                    "ANALYZE_BTN_TEXT": ["white", "white"],
-
-                    "CANCEL_BTN": ["#DC3545", "#C82333"],
-                    "CANCEL_BTN_HOVER": ["#C82333", "#BD2130"],
-                    "CANCEL_BTN_TEXT": ["white", "white"],
-
-                    "PROCESS_BTN": ["#6F42C1", "#59369A"],
-                    "PROCESS_BTN_HOVER": ["#59369A", "#51318D"],
-                    "PROCESS_BTN_TEXT": ["white", "white"],
-
-                    "SECONDARY_BTN": ["#555555", "#444444"],
-                    "SECONDARY_BTN_HOVER": ["#444444", "#333333"],
-                    "SECONDARY_BTN_TEXT": ["white", "white"],
-
-                    "TERTIARY_BTN": ["#A0522D", "#8B4513"],
-                    "TERTIARY_BTN_HOVER": ["#8B4513", "#5D2E0B"],
-                    "TERTIARY_BTN_TEXT": ["white", "white"],
-
-                    "QUATERNARY_BTN": ["#E5DCC5", "#3F3F46"],
-                    "QUATERNARY_BTN_HOVER": ["#D9CCB0", "#323238"],
-                    "QUATERNARY_BTN_TEXT": ["gray10", "#DCE4EE"],
-
-                    "_NOTA_DND": "Colores del area de arrastrar y soltar (Drag and Drop) de la pestaña de descarga.",
-
-                    "DND_BORDER": ["#007BFF", "#00BFFF"],
-                    "DND_BG": ["#1a3d5c", "#0d1f2e"],
-                    "DND_TEXT": ["#00BFFF", "#FFFFFF"],
-
-                    "_NOTA_ESTADOS": "Colores de los indicadores de estado en la cola de descargas por lotes.",
-
-                    "STATUS_SUCCESS": ["#28A745", "#218838"],
-                    "STATUS_ERROR": ["#DC3545", "#C82333"],
-                    "STATUS_WARNING": ["#FFA500", "#FF8C00"],
-                    "STATUS_PENDING": ["#565B5E", "#565B5E"],
-                    "JOB_ACTION_ICON_COLOR": ["black", "white"],
-                    "JOB_CANCEL_ICON_COLOR": ["#DC3545", "#DC3545"],
-
-                    "_NOTA_LISTA": "Colores de las listas (Archivos, Modelos). Usado en Listbox y tablas personalizadas.",
-
-                    "LISTBOX_BG": ["#FFFFFF", "#1D1D1D"],
-                    "LISTBOX_TEXT": ["black", "white"],
-                    "LISTBOX_SELECTED_BG": ["#1F6AA5", "#1F6AA5"],
-                    "LISTBOX_SELECTED_TEXT": ["white", "white"],
-
-                    "_NOTA_INTERFAZ": "Colores de estructura: Subtitulos, Tarjetas (Cards) de opciones y Visor de imagenes.",
-
-                    "VIEWER_BG": ["#F0F0F0", "#1D1D1D"],
-                    "VIEWER_BORDER": ["#565B5E", "#565B5E"],
-                    "SECTION_SUBTITLE": ["#1F6AA5", "#52A2F2"],
-                    "CONFIG_CARD_BG": ["gray85", "gray20"],
-                    "CONFIG_CARD_BORDER": ["gray75", "gray30"],
-                    "TRANSPARENCY_GRID_1": ["#E1E1E1", "#252525"],
-                    "TRANSPARENCY_GRID_2": ["#F0F0F0", "#1D1D1D"],
-
-                    "_NOTA_HUD": "Colores de las etiquetas informativas superpuestas en el visor y paneles laterales.",
-
-                    "HUD_BG": ["#333333", "#222222"],
-                    "HUD_TEXT": ["white", "white"],
-                    "SEPARATOR_COLOR": ["gray75", "gray35"],
-                    "OPTIONS_PANEL_BG": ["#E5E5E5", "#2B2B2B"],
-
-                    "DISABLED_TEXT": ["#A0A0A0", "#D3D3D3"],
-                    "DISABLED_FG": ["#565b5f", "#565b5f"],
-
-                    "_NOTA_CONSOLA": "Colores de la Consola de Diagnostico.",
-
-                    "CONSOLE_BG": ["#FFFFFF", "#1D1D1D"],
-                    "CONSOLE_TEXT": ["black", "white"]
-                }
-                
-                # Crear nuevo diccionario con instrucciones primero
                 from collections import OrderedDict
+                base_path = getattr(sys, '_MEIPASS', self.APP_BASE_PATH)
+                
+                # Usar dorado_premium.json como modelo base (tema de referencia probado y pulido)
+                premium_path = os.path.join(base_path, "src", "gui", "themes", "dorado_premium.json")
+                
+                if not os.path.exists(premium_path):
+                    print(f"ADVERTENCIA: No se encontró dorado_premium.json en {premium_path}. No se puede crear plantilla.")
+                    return
+                
+                with open(premium_path, 'r', encoding='utf-8') as f:
+                    premium_data = json.load(f)
+                
+                # Construir la plantilla basada en la estructura exacta del dorado premium
                 final_template = OrderedDict()
-                final_template["_INSTRUCCIONES_DOWP"] = instructions
                 
-                # Añadir CustomColors de ejemplo si no existen
-                if "CustomColors" not in theme_data:
-                    final_template["CustomColors"] = custom_colors_example
+                # Instrucciones propias de la plantilla (reemplazan las del dorado)
+                final_template["_INSTRUCCIONES_DOWP"] = {
+                    "VERSION": TEMPLATE_VERSION,
+                    "INFO_1": "GUIA DE TEMAS DOWP: Edita este archivo para crear tu propio estilo.",
+                    "INFO_2": "FORMATO DUAL: Casi todos los valores aceptan una lista: ['Color Modo Claro', 'Color Modo Oscuro'].",
+                    "INFO_3": "MODO CLARO: Si el texto o botones no se ven bien en modo claro, ajusta el PRIMER valor de la lista.",
+                    "INFO_4": "FONDO GENERAL: Puedes cambiar 'CTkFrame' y 'CTk' en este JSON para cambiar el color de las ventanas y paneles.",
+                    "AVISO_IMPORTANTE": "No uses 'transparent' en 'border_color', causará errores. Usa un color sólido.",
+                    "CONSEJO": "Usa códigos Hexadecimales (ej: #AF52DE) para máxima precisión.",
+                    "CUSTOM_COLORS": "Usa la sección 'CustomColors' para botones específicos (Descargar, Analizar, etc).",
+                    "COMO_USAR": "1. Copia este archivo con otro nombre (ej: mi_tema.json). 2. Edita los colores. 3. En DowP, Ajustes > Tema > Importar."
+                }
                 
-                for k, v in theme_data.items():
-                    if k != "CustomColors":
-                        final_template[k] = v
+                # Copiar TODAS las secciones del dorado premium (CustomColors, CTk, CTkButton, etc.)
+                # Esto garantiza coherencia total entre CustomColors y los widgets CTk
+                for key, value in premium_data.items():
+                    if key == "_INSTRUCCIONES_DOWP":
+                        continue  # Ya pusimos las instrucciones de plantilla arriba
+                    final_template[key] = value
                 
                 with open(template_path, 'w', encoding='utf-8') as f:
-                    json.dump(final_template, f, indent=2)
+                    json.dump(final_template, f, indent=2, ensure_ascii=False)
                     
-                print(f"INFO: Plantilla de tema con notas creada en: {template_path}")
+                print(f"INFO: Plantilla de tema (basada en Dorado Premium) creada en: {template_path}")
             except Exception as e:
                 print(f"ERROR: No se pudo crear la plantilla de tema: {e}")
 
@@ -2450,15 +2375,47 @@ class MainWindow(TkBase):
         # Nota: CTk no actualiza widgets existentes automáticamente, por eso llamamos a refresh_theme()
         import customtkinter as ctk
         try:
-            # Si es un tema de usuario, necesitamos la ruta completa
             theme = getattr(self, 'selected_theme_accent', 'blue')
+            
+            # Buscar el JSON del tema
             user_json = os.path.join(self.USER_THEMES_DIR, f"{theme}.json")
+            base_path = getattr(sys, '_MEIPASS', self.APP_BASE_PATH)
+            internal_json = os.path.join(base_path, "src", "gui", "themes", f"{theme}.json")
+            
+            found_json = None
             if os.path.exists(user_json):
-                ctk.set_default_color_theme(user_json)
+                found_json = user_json
+            elif os.path.exists(internal_json):
+                found_json = internal_json
+            
+            if found_json:
+                # Cargar, sanitizar y aplanar CTkFont antes de pasarlo a CTk
+                import json, platform
+                with open(found_json, 'r', encoding='utf-8') as f:
+                    raw_data = json.load(f)
+                
+                # Aplanar CTkFont por plataforma
+                if "CTkFont" in raw_data:
+                    font_data = raw_data["CTkFont"]
+                    os_key_map = {"Windows": "Windows", "Darwin": "macOS", "Linux": "Linux"}
+                    os_key = os_key_map.get(platform.system(), "Windows")
+                    if os_key in font_data and isinstance(font_data[os_key], dict):
+                        raw_data["CTkFont"] = font_data[os_key]
+                    elif "family" not in font_data:
+                        for try_key in ["Windows", "macOS", "Linux"]:
+                            if try_key in font_data and isinstance(font_data[try_key], dict):
+                                raw_data["CTkFont"] = font_data[try_key]
+                                break
+                
+                # Guardar versión sanitizada temporal
+                temp_path = os.path.join(self.USER_THEMES_DIR, ".active_theme_sanitized.json")
+                with open(temp_path, 'w', encoding='utf-8') as f:
+                    json.dump(raw_data, f)
+                ctk.set_default_color_theme(temp_path)
             else:
                 ctk.set_default_color_theme(theme)
-        except:
-            pass
+        except Exception as e:
+            print(f"ADVERTENCIA: Error aplicando tema de acento en refresh: {e}")
 
         # Actualizar pestañas que ya tienen implementado refresh_theme()
         if hasattr(self, 'single_tab'):

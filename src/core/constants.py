@@ -643,8 +643,6 @@ UPSCAYL_MODELS_MAP = {
     "realesrgan-x4plus": "Real-ESRGAN (General / Fotografía)",
     "realesrgan-x4plus-anime": "Real-ESRGAN (Anime / Ilustración)",
     "realesr-animevideov3-x4": "Anime Video V3 (x4)",
-    "realesr-animevideov3-x3": "Anime Video V3 (x3)",
-    "realesr-animevideov3-x2": "Anime Video V3 (x2)",
     "RealESRGAN_General_x4_v3": "Real-ESRGAN V3 (Ligero y Rápido)",
     "RealESRGAN_General_WDN_x4_v3": "Real-ESRGAN V3 WDN (Red Profunda)",
     "4xHFA2k": "HFA2k (Texturas de Alta Frecuencia)",

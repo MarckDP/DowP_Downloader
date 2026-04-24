@@ -945,6 +945,33 @@ def check_ghostscript_status(progress_callback):
     except Exception as e:
         return {"status": "error", "message": f"Error verificando Ghostscript: {e}"}
     
+def sanitize_upscayl_models(models_dir):
+    """
+    Purga modelos conocidos por causar errores graves o que han sido descartados.
+    Actualmente elimina Anime Video v3 x2 y x3 por inestabilidad.
+    """
+    if not os.path.exists(models_dir):
+        return
+        
+    blacklist = [
+        "realesr-animevideov3-x2",
+        "realesr-animevideov3-x3"
+    ]
+    
+    purged_any = False
+    for name in blacklist:
+        for ext in [".bin", ".param"]:
+            file_path = os.path.join(models_dir, name + ext)
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    print(f"INFO: Modelo purgado por seguridad (Vía Código): {name}{ext}")
+                    purged_any = True
+                except Exception as e:
+                    print(f"ADVERTENCIA: No se pudo purgar el modelo {name}{ext}: {e}")
+    
+    return purged_any
+    
 def migrate_old_upscaling_models():
     """Migra los modelos antiguos de Real-ESRGAN y RealSR a la carpeta de Upscayl."""
     old_folders = ["realesrgan", "realsr"]
@@ -990,6 +1017,7 @@ def migrate_old_upscaling_models():
                 
     if migrated_any:
         print("INFO: Se han migrado con éxito modelos antiguos a la carpeta de Upscayl.")
+        sanitize_upscayl_models(upscayl_models_dir)
 
 def check_and_download_upscaling_tools(progress_callback, target_tool=None):
     """
@@ -1223,6 +1251,9 @@ def check_and_download_upscaling_tools(progress_callback, target_tool=None):
                                         if not os.path.exists(dst_p):
                                             shutil.copy2(src_p, dst_p)
                                             
+                            # Purgar modelos prohibidos tras extracción de legacy
+                            sanitize_upscayl_models(models_target)
+                            
                             # Limpiar
                             for _ in range(3):
                                 try: os.remove(leg_zip_path); break
@@ -1230,6 +1261,9 @@ def check_and_download_upscaling_tools(progress_callback, target_tool=None):
                             shutil.rmtree(leg_temp_dir, ignore_errors=True)
                         except Exception as e:
                             print(f"ADVERTENCIA: No se pudo descargar legacy models de {leg_name}: {e}")
+
+                # --- PURGA FINAL DE SEGURIDAD ---
+                sanitize_upscayl_models(os.path.join(target_folder, "models"))
 
                 print(f"INFO: [OK] {tool_name} instalado correctamente.")
                 

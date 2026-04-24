@@ -1132,6 +1132,11 @@ class ConfigTab(ctk.CTkFrame):
                 for file in os.listdir(directory):
                     if file.endswith(".json"):
                         name = file[:-5] # Quitar .json
+                        
+                        # 🚫 EXCLUIR: Plantilla y archivos temporales/ocultos
+                        if name == "plantilla_tema" or name.startswith("."):
+                            continue
+                            
                         # Formatear nombre para mostrar (ej: verde_bosque -> Verde Bosque)
                         display = name.replace("_", " ").replace("-", " ").title()
                         self.theme_display_names[name] = display

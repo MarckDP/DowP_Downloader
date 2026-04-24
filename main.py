@@ -363,7 +363,26 @@ if __name__ == "__main__":
 
                 _sanitize_node(_theme_data)
                 
-                # 5. Guardar en un archivo temporal seguro para cargar
+                # 5. Aplanar CTkFont por plataforma (CTk espera family/size/weight directo)
+                # Nuestros temas usan: CTkFont → {Windows: {family, size, weight}, macOS: {...}}
+                if "CTkFont" in _theme_data:
+                    _font_data = _theme_data["CTkFont"]
+                    import platform
+                    _os_name = platform.system()  # "Windows", "Darwin", "Linux"
+                    _os_key_map = {"Windows": "Windows", "Darwin": "macOS", "Linux": "Linux"}
+                    _os_key = _os_key_map.get(_os_name, "Windows")
+                    
+                    # Si tiene la estructura anidada por SO, aplanarla
+                    if _os_key in _font_data and isinstance(_font_data[_os_key], dict):
+                        _theme_data["CTkFont"] = _font_data[_os_key]
+                    elif "family" not in _font_data:
+                        # Intentar con cualquier clave de SO disponible
+                        for _try_key in ["Windows", "macOS", "Linux"]:
+                            if _try_key in _font_data and isinstance(_font_data[_try_key], dict):
+                                _theme_data["CTkFont"] = _font_data[_try_key]
+                                break
+                
+                # 6. Guardar en un archivo temporal seguro para cargar
                 _temp_theme_path = os.path.join(_user_themes_dir, ".active_theme_sanitized.json")
                 with open(_temp_theme_path, 'w', encoding='utf-8') as f:
                     json.dump(_theme_data, f)
