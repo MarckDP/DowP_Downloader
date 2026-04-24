@@ -218,6 +218,20 @@ class SingleDownloadTab(ctk.CTkFrame):
         if hasattr(self, 'import_button'):
             self.import_button.configure(fg_color=self.DOWNLOAD_BTN_COLOR, hover_color=self.DOWNLOAD_BTN_HOVER, text_color=self.DOWNLOAD_BTN_TEXT)
 
+        # 5. Sincronización de Widgets Nativos (Miniatura / DnD)
+        # Los widgets de Tkinter nativo no se actualizan solos con el modo apariencia
+        if hasattr(self, 'dnd_overlay') and self.dnd_overlay.winfo_exists():
+            bg_color = self._get_ctk_fg_color(self.thumbnail_container)
+            self.dnd_overlay.configure(bg=bg_color)
+            
+            # Si hay un placeholder (texto "Arrastra un video aquí"), lo actualizamos también
+            if hasattr(self, 'placeholder_label') and self.placeholder_label.winfo_exists():
+                text_color = "white" if ctk.get_appearance_mode() == "Dark" else "black"
+                self.placeholder_label.configure(bg=bg_color, fg=text_color)
+        
+        # Forzar redibujado inmediato para evitar el glitch de "pasar el mouse"
+        self.update_idletasks()
+
     def _get_ctk_fg_color(self, ctk_widget):
         """
         Obtiene el color de fondo de un widget de CustomTkinter según el tema actual.

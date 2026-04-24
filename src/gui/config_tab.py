@@ -13,6 +13,14 @@ class ConfigTab(ctk.CTkFrame):
         super().__init__(master, *args, **kwargs)
         self.app = app
         
+        # Listas para rastreo de widgets temáticos
+        self.config_cards = []
+        self.config_subtitles = []
+        self.model_family_icons = []
+        
+        # Cargar colores iniciales
+        self._load_theme_colors()
+        
         # Ocupar todo el espacio de la pestaña
         self.pack(expand=True, fill="both")
         
@@ -102,13 +110,16 @@ class ConfigTab(ctk.CTkFrame):
         # --- BLOQUE: APARIENCIA (NUEVO) ---
         ctk.CTkLabel(frame_general, text="Apariencia", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", pady=(10, 2), padx=10)
         
-        appearance_frame = ctk.CTkFrame(frame_general, fg_color=("gray85", "gray20"), corner_radius=10, border_width=1, border_color=("gray75", "gray30"))
-        appearance_frame.pack(fill="x", pady=5, padx=5)
+        self.appearance_frame = ctk.CTkFrame(frame_general, fg_color=self.CONFIG_CARD_BG, corner_radius=self.CONFIG_CARD_RADIUS, border_width=1, border_color=self.CONFIG_CARD_BORDER)
+        self.appearance_frame.pack(fill="x", pady=5, padx=5)
+        self.config_cards.append(self.appearance_frame)
         
-        theme_row = ctk.CTkFrame(appearance_frame, fg_color="transparent")
+        theme_row = ctk.CTkFrame(self.appearance_frame, fg_color="transparent")
         theme_row.pack(fill="x", padx=15, pady=15)
         
-        ctk.CTkLabel(theme_row, text="Color de Acento del Sistema:", font=ctk.CTkFont(size=14, weight="bold"), text_color=("#1F6AA5", "#52A2F2")).pack(side="left")
+        accent_lbl = ctk.CTkLabel(theme_row, text="Color de Acento del Sistema:", font=ctk.CTkFont(size=14, weight="bold"), text_color=self.SECTION_SUBTITLE)
+        accent_lbl.pack(side="left")
+        self.config_subtitles.append(accent_lbl)
         
         # Mapeo de nombres para el menú
         self.theme_display_names = {
@@ -130,10 +141,12 @@ class ConfigTab(ctk.CTkFrame):
         self.theme_menu.pack(side="left", padx=10)
 
         # --- NUEVA FILA: MODO DE APARIENCIA ---
-        mode_row = ctk.CTkFrame(appearance_frame, fg_color="transparent")
+        mode_row = ctk.CTkFrame(self.appearance_frame, fg_color="transparent")
         mode_row.pack(fill="x", padx=15, pady=(0, 15))
         
-        ctk.CTkLabel(mode_row, text="Modo de Apariencia:", font=ctk.CTkFont(size=14, weight="bold"), text_color=("#1F6AA5", "#52A2F2")).pack(side="left")
+        mode_lbl = ctk.CTkLabel(mode_row, text="Modo de Apariencia:", font=ctk.CTkFont(size=14, weight="bold"), text_color=self.SECTION_SUBTITLE)
+        mode_lbl.pack(side="left")
+        self.config_subtitles.append(mode_lbl)
         
         self.appearance_mode_menu = ctk.CTkOptionMenu(
             mode_row,
@@ -157,7 +170,6 @@ class ConfigTab(ctk.CTkFrame):
         )
         self.import_theme_btn.pack(side="left", padx=5)
 
-        # Cargar lista real de temas
         self._refresh_theme_list()
 
         # --- TÍTULO SECCIÓN ---
@@ -165,15 +177,17 @@ class ConfigTab(ctk.CTkFrame):
         ctk.CTkLabel(frame_general, text="Ajustes de procesamiento, modelos de IA y motores vectoriales.", font=ctk.CTkFont(size=11), text_color="gray60").pack(anchor="w", pady=(0, 10), padx=10)
 
         # CUADRO MAESTRO
-        master_frame = ctk.CTkFrame(frame_general, fg_color=("gray85", "gray20"), corner_radius=10, border_width=1, border_color=("gray75", "gray30"))
-        master_frame.pack(fill="x", pady=5, padx=5)
+        self.master_frame = ctk.CTkFrame(frame_general, fg_color=self.CONFIG_CARD_BG, corner_radius=self.CONFIG_CARD_RADIUS, border_width=1, border_color=self.CONFIG_CARD_BORDER)
+        self.master_frame.pack(fill="x", pady=5, padx=5)
+        self.config_cards.append(self.master_frame)
         
         # 1. GESTIÓN DE IA (VRAM)
-        vram_group = ctk.CTkFrame(master_frame, fg_color="transparent")
+        vram_group = ctk.CTkFrame(self.master_frame, fg_color="transparent")
         vram_group.pack(fill="x", padx=15, pady=15)
         
-        vram_header = ctk.CTkLabel(vram_group, text="Motor de Inteligencia Artificial (ONNX)", font=ctk.CTkFont(size=15, weight="bold"), text_color=("#1F6AA5", "#52A2F2"))
+        vram_header = ctk.CTkLabel(vram_group, text="Motor de Inteligencia Artificial (ONNX)", font=ctk.CTkFont(size=15, weight="bold"), text_color=self.SECTION_SUBTITLE)
         vram_header.pack(anchor="w", pady=(0, 5))
+        self.config_subtitles.append(vram_header)
         
         vram_controls = ctk.CTkFrame(vram_group, fg_color="transparent")
         vram_controls.pack(fill="x")
@@ -182,18 +196,28 @@ class ConfigTab(ctk.CTkFrame):
         self.keep_vram_switch = ctk.CTkSwitch(vram_controls, text="Mantener modelos cargados en memoria (VRAM)", variable=self.keep_vram_var, command=self._on_vram_persistence_toggle)
         self.keep_vram_switch.pack(side="left")
         
-        self.clear_vram_btn = ctk.CTkButton(vram_controls, text="Liberar VRAM Ahora", width=160, height=26, font=ctk.CTkFont(size=11, weight="bold"), fg_color=("#DC3545", "#c0392b"), hover_color=("#C82333", "#a93226"), command=self._manual_vram_clear)
+        self.clear_vram_btn = ctk.CTkButton(
+            vram_controls, 
+            text="Liberar VRAM Ahora", 
+            width=160, height=26, 
+            font=ctk.CTkFont(size=11, weight="bold"), 
+            fg_color=self.CANCEL_BTN, 
+            hover_color=self.CANCEL_HOVER, 
+            text_color=self.CANCEL_TEXT, 
+            command=self._manual_vram_clear
+        )
         self.clear_vram_btn.pack(side="right")
         
         # SEPARADOR
-        ctk.CTkFrame(master_frame, height=2, fg_color=("gray80", "gray25")).pack(fill="x", padx=15)
+        ctk.CTkFrame(self.master_frame, height=2, fg_color=("gray80", "gray25")).pack(fill="x", padx=15)
         
         # 2. RESOLUCIÓN Y DPI (LADO A LADO)
-        dpi_group = ctk.CTkFrame(master_frame, fg_color="transparent")
+        dpi_group = ctk.CTkFrame(self.master_frame, fg_color="transparent")
         dpi_group.pack(fill="x", padx=15, pady=15)
         
-        dpi_header = ctk.CTkLabel(dpi_group, text="Calidad de Renderizado y Previsualización", font=ctk.CTkFont(size=15, weight="bold"), text_color=("#1F6AA5", "#52A2F2"))
+        dpi_header = ctk.CTkLabel(dpi_group, text="Calidad de Renderizado y Previsualización", font=ctk.CTkFont(size=15, weight="bold"), text_color=self.SECTION_SUBTITLE)
         dpi_header.pack(anchor="w", pady=(0, 10))
+        self.config_subtitles.append(dpi_header)
         
         dpi_row = ctk.CTkFrame(dpi_group, fg_color="transparent")
         dpi_row.pack(fill="x")
@@ -251,14 +275,15 @@ class ConfigTab(ctk.CTkFrame):
             self.dpi_warning_label.pack(anchor="w", pady=(5, 0))
 
         # SEPARADOR
-        ctk.CTkFrame(master_frame, height=2, fg_color=("gray80", "gray25")).pack(fill="x", padx=15)
+        ctk.CTkFrame(self.master_frame, height=2, fg_color=("gray80", "gray25")).pack(fill="x", padx=15)
         
         # 3. AVANZADO (INKSCAPE Y FONDO)
-        adv_group = ctk.CTkFrame(master_frame, fg_color="transparent")
+        adv_group = ctk.CTkFrame(self.master_frame, fg_color="transparent")
         adv_group.pack(fill="x", padx=15, pady=15)
         
-        adv_header = ctk.CTkLabel(adv_group, text="Opciones Avanzadas y Compatibilidad", font=ctk.CTkFont(size=15, weight="bold"), text_color=("#1F6AA5", "#52A2F2"))
+        adv_header = ctk.CTkLabel(adv_group, text="Opciones Avanzadas y Compatibilidad", font=ctk.CTkFont(size=15, weight="bold"), text_color=self.SECTION_SUBTITLE)
         adv_header.pack(anchor="w", pady=(0, 10))
+        self.config_subtitles.append(adv_header)
         
         # --- FILA 1: FONDO SÓLIDO ---
         self.vector_bg_var = ctk.BooleanVar(value=self.app.vector_force_background)
@@ -274,18 +299,7 @@ class ConfigTab(ctk.CTkFrame):
         self.inkscape_switch = ctk.CTkSwitch(ink_header_row, text="Usar Inkscape para conversiones profesionales", variable=self.inkscape_enabled_var, command=self._on_inkscape_toggle)
         self.inkscape_switch.pack(side="left")
         
-        # Botón de descarga (URL desde constantes o directa si no existe)
-        import webbrowser
-        INKSCAPE_URL = "https://inkscape.org/release/1.4/windows/"
-        self.ink_download_btn = ctk.CTkButton(
-            ink_header_row, 
-            text="Descargar Inkscape 🌐", 
-            width=140, height=24, 
-            font=ctk.CTkFont(size=11), 
-            command=lambda: webbrowser.open(INKSCAPE_URL)
-        )
-        self.ink_download_btn.pack(side="right")
-        
+        # Ruta de Inkscape
         ink_path_frame = ctk.CTkFrame(adv_group, fg_color="transparent")
         ink_path_frame.pack(fill="x", pady=(10, 5))
         
@@ -297,10 +311,33 @@ class ConfigTab(ctk.CTkFrame):
         self.ink_browse_btn = ctk.CTkButton(ink_path_frame, text="Examinar...", width=90, height=28, command=self._browse_inkscape_path)
         self.ink_browse_btn.pack(side="right")
         
+        # Fila de Estado y Acciones de Inkscape
         ink_status_row = ctk.CTkFrame(adv_group, fg_color="transparent")
         ink_status_row.pack(fill="x", pady=(5, 0))
         
-        self.ink_verify_btn = ctk.CTkButton(ink_status_row, text="Verificar Instalación", width=130, height=26, fg_color="#28A745", hover_color="#218838", command=self._check_inkscape_status)
+        # Botón de descarga (A la izquierda del de verificar)
+        import webbrowser
+        INKSCAPE_URL = "https://inkscape.org/release/1.4/windows/"
+        self.ink_download_btn = ctk.CTkButton(
+            ink_status_row, 
+            text="Descargar Inkscape", 
+            width=130, height=26, 
+            fg_color=self.SECONDARY_BTN,
+            hover_color=self.SECONDARY_HOVER,
+            text_color=self.SECONDARY_TEXT,
+            command=lambda: webbrowser.open(INKSCAPE_URL)
+        )
+        self.ink_download_btn.pack(side="left", padx=(0, 10))
+        
+        self.ink_verify_btn = ctk.CTkButton(
+            ink_status_row, 
+            text="Verificar Instalación", 
+            width=130, height=26, 
+            fg_color=self.DOWNLOAD_BTN,
+            hover_color=self.DOWNLOAD_HOVER,
+            text_color=self.DOWNLOAD_TEXT,
+            command=self._check_inkscape_status
+        )
         self.ink_verify_btn.pack(side="left", padx=(0, 10))
         
         # Estado Inkscape
@@ -343,8 +380,9 @@ class ConfigTab(ctk.CTkFrame):
             mode_frame,
             text="Probar Cookies",
             width=120,
-            fg_color=("#3B8ED0", "#1F6AA5"),
-            text_color="white",
+            fg_color=self.DOWNLOAD_BTN,
+            hover_color=self.DOWNLOAD_HOVER,
+            text_color=self.DOWNLOAD_TEXT,
             state="disabled",
             command=self._test_cookies
         )
@@ -376,8 +414,9 @@ class ConfigTab(ctk.CTkFrame):
         self.browser_profile_entry.grid(row=1, column=1, sticky="ew", pady=5)
         self.browser_profile_entry.bind("<KeyRelease>", self._on_cookie_detail_change)
         
-        notice_frame = ctk.CTkFrame(self.browser_options_frame, fg_color=("#FCF2CE", "#3D3725"), corner_radius=6)
+        notice_frame = ctk.CTkFrame(self.browser_options_frame, fg_color=("#FCF2CE", "#3D3725"), corner_radius=self.CONFIG_CARD_RADIUS)
         notice_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(15, 0))
+        self.config_cards.append(notice_frame)
         
         notice_text = (
             "⚠️ Los navegadores Chromium (Chrome, Edge, Brave, Opera, Vivaldi) han "
@@ -395,8 +434,9 @@ class ConfigTab(ctk.CTkFrame):
         ).pack(padx=15, pady=10, anchor="w")
         
         # --- Sección de Ayuda ---
-        self.help_frame = ctk.CTkFrame(frame_cookies, fg_color=("#E3F2FD", "#162E40"))
+        self.help_frame = ctk.CTkFrame(frame_cookies, fg_color=("#E3F2FD", "#162E40"), corner_radius=self.CONFIG_CARD_RADIUS)
         self.help_frame.pack(fill="x", pady=(30, 0), ipadx=10, ipady=10)
+        self.config_cards.append(self.help_frame)
         
         ctk.CTkLabel(self.help_frame, text="¿Cómo obtener cookies locales de forma segura?", font=ctk.CTkFont(weight="bold"), text_color=("gray10", "white")).pack(anchor="w", padx=20, pady=(10, 5))
         
@@ -448,8 +488,9 @@ class ConfigTab(ctk.CTkFrame):
         self.btn_check_all_updates.pack(side="right", padx=5)
         
         # Frame contenedor para las actualizables
-        self.updatable_frame = ctk.CTkFrame(frame_deps, fg_color=("gray85", "gray20"))
+        self.updatable_frame = ctk.CTkFrame(frame_deps, fg_color=self.CONFIG_CARD_BG, corner_radius=self.CONFIG_CARD_RADIUS, border_width=1, border_color=self.CONFIG_CARD_BORDER)
         self.updatable_frame.pack(fill="x", pady=(0, 20), padx=5)
+        self.config_cards.append(self.updatable_frame)
         
         # Diccionarios para guardar referencias a las etiquetas y botones
         self.dep_labels = {}
@@ -469,23 +510,33 @@ class ConfigTab(ctk.CTkFrame):
         # --- SUB-SECCIÓN: FIJAS ---
         ctk.CTkLabel(frame_deps, text="Dependencias Fijas (Integridad del Sistema)", font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", padx=20, pady=(0, 5))
         
-        ctk.CTkLabel(frame_deps, text="Para actualizar estas herramientas debes hacer una instalación manual descargando los binarios correspondientes y reemplazando sus archivos dentro de la carpeta 'bin' del programa.", font=ctk.CTkFont(size=12), text_color="gray60", justify="left", wraplength=600).pack(anchor="w", padx=20, pady=(0, 10))
+        ctk.CTkLabel(frame_deps, text="Para actualizar estas herramientas debes hacer una instalación manual descargando los binarios correspondientes y reemplazando sus archivos dentro de la carpeta 'bin' del programa.", font=ctk.CTkFont(size=12), text_color="gray60", justify="left", wraplength=550).pack(anchor="w", padx=20, pady=(0, 10))
         
         # Frame contenedor para las fijas
-        self.fixed_frame = ctk.CTkFrame(frame_deps, fg_color=("gray85", "gray20"))
+        self.fixed_frame = ctk.CTkFrame(frame_deps, fg_color=self.CONFIG_CARD_BG, corner_radius=self.CONFIG_CARD_RADIUS, border_width=1, border_color=self.CONFIG_CARD_BORDER)
         self.fixed_frame.pack(fill="x", padx=5)
+        self.config_cards.append(self.fixed_frame)
         
         # Crear filas (Ghostscript)
         self._create_fixed_dependency_row(self.fixed_frame, "Ghostscript", "Motor de renderizado de vectores", "ghostscript", "https://ghostscript.com/releases/gsdnld.html")
         
         # --- Aviso Final de Recuperación ---
-        recovery_frame = ctk.CTkFrame(frame_deps, fg_color=("#FCF2CE", "#3D3725"), corner_radius=6)
+        recovery_frame = ctk.CTkFrame(frame_deps, fg_color=("#FCF2CE", "#3D3725"), corner_radius=self.CONFIG_CARD_RADIUS)
         recovery_frame.pack(fill="x", pady=(20, 0), padx=5)
+        self.config_cards.append(recovery_frame)
         
-        ctk.CTkLabel(recovery_frame, text="Estas dependencias son necesarias para las Herramientas de Imagen y ya vienen pre-instaladas. Si notas que te faltan, fallan o se han corrompido, la opción recomendada es reinstalar el programa directamente desde la página oficial.", justify="left", text_color=("gray10", "#DCE4EE"), wraplength=580).pack(anchor="w", padx=20, pady=(15, 5))
+        # Usamos un label con mejores márgenes para evitar que se corte la primera letra
+        self.recovery_label = ctk.CTkLabel(
+            recovery_frame, 
+            text="Estas dependencias son necesarias para las Herramientas de Imagen y ya vienen pre-instaladas. Si notas que te faltan, fallan o se han corrompido, la opción recomendada es reinstalar el programa directamente desde la página oficial.", 
+            justify="left", 
+            text_color=("gray10", "#DCE4EE"), 
+            wraplength=550
+        )
+        self.recovery_label.pack(anchor="w", padx=(25, 20), pady=(15, 5))
         
         import webbrowser
-        ctk.CTkButton(recovery_frame, text="Página Oficial de DowP", fg_color=("#E5A04B", "#CC8A3B"), hover_color=("#CC8A3B", "#B37A33"), text_color="gray10", command=lambda: webbrowser.open("https://marckdp.github.io/DowP/")).pack(anchor="w", padx=20, pady=(5, 15))
+        ctk.CTkButton(recovery_frame, text="Página Oficial de DowP", fg_color=self.DOWNLOAD_BTN, hover_color=self.DOWNLOAD_HOVER, text_color=self.DOWNLOAD_TEXT, command=lambda: webbrowser.open("https://marckdp.github.io/DowP/")).pack(anchor="w", padx=20, pady=(5, 15))
 
         self.sections["deps"] = frame_deps
         # Mitigar glitch visual al hacer scroll
@@ -503,22 +554,25 @@ class ConfigTab(ctk.CTkFrame):
 
         # -- Grupo: Eliminación de Fondo (Rembg) --
         ctk.CTkLabel(frame_models, text="Eliminación de Fondo (Rembg)", font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", pady=(0, 8))
-        self.rembg_models_frame = ctk.CTkFrame(frame_models, fg_color=("gray85", "gray20"))
+        self.rembg_models_frame = ctk.CTkFrame(frame_models, fg_color=self.CONFIG_CARD_BG, corner_radius=self.CONFIG_CARD_RADIUS, border_width=1, border_color=self.CONFIG_CARD_BORDER)
         self.rembg_models_frame.pack(fill="x", pady=(0, 20), padx=5)
+        self.config_cards.append(self.rembg_models_frame)
         self.model_rows = {}
 
         self._populate_rembg_model_rows()
 
         # -- Grupo: Motores de Reescalado (Upscaling) --
         ctk.CTkLabel(frame_models, text="Motores de Reescalado (Upscaling)", font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", pady=(0, 8))
-        self.upscaling_models_frame = ctk.CTkFrame(frame_models, fg_color=("gray85", "gray20"))
+        self.upscaling_models_frame = ctk.CTkFrame(frame_models, fg_color=self.CONFIG_CARD_BG, corner_radius=self.CONFIG_CARD_RADIUS, border_width=1, border_color=self.CONFIG_CARD_BORDER)
         self.upscaling_models_frame.pack(fill="x", pady=(0, 10), padx=5)
+        self.config_cards.append(self.upscaling_models_frame)
         self._populate_upscaling_model_rows()
 
         # -- Grupo: Modelos Personalizados (Gestión) --
         # No ponemos cabecera nueva para que se sienta parte de la misma sección
-        self.custom_models_mgr_frame = ctk.CTkFrame(frame_models, fg_color=("gray85", "gray20"))
+        self.custom_models_mgr_frame = ctk.CTkFrame(frame_models, fg_color=self.CONFIG_CARD_BG, corner_radius=self.CONFIG_CARD_RADIUS, border_width=1, border_color=self.CONFIG_CARD_BORDER)
         self.custom_models_mgr_frame.pack(fill="x", pady=(0, 20), padx=5)
+        self.config_cards.append(self.custom_models_mgr_frame)
         
         # Barra de acciones
         custom_actions_bar = ctk.CTkFrame(self.custom_models_mgr_frame, fg_color="transparent")
@@ -528,9 +582,9 @@ class ConfigTab(ctk.CTkFrame):
         self.btn_add_custom = ctk.CTkButton(
             custom_actions_bar, 
             text="Añadir Modelo", 
-            fg_color="#28A745", 
-            hover_color="#218838",
-            text_color="white",
+            fg_color=self.DOWNLOAD_BTN, 
+            hover_color=self.DOWNLOAD_HOVER,
+            text_color=self.DOWNLOAD_TEXT,
             height=28,
             command=self._on_add_custom_model_config
         )
@@ -539,9 +593,9 @@ class ConfigTab(ctk.CTkFrame):
         self.btn_delete_custom = ctk.CTkButton(
             custom_actions_bar, 
             text="Borrar Seleccionados", 
-            fg_color="#6c757d", 
-            hover_color="#5a6268",
-            text_color="white",
+            fg_color=self.SECONDARY_BTN, 
+            hover_color=self.SECONDARY_HOVER,
+            text_color=self.SECONDARY_TEXT,
             height=28,
             state="disabled",
             command=self._delete_selected_custom_models
@@ -553,10 +607,13 @@ class ConfigTab(ctk.CTkFrame):
         list_container.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         
         from tkinter import Listbox, EXTENDED
+        _lb_bg = self.app.get_theme_color("LISTBOX_BG", ["#F9F9FA", "#18181A"])
+        _lb_text = self.app.get_theme_color("LISTBOX_TEXT", ["gray10", "#DCE4EE"])
+        
         self.custom_models_listbox = Listbox(
             list_container,
-            bg="#242424" if ctk.get_appearance_mode() == "Dark" else "#e0e0e0",
-            fg="white" if ctk.get_appearance_mode() == "Dark" else "black",
+            bg=self._resolve_color(_lb_bg),
+            fg=self._resolve_color(_lb_text),
             font=("Segoe UI", 10),
             selectmode=EXTENDED,
             borderwidth=1,
@@ -638,33 +695,35 @@ class ConfigTab(ctk.CTkFrame):
         )
         self._btn_copy.pack(side="left", padx=3)
 
-        ctk.CTkButton(
+        self._btn_export = ctk.CTkButton(
             log_btn_frame,
             text="Exportar",
             width=90, height=28,
-            fg_color=("#6F42C1", "#6F42C1"),
-            hover_color=("#4A148C", "#4A148C"),
-            text_color="white",
+            fg_color=self.SECONDARY_BTN,
+            hover_color=self.SECONDARY_HOVER,
+            text_color=self.SECONDARY_TEXT,
             command=self._console_export
-        ).pack(side="left", padx=3)
+        )
+        self._btn_export.pack(side="left", padx=3)
 
-        ctk.CTkButton(
+        self._btn_clear = ctk.CTkButton(
             log_btn_frame,
             text="Limpiar",
             width=90, height=28,
-            fg_color=("#DC3545", "#DC3545"),
-            hover_color=("#7F0000", "#7F0000"),
-            text_color="white",
+            fg_color=self.CANCEL_BTN,
+            hover_color=self.CANCEL_HOVER,
+            text_color=self.CANCEL_TEXT,
             command=self._console_clear
-        ).pack(side="left", padx=(3, 0))
+        )
+        self._btn_clear.pack(side="left", padx=(3, 0))
 
 
         # ── Textbox (siempre visible, row=1) ────────────────────────────────────
         self._console_textbox = ctk.CTkTextbox(
             frame_console,
             font=ctk.CTkFont(family="Consolas", size=11),
-            fg_color="#1e1e1e",
-            text_color="#d4d4d4",
+            fg_color=self.CONSOLE_BG,
+            text_color=self.CONSOLE_TEXT,
             wrap="none",
             state="disabled",
         )
@@ -713,9 +772,9 @@ class ConfigTab(ctk.CTkFrame):
             cmd_btn_frame,
             text="Ejecutar",
             width=90, height=28,
-            fg_color=("#2E7D32", "#2E7D32"),
-            hover_color=("#1B5E20", "#1B5E20"),
-            text_color="white",
+            fg_color=self.DOWNLOAD_BTN,
+            hover_color=self.DOWNLOAD_HOVER,
+            text_color=self.DOWNLOAD_TEXT,
             state="disabled",
             command=self._execute_console_command
         )
@@ -727,9 +786,9 @@ class ConfigTab(ctk.CTkFrame):
             width=90, height=28,
             fg_color="transparent",
             border_width=1,
-            border_color=("#c0392b", "#922b21"),
-            text_color=("#c0392b", "#e74c3c"),
-            hover_color=("#fdecea", "#3b1010"),
+            border_color=self.CANCEL_BTN,
+            text_color=self.CANCEL_TEXT,
+            hover_color=self.CANCEL_HOVER,
             state="disabled",
             command=self._cancel_console_command
         )
@@ -846,8 +905,9 @@ class ConfigTab(ctk.CTkFrame):
             # Feedback visual: verde + texto por 1.5 s
             self._btn_copy.configure(
                 text="¡Copiado!",
-                fg_color="#28a745",
-                hover_color="#218838"
+                fg_color=self.STATUS_SUCCESS,
+                hover_color=self.STATUS_SUCCESS,
+                text_color="white"
             )
             self.app.after(1500, self._reset_copy_button)
         except Exception as e:
@@ -858,8 +918,9 @@ class ConfigTab(ctk.CTkFrame):
         try:
             self._btn_copy.configure(
                 text="Copiar",
-                fg_color=("#1565C0", "#1565C0"),
-                hover_color=("#0D47A1", "#0D47A1")
+                fg_color=self.SECONDARY_BTN,
+                hover_color=self.SECONDARY_HOVER,
+                text_color=self.SECONDARY_TEXT
             )
         except Exception:
             pass
@@ -1184,9 +1245,10 @@ class ConfigTab(ctk.CTkFrame):
                 header_frame,
                 text=family_name,
                 font=ctk.CTkFont(size=14, weight="bold"),
-                text_color=("#1F6AA5", "#52A2F2")
+                text_color=self.SECTION_SUBTITLE
             )
             header.pack(side="left")
+            self.config_subtitles.append(header)
             
             # Botón unificado de Carpeta
             folder_icon = ctk.CTkButton(
@@ -1194,13 +1256,14 @@ class ConfigTab(ctk.CTkFrame):
                 text="Abrir Carpeta", 
                 width=100,
                 height=24,
-                fg_color=("#3B8ED0", "#1F6AA5"), 
-                border_width=0, 
-                text_color="white",
+                fg_color=self.TERTIARY_BTN, 
+                hover_color=self.TERTIARY_HOVER,
+                text_color=self.TERTIARY_TEXT,
                 font=ctk.CTkFont(size=11, weight="bold"),
                 command=lambda f=family_name: self._open_family_folder(f)
             )
             folder_icon.pack(side="right")
+            self.model_family_icons.append(folder_icon)
 
             # Aviso especial para la familia RMBG 2.0
             if family_name == RMBG2_FAMILY:
@@ -1222,16 +1285,17 @@ class ConfigTab(ctk.CTkFrame):
                 )
                 text_lbl.pack(anchor="w", padx=15, pady=(10, 3))
                 
-                web_btn = ctk.CTkButton(
+                self.huggingface_btn = ctk.CTkButton(
                     notice_frame, 
                     text="Explorar Repositorio Web (HuggingFace)", 
                     font=ctk.CTkFont(size=11, weight="bold"),
-                    fg_color=("#3B8ED0", "#1F6AA5"), 
-                    text_color="white",
+                    fg_color=self.TERTIARY_BTN,
+                    hover_color=self.TERTIARY_HOVER,
+                    text_color=self.TERTIARY_TEXT,
                     width=250,
                     command=lambda: __import__('webbrowser').open("https://huggingface.co/briaai/RMBG-2.0/tree/main/onnx")
                 )
-                web_btn.pack(anchor="w", padx=15, pady=(0, 12))
+                self.huggingface_btn.pack(anchor="w", padx=15, pady=(0, 12))
 
             for model_name, model_info in models.items():
                 if family_name == RMBG2_FAMILY and model_name != RMBG2_AUTO_KEY:
@@ -1288,23 +1352,46 @@ class ConfigTab(ctk.CTkFrame):
         status_lbl = ctk.CTkLabel(status_frame, text="Calculando...", font=ctk.CTkFont(size=11), text_color="gray50")
         status_lbl.pack(anchor="center")
 
-        pct_lbl = ctk.CTkLabel(status_frame, text="", font=ctk.CTkFont(size=11, weight="bold"), text_color="#1f6aa5")
+        pct_lbl = ctk.CTkLabel(status_frame, text="", font=ctk.CTkFont(size=11, weight="bold"), text_color=self.SECTION_SUBTITLE)
         pct_lbl.pack(anchor="center")
+        self.config_subtitles.append(pct_lbl)
 
         # -- Columna Derecha: Botones --
         btn_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
         btn_frame.grid(row=0, column=2, sticky="e", padx=(10, 0))
 
         dl_label = "Abrir Web" if manual_web else "Descargar"
-        dl_btn = ctk.CTkButton(btn_frame, text=dl_label, width=100)
+        dl_btn = ctk.CTkButton(
+            btn_frame, 
+            text=dl_label, 
+            width=100,
+            fg_color=self.DOWNLOAD_BTN,
+            hover_color=self.DOWNLOAD_HOVER,
+            text_color=self.DOWNLOAD_TEXT
+        )
         dl_btn.pack(side="left", padx=2)
 
         folder_btn = None
         if show_folder_btn:
-            folder_btn = ctk.CTkButton(btn_frame, text="Carpeta", width=80, fg_color=("#3B8ED0", "#1F6AA5"), border_width=0, text_color="white", font=ctk.CTkFont(size=11, weight="bold"))
+            folder_btn = ctk.CTkButton(
+                btn_frame, 
+                text="Carpeta", 
+                width=80, 
+                fg_color=self.SECONDARY_BTN,
+                hover_color=self.SECONDARY_HOVER,
+                text_color=self.SECONDARY_TEXT,
+                font=ctk.CTkFont(size=11, weight="bold")
+            )
             folder_btn.pack(side="left", padx=2)
 
-        del_btn = ctk.CTkButton(btn_frame, text="Eliminar", width=80, fg_color="transparent", border_width=1, text_color=("gray10", "gray90"))
+        del_btn = ctk.CTkButton(
+            btn_frame, 
+            text="Eliminar", 
+            width=80, 
+            fg_color=self.CANCEL_BTN,
+            hover_color=self.CANCEL_HOVER,
+            text_color=self.CANCEL_TEXT
+        )
         del_btn.pack(side="left", padx=2)
 
         # Guardar referencias
@@ -1349,13 +1436,47 @@ class ConfigTab(ctk.CTkFrame):
                 size = os.path.getsize(path)
             row["status_lbl"].configure(text=self._format_size(size), text_color=("#2e7d32", "#66bb6a"))
             row["pct_lbl"].configure(text="")
-            row["dl_btn"].configure(state="disabled", text="Instalado")
-            row["del_btn"].configure(state="normal", fg_color="#c0392b", hover_color="#922b21", text_color="white", border_width=0)
+            # El botón "Instalado" ahora es gris (secundario) para no distraer
+            row["dl_btn"].configure(
+                state="disabled", 
+                text="Instalado", 
+                fg_color=self.SECONDARY_BTN, 
+                text_color=self.SECONDARY_TEXT
+            )
+            # El botón "Eliminar" es rojo solo si está activo
+            row["del_btn"].configure(
+                state="normal", 
+                fg_color=self.CANCEL_BTN, 
+                hover_color=self.CANCEL_HOVER, 
+                text_color=self.CANCEL_TEXT, 
+                border_width=0
+            )
         else:
             row["status_lbl"].configure(text="No descargado", text_color="gray50")
             row["pct_lbl"].configure(text="")
-            row["dl_btn"].configure(state="normal", text="Descargar")
-            row["del_btn"].configure(state="disabled", fg_color="transparent", hover_color=("gray70", "gray30"), text_color=("gray10", "gray90"), border_width=1)
+            # El botón "Descargar" es el principal
+            row["dl_btn"].configure(
+                state="normal", 
+                text="Descargar", 
+                fg_color=self.DOWNLOAD_BTN, 
+                hover_color=self.DOWNLOAD_HOVER, 
+                text_color=self.DOWNLOAD_TEXT
+            )
+            # El botón "Eliminar" es inactivo/transparente si no hay nada que borrar
+            row["del_btn"].configure(
+                state="disabled", 
+                fg_color="transparent", 
+                border_width=1, 
+                text_color=("gray10", "gray90")
+            )
+            
+        # Actualizar botón de carpeta si existe (Usa estilo TERCIARIO)
+        if row.get("folder_btn"):
+            row["folder_btn"].configure(
+                fg_color=self.TERTIARY_BTN, 
+                hover_color=self.TERTIARY_HOVER, 
+                text_color=self.TERTIARY_TEXT
+            )
 
     def _download_model(self, row_key):
         """Inicia la descarga de un modelo en un hilo separado."""
@@ -1676,60 +1797,191 @@ class ConfigTab(ctk.CTkFrame):
                 normalized_value = max(0.0, min(1.0, value / 100.0))
                 self.dep_progress[key]["bar"].set(normalized_value)
 
+    def _load_theme_colors(self):
+        """Carga los colores del tema actual."""
+        # Colores de Botones
+        self.DOWNLOAD_BTN = self.app.get_theme_color("DOWNLOAD_BTN", ["#3B8ED0", "#1F6AA5"])
+        self.DOWNLOAD_HOVER = self.app.get_theme_color("DOWNLOAD_BTN_HOVER", ["#367fb8", "#1a5a8a"])
+        self.DOWNLOAD_TEXT = self.app.get_theme_color("DOWNLOAD_BTN_TEXT", ["white", "white"])
+        
+        self.CANCEL_BTN = self.app.get_theme_color("CANCEL_BTN", ["#dc3545", "#c82333"])
+        self.CANCEL_HOVER = self.app.get_theme_color("CANCEL_BTN_HOVER", ["#c82333", "#bd2130"])
+        self.CANCEL_TEXT = self.app.get_theme_color("CANCEL_BTN_TEXT", ["white", "white"])
+        
+        self.SECONDARY_BTN = self.app.get_theme_color("SECONDARY_BTN", ["gray50", "gray30"])
+        self.SECONDARY_HOVER = self.app.get_theme_color("SECONDARY_BTN_HOVER", ["gray60", "gray40"])
+        self.SECONDARY_TEXT = self.app.get_theme_color("SECONDARY_BTN_TEXT", ["white", "white"])
+        
+        self.TERTIARY_BTN = self.app.get_theme_color("TERTIARY_BTN", ["#A0522D", "#8B4513"])
+        self.TERTIARY_HOVER = self.app.get_theme_color("TERTIARY_BTN_HOVER", ["#8B4513", "#5D2E0B"])
+        self.TERTIARY_TEXT = self.app.get_theme_color("TERTIARY_BTN_TEXT", ["white", "white"])
+        
+        self.QUATERNARY_BTN = self.app.get_theme_color("QUATERNARY_BTN", ["#E5DCC5", "#3F3F46"])
+        self.QUATERNARY_HOVER = self.app.get_theme_color("QUATERNARY_BTN_HOVER", ["#D9CCB0", "#323238"])
+        self.QUATERNARY_TEXT = self.app.get_theme_color("QUATERNARY_BTN_TEXT", ["gray10", "#DCE4EE"])
+
+        # Colores de Consola
+        self.CONSOLE_BG = self.app.get_theme_color("CONSOLE_BG", ["#F9F9FA", "#1D1E1E"])
+        self.CONSOLE_TEXT = self.app.get_theme_color("CONSOLE_TEXT", ["gray10", "#DCE4EE"])
+
+        # Colores de Estructura
+        self.SECTION_SUBTITLE = self.app.get_theme_color("SECTION_SUBTITLE", ["#1F6AA5", "#52A2F2"])
+        self.CONFIG_CARD_BG = self.app.get_theme_color("CONFIG_CARD_BG", ["gray85", "gray20"])
+        self.CONFIG_CARD_BORDER = self.app.get_theme_color("CONFIG_CARD_BORDER", ["gray75", "gray30"])
+        
+        # Colores de Estado (Para feedback de botones y labels)
+        self.STATUS_SUCCESS = self.app.get_theme_color("STATUS_SUCCESS", ["#28A745", "#218838"])
+        self.STATUS_ERROR = self.app.get_theme_color("STATUS_ERROR", ["#DC3545", "#C82333"])
+        self.STATUS_WARNING = self.app.get_theme_color("STATUS_WARNING", ["#FFA500", "#FF8C00"])
+        
+        # Corner radius global del tema (o el de CTkFrame si no hay)
+        _theme_frame = self.app.theme_data.get("CTkFrame", {})
+        self.CONFIG_CARD_RADIUS = _theme_frame.get("corner_radius", 10)
+
     def refresh_theme(self):
         """Actualiza los colores de la pestaña de configuración dinámicamente."""
-        # 1. Cargar colores del tema
-        download_btn = self.app.get_theme_color("DOWNLOAD_BTN", ["#3B8ED0", "#1F6AA5"])
-        download_hover = self.app.get_theme_color("DOWNLOAD_BTN_HOVER", ["#367fb8", "#1a5a8a"])
-        download_text = self.app.get_theme_color("DOWNLOAD_BTN_TEXT", ["white", "white"])
-
-        cancel_btn = self.app.get_theme_color("CANCEL_BTN", ["#dc3545", "#c82333"])
-        cancel_hover = self.app.get_theme_color("CANCEL_BTN_HOVER", ["#c82333", "#bd2130"])
-        cancel_text = self.app.get_theme_color("CANCEL_BTN_TEXT", ["white", "white"])
-
-        secondary_btn = self.app.get_theme_color("SECONDARY_BTN", ["gray50", "gray30"])
-        secondary_hover = self.app.get_theme_color("SECONDARY_BTN_HOVER", ["gray60", "gray40"])
-        secondary_text = self.app.get_theme_color("SECONDARY_BTN_TEXT", ["white", "white"])
-
-        # 2. Aplicar a botones específicos
-        # Botones de "Importar" y "Descargar Inkscape" (Ahora usan el color primario de descarga por defecto)
-        self.import_theme_btn.configure(fg_color=download_btn, hover_color=download_hover, text_color=download_text)
-        self.ink_download_btn.configure(fg_color=download_btn, hover_color=download_hover, text_color=download_text)
+        # 1. Recargar colores
+        self._load_theme_colors()
         
-        # Botón de liberar VRAM (Usa el de cancelar/peligro)
-        self.clear_vram_btn.configure(fg_color=cancel_btn, hover_color=cancel_hover, text_color=cancel_text)
-        
-        # Botón de buscar actualizaciones
-        self.btn_check_all_updates.configure(fg_color=download_btn, hover_color=download_hover, text_color=download_text)
+        # 2. Aplicar a estructuras (Cartas/Cuadritos)
+        for card in self.config_cards:
+            if card.winfo_exists():
+                # Algunos frames especiales (notice, help, recovery) tienen colores de fondo propios
+                # pero deben seguir el radio de borde del tema.
+                card.configure(corner_radius=self.CONFIG_CARD_RADIUS)
+                # Si es un frame de contenido general, aplicar colores de carta
+                if card in [self.appearance_frame, self.master_frame, self.updatable_frame, self.fixed_frame, 
+                           self.rembg_models_frame, self.upscaling_models_frame, self.custom_models_mgr_frame]:
+                    card.configure(fg_color=self.CONFIG_CARD_BG, border_color=self.CONFIG_CARD_BORDER)
 
-        # Botones de modelos e IA
+        # 3. Aplicar a subtítulos
+        for sub in self.config_subtitles:
+            if sub.winfo_exists():
+                sub.configure(text_color=self.SECTION_SUBTITLE)
+
+        # 4. Aplicar a botones específicos
+        # Botones Principales (Dorado/Verde)
+        main_btns = [
+            'import_theme_btn', 'ink_verify_btn', 'test_cookies_btn', 
+            'btn_check_all_updates', 'btn_add_custom', '_btn_execute'
+        ]
+        for btn_name in main_btns:
+            if hasattr(self, btn_name):
+                btn = getattr(self, btn_name)
+                if btn.winfo_exists():
+                    btn.configure(fg_color=self.DOWNLOAD_BTN, hover_color=self.DOWNLOAD_HOVER, text_color=self.DOWNLOAD_TEXT)
+
+        # Botones Secundarios (Bronce/Gris)
+        sec_btns = [
+            'ink_download_btn', 'btn_delete_custom', '_btn_copy', '_btn_export'
+        ]
+        for btn_name in sec_btns:
+            if hasattr(self, btn_name):
+                btn = getattr(self, btn_name)
+                if btn.winfo_exists():
+                    btn.configure(fg_color=self.SECONDARY_BTN, hover_color=self.SECONDARY_HOVER, text_color=self.SECONDARY_TEXT)
+
+        # Botones Terciarios (Acento/HuggingFace)
+        ter_btns = ['huggingface_btn']
+        for btn_name in ter_btns:
+            if hasattr(self, btn_name):
+                btn = getattr(self, btn_name)
+                if btn.winfo_exists():
+                    btn.configure(fg_color=self.TERTIARY_BTN, hover_color=self.TERTIARY_HOVER, text_color=self.TERTIARY_TEXT)
+
+        # Botón de liberar VRAM / Cancelar / Limpiar (Rojo/Peligro)
+        if hasattr(self, 'clear_vram_btn'):
+            self.clear_vram_btn.configure(fg_color=self.CANCEL_BTN, hover_color=self.CANCEL_HOVER, text_color=self.CANCEL_TEXT)
+        if hasattr(self, '_btn_cancel_cmd'):
+            self._btn_cancel_cmd.configure(border_color=self.CANCEL_BTN, text_color=self.CANCEL_TEXT, hover_color=self.CANCEL_HOVER)
+        if hasattr(self, '_btn_clear'):
+            self._btn_clear.configure(fg_color=self.CANCEL_BTN, hover_color=self.CANCEL_HOVER, text_color=self.CANCEL_TEXT)
+
+        # 5. Botones de modelos e IA (Refrescar según estado para evitar pintado erróneo)
         if hasattr(self, 'model_rows'):
-            for row in self.model_rows.values():
-                # El botón de descargar usa el primario
-                row["dl_btn"].configure(fg_color=download_btn, hover_color=download_hover, text_color=download_text)
-                # El botón de eliminar usa el de cancelar
-                row["del_btn"].configure(fg_color=cancel_btn, hover_color=cancel_hover, text_color=cancel_text)
-                # El botón de carpeta usa el secundario
-                if row.get("folder_btn"):
-                    row["folder_btn"].configure(fg_color=secondary_btn, hover_color=secondary_hover, text_color=secondary_text)
+            for row_key in self.model_rows.keys():
+                self._refresh_model_row(row_key)
+        
+        # Iconos de familia y Listbox
+        for icon in self.model_family_icons:
+            if icon.winfo_exists():
+                icon.configure(fg_color=self.TERTIARY_BTN, hover_color=self.TERTIARY_HOVER, text_color=self.TERTIARY_TEXT)
+        
+        if hasattr(self, 'custom_models_listbox') and self.custom_models_listbox.winfo_exists():
+            self.custom_models_listbox.configure(
+                bg=self._resolve_color(self.app.get_theme_color("LISTBOX_BG", ["#F9F9FA", "#18181A"])),
+                fg=self._resolve_color(self.app.get_theme_color("LISTBOX_TEXT", ["gray10", "#DCE4EE"]))
+            )
 
-        # Botones de dependencias
+        # 6. Colores de la Consola (Texto y Tags)
+        if hasattr(self, '_console_textbox'):
+            self._console_textbox.configure(fg_color=self.CONSOLE_BG, text_color=self.CONSOLE_TEXT)
+            self._console_textbox.tag_config("user_command", foreground=self._resolve_color(self.SECTION_SUBTITLE))
+            self._console_textbox.tag_config("error", foreground=self._resolve_color(self.STATUS_ERROR))
+            self._console_textbox.tag_config("warning", foreground=self._resolve_color(self.STATUS_WARNING))
+            self._console_textbox.tag_config("success", foreground=self._resolve_color(self.STATUS_SUCCESS))
+
+        # Botones de dependencias (Filas individuales)
         if hasattr(self, 'dep_buttons'):
             for key, btn in self.dep_buttons.items():
-                if key == "ffmpeg_safe":
-                    continue # Este tiene color propio verde
-                # Si el botón está habilitado, ponerle el color de descarga
-                if btn.cget("state") != "disabled":
-                    btn.configure(fg_color=download_btn, hover_color=download_hover, text_color=download_text)
+                if not btn.winfo_exists(): continue
+                
+                # Sincronizar colores según el tipo de botón
+                btn_text = btn.cget("text").lower()
+                if "actualizar" in btn_text:
+                    btn.configure(fg_color=self.DOWNLOAD_BTN, hover_color=self.DOWNLOAD_HOVER, text_color=self.DOWNLOAD_TEXT)
+                elif "restaurar" in btn_text:
+                    btn.configure(fg_color=self.STATUS_SUCCESS, hover_color=self.STATUS_SUCCESS, text_color="white")
+                elif "actualizado" in btn_text:
+                    # El botón ya está deshabilitado, pero podemos asegurar el color de fondo neutro
+                    btn.configure(fg_color=self.app.get_theme_color("DISABLED_FG", ["#A0A0A0", "#404040"]))
 
-        # 3. Forzar refresco de consola si está abierta
+        # 5. Lista de modelos personalizados (Misma lógica que ImageToolsTab)
+        if hasattr(self, 'custom_models_listbox'):
+            _lb_bg = self.app.get_theme_color("LISTBOX_BG", ["#F9F9FA", "#18181A"])
+            _lb_text = self.app.get_theme_color("LISTBOX_TEXT", ["gray10", "#DCE4EE"])
+            _lb_sel_bg = self.app.get_theme_color("LISTBOX_SELECTED_BG", ["#3B8ED0", "#1F6AA5"])
+            _lb_sel_text = self.app.get_theme_color("LISTBOX_SELECTED_TEXT", ["white", "white"])
+            _lb_bdr = self.app.get_theme_color("DND_BORDER", ["#565B5E", "#565B5E"])
+            
+            _bg = self._resolve_color(_lb_bg)
+            _fg = self._resolve_color(_lb_text)
+            _sbg = self._resolve_color(_lb_sel_bg)
+            _sfg = self._resolve_color(_lb_sel_text)
+            _bdc = self._resolve_color(_lb_bdr)
+            
+            self.custom_models_listbox.configure(
+                bg=_bg, fg=_fg, 
+                selectbackground=_sbg, selectforeground=_sfg,
+                highlightbackground=_bdc, highlightthickness=1, borderwidth=0
+            )
+
+        # 6. Forzar refresco de consola
         if hasattr(self, '_console_textbox'):
-            lb_bg = self.app.get_theme_color("LISTBOX_BG", ["#F9F9FA", "#18181A"])
-            lb_text = self.app.get_theme_color("LISTBOX_TEXT", ["gray10", "#DCE4EE"])
-            self._console_textbox.configure(fg_color=lb_bg[1] if ctk.get_appearance_mode() == "Dark" else lb_bg[0],
-                                          text_color=lb_text[1] if ctk.get_appearance_mode() == "Dark" else lb_text[0])
+            _lb_bg = self.app.get_theme_color("LISTBOX_BG", ["#F9F9FA", "#18181A"])
+            _lb_text = self.app.get_theme_color("LISTBOX_TEXT", ["gray10", "#DCE4EE"])
+            _status_success = self.app.get_theme_color("STATUS_SUCCESS", ["#28A745", "#218838"])
+            _status_error = self.app.get_theme_color("STATUS_ERROR", ["#DC3545", "#C82333"])
+            _status_warning = self.app.get_theme_color("STATUS_WARNING", ["#FFA500", "#FF8C00"])
+            _accent = self.app.get_theme_color("DOWNLOAD_BTN", ["#3B8ED0", "#1F6AA5"])
+
+            self._console_textbox.configure(
+                fg_color=self._resolve_color(_lb_bg),
+                text_color=self._resolve_color(_lb_text)
+            )
+            # Actualizar tags de colores
+            self._console_textbox.tag_config("user_command", foreground=self._resolve_color(_accent))
+            self._console_textbox.tag_config("error", foreground=self._resolve_color(_status_error))
+            self._console_textbox.tag_config("warning", foreground=self._resolve_color(_status_warning))
+            self._console_textbox.tag_config("success", foreground=self._resolve_color(_status_success))
 
         print("🔄 [REFRESH-THEME] ✅ ConfigTab actualizada dinámicamente.")
+
+    def _resolve_color(self, color_pair):
+        """Resuelve un par [claro, oscuro] según el modo de apariencia actual."""
+        if not isinstance(color_pair, (list, tuple)) or len(color_pair) < 2:
+            return color_pair
+        return color_pair[1] if ctk.get_appearance_mode() == "Dark" else color_pair[0]
 
     def _load_local_versions(self):
         """Carga las versiones locales instantáneamente."""

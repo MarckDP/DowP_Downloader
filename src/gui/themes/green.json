@@ -1,24 +1,79 @@
 {
-  "CTk": {
-    "fg_color": ["gray92", "gray14"]
+  "_INSTRUCCIONES_DOWP": {
+    "VERSION": "5.0",
+    "INFO_1": "GUIA DE TEMAS DOWP: Edita este archivo para crear tu propio estilo.",
+    "INFO_2": "FORMATO DUAL: Casi todos los valores aceptan una lista: ['Color Modo Claro', 'Color Modo Oscuro'].",
+    "INFO_3": "MODO CLARO: Si el texto o botones no se ven bien en modo claro, ajusta el PRIMER valor de la lista.",
+    "INFO_4": "FONDO GENERAL: Puedes cambiar 'CTkFrame' y 'CTk' en este JSON para cambiar el color de las ventanas y paneles.",
+    "AVISO_IMPORTANTE": "No uses 'transparent' en 'border_color', causará errores. Usa un color sólido.",
+    "CONSEJO": "Usa códigos Hexadecimales (ej: #AF52DE) para máxima precisión.",
+    "CUSTOM_COLORS": "Usa la sección 'CustomColors' para botones específicos (Descargar, Analizar, etc)."
   },
-  "CTkToplevel": {
-    "fg_color": ["gray92", "gray14"]
+  "CustomColors": {
+    "DOWNLOAD_BTN": ["#2E7D32", "#1B5E20"],
+    "DOWNLOAD_BTN_HOVER": ["#1B5E20", "#0D2E10"],
+    "ANALYZE_BTN": ["#00897B", "#00695C"],
+    "ANALYZE_BTN_HOVER": ["#00695C", "#004D40"],
+    "CANCEL_BTN": ["#DC3545", "#C82333"],
+    "CANCEL_BTN_HOVER": ["#C82333", "#BD2130"],
+    "PROCESS_BTN": ["#689F38", "#33691E"],
+    "PROCESS_BTN_HOVER": ["#33691E", "#1B5E20"],
+    "SECONDARY_BTN": ["#555555", "#444444"],
+    "SECONDARY_BTN_HOVER": ["#444444", "#333333"],
+    "DOWNLOAD_BTN_TEXT": ["#ffffff", "#DCE4EE"],
+    "ANALYZE_BTN_TEXT": ["#ffffff", "#DCE4EE"],
+    "CANCEL_BTN_TEXT": ["white", "white"],
+    "PROCESS_BTN_TEXT": ["#ffffff", "#DCE4EE"],
+    "SECONDARY_BTN_TEXT": ["white", "white"],
+    "TERTIARY_BTN": ["#2F4F4F", "#1A2F2F"],
+    "TERTIARY_BTN_HOVER": ["#1A2F2F", "#0F1A1A"],
+    "TERTIARY_BTN_TEXT": ["white", "white"],
+    "QUATERNARY_BTN": ["#E8F5E9", "#2E3436"],
+    "QUATERNARY_BTN_HOVER": ["#C8E6C9", "#252A2B"],
+    "QUATERNARY_BTN_TEXT": ["gray10", "#DCE4EE"],
+    "DND_BORDER": ["#2E7D32", "#1B5E20"],
+    "DND_BG": ["#F1F8E9", "#1D2321"],
+    "DND_TEXT": ["#2E7D32", "#1B5E20"],
+    "STATUS_SUCCESS": ["#28A745", "#218838"],
+    "STATUS_ERROR": ["#DC3545", "#C82333"],
+    "STATUS_WARNING": ["#FFA500", "#FF8C00"],
+    "STATUS_PENDING": ["#565B5E", "#565B5E"],
+    "JOB_ACTION_ICON_COLOR": ["black", "white"],
+    "JOB_CANCEL_ICON_COLOR": ["#DC3545", "#DC3545"],
+    "LISTBOX_BG": ["#F1F8E9", "#141814"],
+    "LISTBOX_TEXT": ["gray10", "#DCE4EE"],
+    "LISTBOX_SELECTED_BG": ["#2E7D32", "#1B5E20"],
+    "LISTBOX_SELECTED_TEXT": ["#ffffff", "#ffffff"],
+    "VIEWER_BG": ["#F0F0F0", "#141814"],
+    "VIEWER_BORDER": ["#2E7D32", "#1B5E20"],
+    "SECTION_SUBTITLE": ["#2E7D32", "#1B5E20"],
+    "CONFIG_CARD_BG": ["#F1F8E9", "#1D2321"],
+    "CONFIG_CARD_BORDER": ["#C8E6C9", "#2E3436"],
+    "HUD_BG": ["gray86", "#1D2321"],
+    "HUD_TEXT": ["gray10", "#DCE4EE"],
+    "SEPARATOR_COLOR": ["gray65", "#2E3436"],
+    "OPTIONS_PANEL_BG": ["gray81", "#1D2321"],
+    "TRANSPARENCY_GRID_1": ["#E8F5E9", "#1A241E"],
+    "TRANSPARENCY_GRID_2": ["#FFFFFF", "#141814"],
+    "CONSOLE_BG": ["#F1F8E9", "#101410"],
+    "CONSOLE_TEXT": ["gray10", "#DCE4EE"]
   },
+  "CTk": { "fg_color": ["gray92", "#141814"] },
+  "CTkToplevel": { "fg_color": ["gray92", "#141814"] },
   "CTkFrame": {
-    "corner_radius": 6,
+    "corner_radius": 8,
     "border_width": 0,
-    "fg_color": ["gray86", "gray17"],
-    "top_fg_color": ["gray81", "gray20"],
-    "border_color": ["gray65", "gray28"]
+    "fg_color": ["gray86", "#1D2321"],
+    "top_fg_color": ["gray81", "#252A2B"],
+    "border_color": ["gray65", "#2E3436"]
   },
   "CTkButton": {
-    "corner_radius": 6,
+    "corner_radius": 8,
     "border_width": 0,
     "fg_color": ["#2E7D32", "#1B5E20"],
     "hover_color": ["#1B5E20", "#0D2E10"],
     "border_color": ["#3E454A", "#949A9F"],
-    "text_color": ["#DCE4EE", "#DCE4EE"],
+    "text_color": ["#ffffff", "#DCE4EE"],
     "text_color_disabled": ["gray74", "gray60"]
   },
   "CTkLabel": {
@@ -27,11 +82,11 @@
     "text_color": ["gray10", "#DCE4EE"]
   },
   "CTkEntry": {
-    "corner_radius": 6,
+    "corner_radius": 8,
     "border_width": 2,
-    "fg_color": ["#F9F9FA", "#343638"],
+    "fg_color": ["#F9F9FA", "#252A2B"],
     "border_color": ["#979DA2", "#565B5E"],
-    "text_color":["gray10", "#DCE4EE"],
+    "text_color": ["gray10", "#DCE4EE"],
     "placeholder_text_color": ["gray52", "gray62"]
   },
   "CTkCheckBox": {
@@ -40,7 +95,7 @@
     "fg_color": ["#2E7D32", "#1B5E20"],
     "border_color": ["#3E454A", "#949A9F"],
     "hover_color": ["#2E7D32", "#1B5E20"],
-    "checkmark_color": ["#DCE4EE", "gray90"],
+    "checkmark_color": ["#ffffff", "gray90"],
     "text_color": ["gray10", "#DCE4EE"],
     "text_color_disabled": ["gray60", "gray45"]
   },
@@ -83,17 +138,17 @@
     "button_hover_color": ["#1B5E20", "#0D2E10"]
   },
   "CTkOptionMenu": {
-    "corner_radius": 6,
+    "corner_radius": 8,
     "fg_color": ["#2E7D32", "#1B5E20"],
     "button_color": ["#1B5E20", "#0D2E10"],
     "button_hover_color": ["#2E7D32", "#1B5E20"],
-    "text_color": ["#DCE4EE", "#DCE4EE"],
+    "text_color": ["#ffffff", "#DCE4EE"],
     "text_color_disabled": ["gray74", "gray60"]
   },
   "CTkComboBox": {
-    "corner_radius": 6,
+    "corner_radius": 8,
     "border_width": 2,
-    "fg_color": ["#F9F9FA", "#343638"],
+    "fg_color": ["#F9F9FA", "#252A2B"],
     "border_color": ["#979DA2", "#565B5E"],
     "button_color": ["#979DA2", "#565B5E"],
     "button_hover_color": ["#2E7D32", "#1B5E20"],
@@ -108,18 +163,18 @@
     "button_hover_color": ["gray40", "gray53"]
   },
   "CTkSegmentedButton": {
-    "corner_radius": 6,
+    "corner_radius": 8,
     "border_width": 2,
     "fg_color": ["#979DA2", "gray29"],
     "selected_color": ["#2E7D32", "#1B5E20"],
     "selected_hover_color": ["#1B5E20", "#0D2E10"],
     "unselected_color": ["#979DA2", "gray29"],
     "unselected_hover_color": ["gray70", "gray41"],
-    "text_color": ["#DCE4EE", "#DCE4EE"],
+    "text_color": ["#ffffff", "#DCE4EE"],
     "text_color_disabled": ["gray74", "gray60"]
   },
   "CTkTextbox": {
-    "corner_radius": 6,
+    "corner_radius": 8,
     "border_width": 0,
     "fg_color": ["#F9F9FA", "#1D1E1E"],
     "border_color": ["#979DA2", "#565B5E"],
@@ -131,25 +186,13 @@
     "label_fg_color": ["gray78", "gray23"]
   },
   "DropdownMenu": {
-    "fg_color": ["gray90", "gray20"],
+    "fg_color": ["gray90", "#1D2321"],
     "hover_color": ["#2E7D32", "#1B5E20"],
     "text_color": ["gray10", "gray90"]
   },
   "CTkFont": {
-    "macOS": {
-      "family": "SF Display",
-      "size": 13,
-      "weight": "normal"
-    },
-    "Windows": {
-      "family": "Segoe UI",
-      "size": 13,
-      "weight": "normal"
-    },
-    "Linux": {
-      "family": "Roboto",
-      "size": 13,
-      "weight": "normal"
-    }
+    "macOS": { "family": "SF Display", "size": 13, "weight": "normal" },
+    "Windows": { "family": "Segoe UI", "size": 13, "weight": "normal" },
+    "Linux": { "family": "Roboto", "size": 13, "weight": "normal" }
   }
 }

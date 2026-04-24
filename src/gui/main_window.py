@@ -2207,7 +2207,7 @@ class MainWindow(TkBase):
     def _ensure_theme_template(self):
         """Crea o actualiza el archivo de plantilla con notas detalladas para el usuario."""
         template_path = os.path.join(self.USER_THEMES_DIR, "plantilla_tema.json")
-        TEMPLATE_VERSION = "3.0"
+        TEMPLATE_VERSION = "4.0"
         
         should_update = not os.path.exists(template_path)
         
@@ -2237,20 +2237,20 @@ class MainWindow(TkBase):
                 # Instrucciones claras y sin emojis
                 instructions = {
                     "VERSION": TEMPLATE_VERSION,
-                    "01_GUIA": "GUIA DE TEMAS DOWP v3.0 - Edita este archivo para crear tu propio estilo visual.",
+                    "01_GUIA": "GUIA DE TEMAS DOWP v5.0 - Edita este archivo para crear tu propio estilo visual.",
                     "02_FORMATO": "Casi todos los valores de color aceptan una lista con dos elementos: [Color Modo Claro, Color Modo Oscuro]. Por ejemplo: ['#FFFFFF', '#1D1D1D'].",
                     "03_MODO_CLARO": "Si algo no se ve bien en modo claro, ajusta el PRIMER valor de la lista.",
                     "04_MODO_OSCURO": "Si algo no se ve bien en modo oscuro, ajusta el SEGUNDO valor de la lista.",
                     "05_FONDOS": "Cambia 'CTk', 'CTkToplevel' y 'CTkFrame' en este JSON para modificar el color base de ventanas y paneles.",
                     "06_AVISO": "IMPORTANTE: No uses 'transparent' en campos 'border_color'. Usa siempre un color solido como '#333333'.",
                     "07_COLORES": "Usa codigos hexadecimales (ej: #AF52DE) para maxima precision. Tambien se aceptan nombres como 'gray50', 'white', 'black'.",
-                    "08_CUSTOM_COLORS": "La seccion 'CustomColors' controla botones, listas, visores y otros elementos especificos de la interfaz. Consulta la descripcion de cada clave a continuacion.",
+                    "08_CUSTOM_COLORS": "La seccion 'CustomColors' controla botones, listas, visores y otros elementos especificos de la interfaz.",
                     "09_COMO_USAR": "1. Copia este archivo con otro nombre (ej: mi_tema.json). 2. Edita los colores a tu gusto. 3. En DowP, ve a Ajustes > Tema y selecciona tu tema o importalo."
                 }
                 
                 # Colores personalizados con todas las claves activas en la aplicacion
                 custom_colors_example = {
-                    "_NOTA_BOTONES": "Colores de los botones principales de la interfaz. Cada boton tiene su color base, hover (al pasar el cursor) y texto.",
+                    "_NOTA_BOTONES": "Niveles de jerarquia para botones: Principal (Accion), Secundario (Estado), Terciario (Utilidad), Cuaternario (Discreto).",
 
                     "DOWNLOAD_BTN": ["#28A745", "#218838"],
                     "DOWNLOAD_BTN_HOVER": ["#218838", "#1E7E34"],
@@ -2272,6 +2272,14 @@ class MainWindow(TkBase):
                     "SECONDARY_BTN_HOVER": ["#444444", "#333333"],
                     "SECONDARY_BTN_TEXT": ["white", "white"],
 
+                    "TERTIARY_BTN": ["#A0522D", "#8B4513"],
+                    "TERTIARY_BTN_HOVER": ["#8B4513", "#5D2E0B"],
+                    "TERTIARY_BTN_TEXT": ["white", "white"],
+
+                    "QUATERNARY_BTN": ["#E5DCC5", "#3F3F46"],
+                    "QUATERNARY_BTN_HOVER": ["#D9CCB0", "#323238"],
+                    "QUATERNARY_BTN_TEXT": ["gray10", "#DCE4EE"],
+
                     "_NOTA_DND": "Colores del area de arrastrar y soltar (Drag and Drop) de la pestaña de descarga.",
 
                     "DND_BORDER": ["#007BFF", "#00BFFF"],
@@ -2287,31 +2295,37 @@ class MainWindow(TkBase):
                     "JOB_ACTION_ICON_COLOR": ["black", "white"],
                     "JOB_CANCEL_ICON_COLOR": ["#DC3545", "#DC3545"],
 
-                    "_NOTA_LISTA": "Colores de la lista de archivos en la pestaña de Herramientas de Imagen. Esta lista usa Tkinter nativo y no hereda colores automaticamente del tema de CustomTkinter.",
+                    "_NOTA_LISTA": "Colores de las listas (Archivos, Modelos). Usado en Listbox y tablas personalizadas.",
 
                     "LISTBOX_BG": ["#FFFFFF", "#1D1D1D"],
                     "LISTBOX_TEXT": ["black", "white"],
                     "LISTBOX_SELECTED_BG": ["#1F6AA5", "#1F6AA5"],
                     "LISTBOX_SELECTED_TEXT": ["white", "white"],
 
-                    "_NOTA_VISOR": "Colores del visor de imagenes y la cuadricula de transparencia. La cuadricula aparece detras de imagenes con canal alfa (PNG, WebP con transparencia, etc).",
+                    "_NOTA_INTERFAZ": "Colores de estructura: Subtitulos, Tarjetas (Cards) de opciones y Visor de imagenes.",
 
                     "VIEWER_BG": ["#F0F0F0", "#1D1D1D"],
                     "VIEWER_BORDER": ["#565B5E", "#565B5E"],
+                    "SECTION_SUBTITLE": ["#1F6AA5", "#52A2F2"],
+                    "CONFIG_CARD_BG": ["gray85", "gray20"],
+                    "CONFIG_CARD_BORDER": ["gray75", "gray30"],
                     "TRANSPARENCY_GRID_1": ["#E1E1E1", "#252525"],
                     "TRANSPARENCY_GRID_2": ["#F0F0F0", "#1D1D1D"],
 
-                    "_NOTA_HUD": "Colores de las etiquetas informativas (resolucion, zoom, formato) superpuestas en el visor de imagenes.",
+                    "_NOTA_HUD": "Colores de las etiquetas informativas superpuestas en el visor y paneles laterales.",
 
                     "HUD_BG": ["#333333", "#222222"],
                     "HUD_TEXT": ["white", "white"],
                     "SEPARATOR_COLOR": ["gray75", "gray35"],
                     "OPTIONS_PANEL_BG": ["#E5E5E5", "#2B2B2B"],
 
-                    "_NOTA_DESHABILITADO": "Colores de los elementos deshabilitados (botones inactivos, texto atenuado).",
-
                     "DISABLED_TEXT": ["#A0A0A0", "#D3D3D3"],
-                    "DISABLED_FG": ["#565b5f", "#565b5f"]
+                    "DISABLED_FG": ["#565b5f", "#565b5f"],
+
+                    "_NOTA_CONSOLA": "Colores de la Consola de Diagnostico.",
+
+                    "CONSOLE_BG": ["#FFFFFF", "#1D1D1D"],
+                    "CONSOLE_TEXT": ["black", "white"]
                 }
                 
                 # Crear nuevo diccionario con instrucciones primero
