@@ -190,6 +190,68 @@ class ConflictDialog(ctk.CTkToplevel):
         self.result = result
         self.destroy()
 
+class URLInputDialog(ctk.CTkToplevel):
+    """Diálogo personalizado para entrada de texto (URL) con icono y estilo DowP."""
+    def __init__(self, master, title="Entrada", text="Introduce el valor:"):
+        super().__init__(master)
+        Tooltip.hide_all()
+        self.title(title)
+        apply_icon(self)
+        self.lift()
+        self.attributes("-topmost", True)
+        self.grab_set()
+        
+        self.result = None
+        
+        # UI
+        main_frame = ctk.CTkFrame(self, fg_color="transparent")
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        self.label = ctk.CTkLabel(main_frame, text=text, font=ctk.CTkFont(size=13, weight="bold"), wraplength=400)
+        self.label.pack(pady=(0, 15))
+        
+        self.entry = ctk.CTkEntry(main_frame, width=400, placeholder_text="https://...")
+        self.entry.pack(pady=5)
+        self.entry.focus_set()
+        
+        btn_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        btn_frame.pack(pady=(20, 0), fill="x")
+        
+        # Botones con colores de acento
+        ok_color = resolve_theme_color(master, "DOWNLOAD_BTN", ["#28a745", "#218838"])
+        ok_hover = resolve_theme_color(master, "DOWNLOAD_BTN_HOVER", ["#218838", "#1e7e34"])
+        
+        self.ok_button = ctk.CTkButton(btn_frame, text="Aceptar", width=100, 
+                                     fg_color=ok_color, hover_color=ok_hover,
+                                     command=self._on_ok)
+        self.ok_button.pack(side="right", padx=(10, 0))
+        
+        self.cancel_button = ctk.CTkButton(btn_frame, text="Cancelar", width=100,
+                                         fg_color=resolve_theme_color(master, "SECONDARY_BTN", ["#6c757d", "#5a6268"]),
+                                         hover_color=resolve_theme_color(master, "SECONDARY_BTN_HOVER", ["#5a6268", "#4e555b"]),
+                                         command=self._on_cancel)
+        self.cancel_button.pack(side="right")
+        
+        # Atajos de teclado
+        self.bind("<Return>", lambda e: self._on_ok())
+        self.bind("<Escape>", lambda e: self._on_cancel())
+        
+        center_and_fit(self, 440, master=master)
+
+    def _on_ok(self):
+        val = self.entry.get().strip()
+        if val:
+            self.result = val
+            self.destroy()
+
+    def _on_cancel(self):
+        self.result = None
+        self.destroy()
+
+    def get_input(self):
+        self.master.wait_window(self)
+        return self.result
+
 class LoadingWindow(ctk.CTkToplevel):
     def __init__(self, master):
         super().__init__(master)
@@ -697,6 +759,7 @@ class CTkColorPicker(ctk.CTkToplevel):
         super().__init__(master=master)
         
         self.title(title)
+        apply_icon(self)
         self.lift()
         self.attributes("-topmost", True)
         self.grab_set()
@@ -818,6 +881,7 @@ class MultiPageDialog(ctk.CTkToplevel):
         self.lift()
         self.attributes("-topmost", True)
         self.grab_set()
+        apply_icon(self)
         
         self.result = None # Aquí guardaremos el string del rango
 
@@ -1540,6 +1604,7 @@ class DependencySetupWindow(ctk.CTkToplevel):
         # 1. Ventana Rectangular (Sin artefactos de esquinas)
         self.overrideredirect(True)
         self.attributes("-topmost", True)
+        apply_icon(self)
         
         # Dimensiones y centrado relativo al master
         win_width = 500
@@ -1863,3 +1928,81 @@ class ONNXWarningDialog(ctk.CTkToplevel):
         """Espera y devuelve (continuar_booleano, no_mostrar_booleano)"""
         self.master.wait_window(self)
         return self.result_continue, self.dont_show_again
+
+class ThemeTemplateDialog(ctk.CTkToplevel):
+    """Diálogo para visualizar y exportar la plantilla de temas."""
+    def __init__(self, master, template_content):
+        super().__init__(master)
+        Tooltip.hide_all()
+        self.title("Plantilla de Tema DowP")
+        apply_icon(self)
+        self.lift()
+        self.attributes("-topmost", True)
+        self.grab_set()
+        
+        self.template_content = template_content
+        self.win_width = 800
+        self.win_height = 600
+        
+        # Título y descripción
+        self.label = ctk.CTkLabel(self, text="Plantilla de Tema JSON", font=ctk.CTkFont(size=16, weight="bold"))
+        self.label.pack(pady=(20, 5), padx=20)
+        
+        self.desc = ctk.CTkLabel(self, text="Usa este código como base para crear tus propios temas. Cópialo o expórtalo a un archivo .json.", font=ctk.CTkFont(size=12), text_color="gray60")
+        self.desc.pack(pady=(0, 15), padx=20)
+
+        # Textbox para el código
+        self.textbox = ctk.CTkTextbox(self, font=ctk.CTkFont(family="Consolas", size=12))
+        self.textbox.pack(padx=20, pady=10, fill="both", expand=True)
+        self.textbox.insert("0.0", template_content)
+        self.textbox.configure(state="disabled") # Solo lectura por ahora
+
+        # Botones
+        button_frame = ctk.CTkFrame(self, fg_color="transparent")
+        button_frame.pack(padx=20, pady=20, fill="x")
+        
+        copy_btn = ctk.CTkButton(
+            button_frame, text="Copiar al Portapapeles", 
+            fg_color=resolve_theme_color(master, "DOWNLOAD_BTN", ["#28A745", "#218838"]),
+            command=self._copy_to_clipboard
+        )
+        copy_btn.pack(side="left", padx=(0, 10), expand=True, fill="x")
+        
+        export_btn = ctk.CTkButton(
+            button_frame, text="Exportar como...", 
+            fg_color=resolve_theme_color(master, "SECONDARY_BTN", ["gray50", "gray30"]),
+            command=self._export_to_file
+        )
+        export_btn.pack(side="left", padx=10, expand=True, fill="x")
+        
+        close_btn = ctk.CTkButton(
+            button_frame, text="Cerrar", 
+            fg_color=resolve_theme_color(master, "CANCEL_BTN", ["#dc3545", "#c82333"]),
+            command=self.destroy
+        )
+        close_btn.pack(side="left", padx=(10, 0), expand=True, fill="x")
+
+        center_and_fit(self, self.win_width, self.win_height, master=master)
+
+    def _copy_to_clipboard(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.template_content)
+        self.update()
+        messagebox.showinfo("Copiado", "El código ha sido copiado al portapapeles.", parent=self)
+
+    def _export_to_file(self):
+        from tkinter import filedialog
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json")],
+            initialfile="mi_nuevo_tema.json",
+            title="Exportar Plantilla de Tema",
+            parent=self
+        )
+        if file_path:
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(self.template_content)
+                messagebox.showinfo("Éxito", f"Tema exportado correctamente a:\n{file_path}", parent=self)
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo exportar el archivo:\n{e}", parent=self)

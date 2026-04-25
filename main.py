@@ -227,12 +227,27 @@ class SingleInstance:
             print(f"ADVERTENCIA: No se pudo limpiar el archivo de cerrojo: {e}")
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
+
+    # --- MANEJADOR DE CLI PARA YT-DLP (EVITA DOBLE INSTANCIA AL USAR CONSOLA) ---
+    if len(sys.argv) > 1 and sys.argv[1].endswith("yt-dlp.zip"):
+        yt_dlp_zip = sys.argv[1]
+        if os.path.exists(yt_dlp_zip):
+            if yt_dlp_zip not in sys.path:
+                sys.path.insert(0, yt_dlp_zip)
+            try:
+                import yt_dlp
+                yt_dlp.main(sys.argv[2:])
+                sys.exit(0)
+            except Exception as e:
+                print(f"ERROR: Falló la ejecución directa de yt-dlp: {e}")
+                sys.exit(1)
+
     # 1. Mostrar Splash INMEDIATAMENTE
     splash = SplashScreen()
     splash.update_status("Verificando instancia única...")
 
     SingleInstance()
-    multiprocessing.freeze_support()
 
     if PROJECT_ROOT not in sys.path:
         sys.path.insert(0, PROJECT_ROOT)
@@ -318,7 +333,7 @@ if __name__ == "__main__":
             # --- NUEVO: COMPLETADOR Y SANITIZADOR DE TEMAS ---
             try:
                 # 1. Cargar tema base (Green) como red de seguridad para completar claves faltantes
-                _base_theme_path = os.path.join(_internal_themes_dir, "green.json")
+                _base_theme_path = os.path.join(_internal_themes_dir, "shrek.json")
                 _final_theme_data = {}
                 if os.path.exists(_base_theme_path):
                     with open(_base_theme_path, 'r', encoding='utf-8') as f:

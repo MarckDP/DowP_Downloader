@@ -1,6 +1,6 @@
 {
   "_INSTRUCCIONES_DOWP": {
-    "VERSION": "5.0",
+    "VERSION": "5.1",
     "INFO_1": "TOKYO NIGHT CLEAN: Optimizada para evitar artefactos visuales y líneas fantasma.",
     "INFO_2": "FORMATO DUAL: Casi todos los valores aceptan una lista: ['Tokyo Day', 'Tokyo Storm'].",
     "INFO_3": "MODO CLARO: Alta legibilidad con acentos pastel vibrantes.",
@@ -8,7 +8,8 @@
     "AVISO_IMPORTANTE": "No uses 'transparent' en 'border_color', causará errores. Usa un color sólido.",
     "CONSEJO": "Usa códigos Hexadecimales (ej: #AF52DE) para máxima precisión.",
     "CUSTOM_COLORS": "Usa la sección 'CustomColors' para botones específicos (Descargar, Analizar, etc).",
-    "COMO_USAR": "1. Copia este archivo con otro nombre (ej: tokyo_clean.json). 2. Edita los colores. 3. En DowP, Ajustes > Tema > Importar."
+    "COMO_USAR": "1. Copia este archivo con otro nombre (ej: tokyo_clean.json). 2. Edita los colores. 3. En DowP, Ajustes > Tema > Importar.",
+    "ThemeName": "Tokyo Night"
   },
   "CustomColors": {
     "DOWNLOAD_BTN": [
@@ -84,16 +85,16 @@
       "white"
     ],
     "QUATERNARY_BTN": [
-      "#d0d5e3",
-      "#24283b"
+      "#B4BEFE",
+      "#1A1B26"
     ],
     "QUATERNARY_BTN_HOVER": [
-      "#b4befe",
-      "#2f3549"
+      "#89DDFF",
+      "#16161E"
     ],
     "QUATERNARY_BTN_TEXT": [
-      "#3b4261",
-      "#c0caf5"
+      "#1A1B26",
+      "#7AA2F7"
     ],
     "DND_BORDER": [
       "#7aa2f7",

@@ -731,7 +731,7 @@ class ImageToolsTab(ctk.CTkFrame):
         """Carga los colores desde el motor de temas de la aplicación."""
         mode = ctk.get_appearance_mode()
         has_data = bool(self.app.theme_data) and "CustomColors" in self.app.theme_data
-        print(f"🎨 [THEME-LOAD] Modo CTk: '{mode}' | theme_data tiene CustomColors: {has_data}")
+        print(f"[THEME-LOAD] Modo CTk: '{mode}' | theme_data tiene CustomColors: {has_data}")
         
         # Botones Principales
         self.DOWNLOAD_BTN_COLOR = self.app.get_theme_color("DOWNLOAD_BTN", ["#28A745", "#218838"])
@@ -761,9 +761,9 @@ class ImageToolsTab(ctk.CTkFrame):
         self.LISTBOX_SELECTED_TEXT = self.app.get_theme_color("LISTBOX_SELECTED_TEXT", ["white", "white"])
         self.LISTBOX_BORDER = self.app.get_theme_color("DND_BORDER", ["#565B5E", "#565B5E"])
 
-        print(f"🎨 [THEME-LOAD] LISTBOX_BG (raw del JSON): {self.LISTBOX_BG}")
-        print(f"🎨 [THEME-LOAD] LISTBOX_TEXT (raw del JSON): {self.LISTBOX_TEXT}")
-        print(f"🎨 [THEME-LOAD] VIEWER_BG (raw del JSON): {self.VIEWER_BG if hasattr(self, 'VIEWER_BG') else '(no cargado aún)'}")
+        print(f"[THEME-LOAD] LISTBOX_BG (raw del JSON): {self.LISTBOX_BG}")
+        print(f"[THEME-LOAD] LISTBOX_TEXT (raw del JSON): {self.LISTBOX_TEXT}")
+        print(f"[THEME-LOAD] VIEWER_BG (raw del JSON): {self.VIEWER_BG if hasattr(self, 'VIEWER_BG') else '(no cargado aún)'}")
 
         # Colores de Visores
         self.VIEWER_BG = self.app.get_theme_color("VIEWER_BG", ["#F0F0F0", "#1D1D1D"])
@@ -780,12 +780,12 @@ class ImageToolsTab(ctk.CTkFrame):
         self.DISABLED_TEXT_COLOR = self.app.get_theme_color("DISABLED_TEXT", ["#A0A0A0", "#D3D3D3"])
         self.DISABLED_FG_COLOR = self.app.get_theme_color("DISABLED_FG", ["#565b5f", "#565b5f"])
         
-        print(f"🎨 [THEME-LOAD] VIEWER_BG (raw): {self.VIEWER_BG}")
+        print(f"[THEME-LOAD] VIEWER_BG (raw): {self.VIEWER_BG}")
 
     def refresh_theme(self):
         """Aplica los colores del tema actual a todos los widgets de la pestaña."""
         mode = ctk.get_appearance_mode()
-        print(f"🔄 [REFRESH-THEME] === INICIO === Modo CTk: '{mode}'")
+        print(f"[REFRESH-THEME] === INICIO === Modo CTk: '{mode}'")
         
         # Forzar a que la interfaz procese cambios pendientes antes de resolver colores
         self.update_idletasks()
@@ -796,33 +796,33 @@ class ImageToolsTab(ctk.CTkFrame):
         viewer_bg = self._resolve_color(self.VIEWER_BG)
         grid1 = self._resolve_color(self.GRID_COLOR_1)
         grid2 = self._resolve_color(self.GRID_COLOR_2)
-        print(f"🔄 [REFRESH-THEME] Viewer BG resuelto: '{viewer_bg}' (raw: {self.VIEWER_BG})")
+        print(f"[REFRESH-THEME] Viewer BG resuelto: '{viewer_bg}' (raw: {self.VIEWER_BG})")
 
         has_viewer = hasattr(self, 'image_viewer') and self.image_viewer.winfo_exists()
         has_compare = hasattr(self, 'compare_viewer') and self.compare_viewer.winfo_exists()
-        print(f"🔄 [REFRESH-THEME] image_viewer existe: {has_viewer} | compare_viewer existe: {has_compare}")
+        print(f"[REFRESH-THEME] image_viewer existe: {has_viewer} | compare_viewer existe: {has_compare}")
         
         if has_viewer:
             try:
                 border_c = self._resolve_color(self.VIEWER_BORDER)
                 self.image_viewer.refresh_theme(viewer_bg, grid1, grid2, border_color=border_c)
                 actual_bg = self.image_viewer.cget("bg")
-                print(f"🔄 [REFRESH-THEME] ✅ Canvas image_viewer → bg aplicado: '{actual_bg}', border: {border_c}")
+                print(f"[REFRESH-THEME] OK Canvas image_viewer -> bg aplicado: '{actual_bg}', border: {border_c}")
             except Exception as e:
-                print(f"🔄 [REFRESH-THEME] ❌ Canvas image_viewer FALLÓ: {e}")
+                print(f"[REFRESH-THEME] ERR Canvas image_viewer FALLÓ: {e}")
         if has_compare:
             try:
                 border_c = self._resolve_color(self.VIEWER_BORDER)
                 self.compare_viewer.refresh_theme(viewer_bg, border_color=border_c)
                 actual_bg = self.compare_viewer.cget("bg")
-                print(f"🔄 [REFRESH-THEME] ✅ Canvas compare_viewer → bg aplicado: '{actual_bg}', border: {border_c}")
+                print(f"[REFRESH-THEME] OK Canvas compare_viewer -> bg aplicado: '{actual_bg}', border: {border_c}")
             except Exception as e:
-                print(f"🔄 [REFRESH-THEME] ❌ Canvas compare_viewer FALLÓ: {e}")
+                print(f"[REFRESH-THEME] ERR Canvas compare_viewer FALLÓ: {e}")
 
         # El frame del visor también tiene fondo
         if hasattr(self, 'viewer_frame'):
             self.viewer_frame.configure(fg_color=self.VIEWER_BG)
-            print(f"🔄 [REFRESH-THEME] viewer_frame fg_color → {self.VIEWER_BG}")
+            print(f"[REFRESH-THEME] viewer_frame fg_color -> {self.VIEWER_BG}")
 
         # Panel izquierdo (Lista)
         if hasattr(self, 'left_panel'):
@@ -847,8 +847,8 @@ class ImageToolsTab(ctk.CTkFrame):
             listbox_sel_fg = self._resolve_color(self.LISTBOX_SELECTED_TEXT)
             listbox_border = self._resolve_color(self.LISTBOX_BORDER)
             
-            print(f"🔄 [REFRESH-THEME] 📋 Listbox (tkinter) ANTES → bg='{self.file_list_box.cget('bg')}', fg='{self.file_list_box.cget('fg')}'")
-            print(f"🔄 [REFRESH-THEME] 📋 Listbox APLICANDO → bg='{listbox_bg}', fg='{listbox_fg}', sel_bg='{listbox_sel_bg}'")
+            print(f"[REFRESH-THEME] Listbox (tkinter) ANTES -> bg='{self.file_list_box.cget('bg')}', fg='{self.file_list_box.cget('fg')}'")
+            print(f"[REFRESH-THEME] Listbox APLICANDO -> bg='{listbox_bg}', fg='{listbox_fg}', sel_bg='{listbox_sel_bg}'")
             
             try:
                 self.file_list_box.configure(
@@ -860,9 +860,9 @@ class ImageToolsTab(ctk.CTkFrame):
                 )
                 actual_bg = self.file_list_box.cget('bg')
                 actual_fg = self.file_list_box.cget('fg')
-                print(f"🔄 [REFRESH-THEME] 📋 Listbox DESPUÉS → bg='{actual_bg}', fg='{actual_fg}' → {'✅ CAMBIÓ' if actual_bg == listbox_bg else '❌ NO CAMBIÓ'}")
+                print(f"[REFRESH-THEME] Listbox DESPUÉS -> bg='{actual_bg}', fg='{actual_fg}' -> {'OK CAMBIÓ' if actual_bg == listbox_bg else 'ERR NO CAMBIÓ'}")
             except Exception as e:
-                print(f"🔄 [REFRESH-THEME] ❌ Listbox configure FALLÓ: {e}")
+                print(f"[REFRESH-THEME] ERR Listbox configure FALLÓ: {e}")
             
             # Sincronizar etiqueta de ayuda (mismo fondo que la listbox)
             if hasattr(self, 'drag_hint_label'):
@@ -874,10 +874,7 @@ class ImageToolsTab(ctk.CTkFrame):
                 self.file_list_scrollbar_y.configure(fg_color=listbox_bg)
             if hasattr(self, 'file_list_scrollbar_x'):
                 self.file_list_scrollbar_x.configure(fg_color=listbox_bg)
-        else:
-            print(f"🔄 [REFRESH-THEME] ⚠️ file_list_box NO EXISTE (hasattr=False)")
-        
-        print(f"🔄 [REFRESH-THEME] === FIN ===")
+        print(f"[REFRESH-THEME] === FIN ===")
         
         if hasattr(self, 'clear_button'):
             self.clear_button.configure(fg_color=self.SECONDARY_BTN_COLOR, hover_color=self.SECONDARY_BTN_HOVER, text_color=self.SECONDARY_BTN_TEXT)

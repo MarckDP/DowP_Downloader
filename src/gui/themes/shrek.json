@@ -1,13 +1,14 @@
 {
   "_INSTRUCCIONES_DOWP": {
-    "VERSION": "5.0",
+    "VERSION": "5.1",
     "INFO_1": "GUIA DE TEMAS DOWP: Edita este archivo para crear tu propio estilo.",
     "INFO_2": "FORMATO DUAL: Casi todos los valores aceptan una lista: ['Color Modo Claro', 'Color Modo Oscuro'].",
     "INFO_3": "MODO CLARO: Si el texto o botones no se ven bien en modo claro, ajusta el PRIMER valor de la lista.",
     "INFO_4": "FONDO GENERAL: Puedes cambiar 'CTkFrame' y 'CTk' en este JSON para cambiar el color de las ventanas y paneles.",
     "AVISO_IMPORTANTE": "No uses 'transparent' en 'border_color', causará errores. Usa un color sólido.",
     "CONSEJO": "Usa códigos Hexadecimales (ej: #AF52DE) para máxima precisión.",
-    "CUSTOM_COLORS": "Usa la sección 'CustomColors' para botones específicos (Descargar, Analizar, etc)."
+    "CUSTOM_COLORS": "Usa la sección 'CustomColors' para botones específicos (Descargar, Analizar, etc).",
+    "ThemeName": "Verde Shrek"
   },
   "CustomColors": {
     "DOWNLOAD_BTN": ["#2E7D32", "#1B5E20"],
@@ -28,9 +29,9 @@
     "TERTIARY_BTN": ["#2F4F4F", "#1A2F2F"],
     "TERTIARY_BTN_HOVER": ["#1A2F2F", "#0F1A1A"],
     "TERTIARY_BTN_TEXT": ["white", "white"],
-    "QUATERNARY_BTN": ["#E8F5E9", "#2E3436"],
-    "QUATERNARY_BTN_HOVER": ["#C8E6C9", "#252A2B"],
-    "QUATERNARY_BTN_TEXT": ["gray10", "#DCE4EE"],
+    "QUATERNARY_BTN": ["#F1F8E9", "#1B2E1C"],
+    "QUATERNARY_BTN_HOVER": ["#DCEDC8", "#0E1A0F"],
+    "QUATERNARY_BTN_TEXT": ["#2E7D32", "#A5D6A7"],
     "DND_BORDER": ["#2E7D32", "#1B5E20"],
     "DND_BG": ["#F1F8E9", "#1D2321"],
     "DND_TEXT": ["#2E7D32", "#1B5E20"],

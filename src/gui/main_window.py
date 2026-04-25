@@ -59,7 +59,7 @@ from .config_tab import ConfigTab
 from .dialogs import (
     ConflictDialog, LoadingWindow, CompromiseDialog, 
     SimpleMessageDialog, SavePresetDialog, PlaylistErrorDialog,
-    DependencySetupWindow, Tooltip
+    DependencySetupWindow, Tooltip, apply_icon
 )
 from src.core.constants import (
     VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, SINGLE_STREAM_AUDIO_CONTAINERS,
@@ -313,6 +313,7 @@ class LoadingWindow(ctk.CTkToplevel):
     def __init__(self, master):
         super().__init__(master)
         self.title("Iniciando...")
+        apply_icon(self)
         self.geometry("350x120")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", lambda: None) 
@@ -2211,7 +2212,7 @@ class MainWindow(TkBase):
     def _ensure_theme_template(self):
         """Crea o actualiza el archivo de plantilla basándose en dorado_premium.json como modelo de referencia."""
         template_path = os.path.join(self.USER_THEMES_DIR, "plantilla_tema.json")
-        TEMPLATE_VERSION = "5.0"
+        TEMPLATE_VERSION = "5.1"
         
         should_update = not os.path.exists(template_path)
         
@@ -2233,11 +2234,11 @@ class MainWindow(TkBase):
                 from collections import OrderedDict
                 base_path = getattr(sys, '_MEIPASS', self.APP_BASE_PATH)
                 
-                # Usar dorado_premium.json como modelo base (tema de referencia probado y pulido)
-                premium_path = os.path.join(base_path, "src", "gui", "themes", "dorado_premium.json")
+                # Usar dorado.json como modelo base (tema de referencia probado y pulido)
+                premium_path = os.path.join(base_path, "src", "gui", "themes", "dorado.json")
                 
                 if not os.path.exists(premium_path):
-                    print(f"ADVERTENCIA: No se encontró dorado_premium.json en {premium_path}. No se puede crear plantilla.")
+                    print(f"ADVERTENCIA: No se encontró dorado.json en {premium_path}. No se puede crear plantilla.")
                     return
                 
                 with open(premium_path, 'r', encoding='utf-8') as f:
@@ -2253,6 +2254,7 @@ class MainWindow(TkBase):
                     "INFO_2": "FORMATO DUAL: Casi todos los valores aceptan una lista: ['Color Modo Claro', 'Color Modo Oscuro'].",
                     "INFO_3": "MODO CLARO: Si el texto o botones no se ven bien en modo claro, ajusta el PRIMER valor de la lista.",
                     "INFO_4": "FONDO GENERAL: Puedes cambiar 'CTkFrame' y 'CTk' en este JSON para cambiar el color de las ventanas y paneles.",
+                    "INFO_5": "NOMBRE INTERNO: Agrega 'ThemeName': 'Mi Tema' en la raíz para que aparezca así en el menú.",
                     "AVISO_IMPORTANTE": "No uses 'transparent' en 'border_color', causará errores. Usa un color sólido.",
                     "CONSEJO": "Usa códigos Hexadecimales (ej: #AF52DE) para máxima precisión.",
                     "CUSTOM_COLORS": "Usa la sección 'CustomColors' para botones específicos (Descargar, Analizar, etc).",
@@ -2273,19 +2275,27 @@ class MainWindow(TkBase):
             except Exception as e:
                 print(f"ERROR: No se pudo crear la plantilla de tema: {e}")
 
-    def get_theme_color(self, key, default_color):
+    def get_theme_color(self, key, default_color, is_ctk_widget=False):
         """
-        Recupera un color personalizado del tema JSON.
-        'key' es el nombre del color en la sección 'CustomColors'.
-        'default_color' es el valor de fallback si no existe.
+        Recupera un color del tema JSON.
+        'key' es el nombre del color en 'CustomColors' o el nombre del widget (ej: 'CTkLabel').
+        'default_color' es el valor de fallback.
+        'is_ctk_widget' permite buscar en las secciones base de CustomTkinter.
         """
-        if not self.theme_data or "CustomColors" not in self.theme_data:
+        if not self.theme_data:
+            return default_color
+            
+        if is_ctk_widget:
+            # Buscar en la sección raíz del widget (ej: CTkLabel -> text_color)
+            section = self.theme_data.get(key, {})
+            return section.get("text_color", default_color)
+            
+        if "CustomColors" not in self.theme_data:
             return default_color
         
         color_val = self.theme_data["CustomColors"].get(key, default_color)
         
         # Sanitización extra de seguridad para "transparent" en border_color
-        # (Aunque main.py ya lo hace, esto protege accesos directos futuros)
         if "border_color" in key.lower():
             if isinstance(color_val, list):
                 color_val = [c if c != "transparent" else "gray65" for c in color_val]
@@ -2315,7 +2325,7 @@ class MainWindow(TkBase):
             
             if found_path:
                 # 1. Cargar tema base (Green) como red de seguridad
-                base_theme_path = os.path.join(internal_themes_dir, "green.json")
+                base_theme_path = os.path.join(internal_themes_dir, "shrek.json")
                 final_data = {}
                 if os.path.exists(base_theme_path):
                     with open(base_theme_path, 'r', encoding='utf-8') as f:
@@ -2328,7 +2338,7 @@ class MainWindow(TkBase):
                 # Detectar claves faltantes antes de mezclar para informar al usuario
                 missing = [k for k in final_data if k not in user_data and not k.startswith("_") and k != "CustomColors"]
                 if missing:
-                    print(f"⚠️ ADVERTENCIA: El tema '{theme}' está incompleto.")
+                    print(f"ADVERTENCIA: El tema '{theme}' está incompleto.")
                     print(f"   Claves faltantes: {', '.join(missing)}")
                     self.theme_warnings = [f"El tema '{theme}' está incompleto. Faltan {len(missing)} secciones técnicas (ej: {', '.join(missing[:3])}). Se usaron valores por defecto."]
                     self.after(500, self._show_theme_warnings)
@@ -2360,7 +2370,8 @@ class MainWindow(TkBase):
                 
                 _sanitize(final_data)
                 self.theme_data = final_data
-                print(f"INFO: Tema '{theme}' completado y recargado.")
+                self.current_theme_name = final_data.get("ThemeName") or final_data.get("_INSTRUCCIONES_DOWP", {}).get("ThemeName") or theme.replace("_", " ").replace("-", " ").title()
+                print(f"INFO: Tema '{self.current_theme_name}' ({theme}) completado y recargado.")
             else:
                 self.theme_data = {}
         except Exception as e:

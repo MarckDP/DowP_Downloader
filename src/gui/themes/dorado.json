@@ -1,13 +1,14 @@
 {
   "_INSTRUCCIONES_DOWP": {
-    "VERSION": "5.0",
+    "VERSION": "5.1",
     "INFO_1": "GUIA DE TEMAS DOWP: Edita este archivo para crear tu propio estilo.",
     "INFO_2": "FORMATO DUAL: Casi todos los valores aceptan una lista: ['Color Modo Claro', 'Color Modo Oscuro'].",
     "INFO_3": "MODO CLARO: Si el texto o botones no se ven bien en modo claro, ajusta el PRIMER valor de la lista.",
     "INFO_4": "FONDO GENERAL: Puedes cambiar 'CTkFrame' y 'CTk' en este JSON para cambiar el color de las ventanas y paneles.",
     "AVISO_IMPORTANTE": "No uses 'transparent' en 'border_color', causará errores. Usa un color sólido.",
     "CONSEJO": "Usa códigos Hexadecimales (ej: #AF52DE) para máxima precisión.",
-    "CUSTOM_COLORS": "Usa la sección 'CustomColors' para botones específicos (Descargar, Analizar, etc)."
+    "CUSTOM_COLORS": "Usa la sección 'CustomColors' para botones específicos (Descargar, Analizar, etc).",
+    "ThemeName": "Dorado"
   },
   "CustomColors": {
     "DOWNLOAD_BTN": ["#B8860B", "#D4AF37"],
@@ -28,9 +29,9 @@
     "TERTIARY_BTN": ["#A0522D", "#8B4513"],
     "TERTIARY_BTN_HOVER": ["#8B4513", "#5D2E0B"],
     "TERTIARY_BTN_TEXT": ["white", "white"],
-    "QUATERNARY_BTN": ["#E5DCC5", "#3F3F46"],
-    "QUATERNARY_BTN_HOVER": ["#D9CCB0", "#323238"],
-    "QUATERNARY_BTN_TEXT": ["gray10", "#DCE4EE"],
+    "QUATERNARY_BTN": ["#F5F0E1", "#4E342E"],
+    "QUATERNARY_BTN_HOVER": ["#EEDCBA", "#3E2723"],
+    "QUATERNARY_BTN_TEXT": ["#8B4513", "#D7B56D"],
     "DND_BORDER": ["#B8860B", "#D4AF37"],
     "DND_BG": ["#FAF8F5", "#2A2A2E"],
     "DND_TEXT": ["#B8860B", "#D4AF37"],

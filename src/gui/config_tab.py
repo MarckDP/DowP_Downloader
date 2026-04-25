@@ -6,7 +6,7 @@ import threading
 import requests
 import time
 from tkinter import filedialog, messagebox
-from .dialogs import Tooltip
+from .dialogs import Tooltip, URLInputDialog
 
 class ConfigTab(ctk.CTkFrame):
     def __init__(self, master, app, *args, **kwargs):
@@ -39,19 +39,19 @@ class ConfigTab(ctk.CTkFrame):
         self.sidebar_title.grid(row=0, column=0, padx=20, pady=(20, 10))
         
         # Botones del menú lateral
-        self.btn_general = ctk.CTkButton(self.sidebar_frame, text="General", fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("general"))
+        self.btn_general = ctk.CTkButton(self.sidebar_frame, text="General", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("general"))
         self.btn_general.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
         
-        self.btn_cookies = ctk.CTkButton(self.sidebar_frame, text="Cookies", fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("cookies"))
+        self.btn_cookies = ctk.CTkButton(self.sidebar_frame, text="Cookies", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("cookies"))
         self.btn_cookies.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
         
-        self.btn_deps = ctk.CTkButton(self.sidebar_frame, text="Dependencias", fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("deps"))
+        self.btn_deps = ctk.CTkButton(self.sidebar_frame, text="Dependencias", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("deps"))
         self.btn_deps.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
         
-        self.btn_models = ctk.CTkButton(self.sidebar_frame, text="Modelos", fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("models"))
+        self.btn_models = ctk.CTkButton(self.sidebar_frame, text="Modelos", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("models"))
         self.btn_models.grid(row=4, column=0, padx=10, pady=5, sticky="ew")
 
-        self.btn_console = ctk.CTkButton(self.sidebar_frame, text="Consola", fg_color="transparent", text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("console"))
+        self.btn_console = ctk.CTkButton(self.sidebar_frame, text="Consola", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("console"))
         self.btn_console.grid(row=5, column=0, padx=10, pady=5, sticky="ew")
         
         # Guardamos los botones en un dict para cambiarles el color al seleccionarlos
@@ -114,45 +114,43 @@ class ConfigTab(ctk.CTkFrame):
         self.appearance_frame.pack(fill="x", pady=5, padx=5)
         self.config_cards.append(self.appearance_frame)
         
-        theme_row = ctk.CTkFrame(self.appearance_frame, fg_color="transparent")
-        theme_row.pack(fill="x", padx=15, pady=15)
+        # --- FILA 1: TEMA Y MODO (Agrupados) ---
+        top_row = ctk.CTkFrame(self.appearance_frame, fg_color="transparent")
+        top_row.pack(fill="x", padx=15, pady=(15, 10))
         
-        accent_lbl = ctk.CTkLabel(theme_row, text="Color de Acento del Sistema:", font=ctk.CTkFont(size=14, weight="bold"), text_color=self.SECTION_SUBTITLE)
+        # Contenedor para mantenerlos juntos a la izquierda
+        selection_group = ctk.CTkFrame(top_row, fg_color="transparent")
+        selection_group.pack(side="left")
+
+        accent_lbl = ctk.CTkLabel(selection_group, text="Tema:", font=ctk.CTkFont(size=14, weight="bold"), text_color=self.SECTION_SUBTITLE)
         accent_lbl.pack(side="left")
         self.config_subtitles.append(accent_lbl)
         
-        # Mapeo de nombres para el menú
+        # Mapeo de nombres para el menú (Temas Base de CustomTkinter)
         self.theme_display_names = {
             "blue": "Azul (Estándar)",
             "dark-blue": "Azul Profundo",
-            "green": "Bosque (Verde Oscuro)"
+            "green": "Verde (Estándar)"
         }
         self.theme_internal_names = {v: k for k, v in self.theme_display_names.items()}
         
-        current_theme = getattr(self.app, 'selected_theme_accent', 'blue')
-        display_theme = self.theme_display_names.get(current_theme, "Azul (Estándar)")
-        
         self.theme_menu = ctk.CTkOptionMenu(
-            theme_row, 
-            values=["Azul (Estándar)", "Azul Profundo"], # Placeholder inicial
+            selection_group, 
+            values=["Azul (Estándar)", "Azul Profundo"], 
             command=self._on_theme_change,
-            width=200
+            width=160
         )
-        self.theme_menu.pack(side="left", padx=10)
+        self.theme_menu.pack(side="left", padx=(10, 40)) # Espacio de 40px entre menús
 
-        # --- NUEVA FILA: MODO DE APARIENCIA ---
-        mode_row = ctk.CTkFrame(self.appearance_frame, fg_color="transparent")
-        mode_row.pack(fill="x", padx=15, pady=(0, 15))
-        
-        mode_lbl = ctk.CTkLabel(mode_row, text="Modo de Apariencia:", font=ctk.CTkFont(size=14, weight="bold"), text_color=self.SECTION_SUBTITLE)
+        mode_lbl = ctk.CTkLabel(selection_group, text="Modo:", font=ctk.CTkFont(size=14, weight="bold"), text_color=self.SECTION_SUBTITLE)
         mode_lbl.pack(side="left")
         self.config_subtitles.append(mode_lbl)
         
         self.appearance_mode_menu = ctk.CTkOptionMenu(
-            mode_row,
+            selection_group,
             values=["Sistema", "Claro", "Oscuro"],
             command=self._on_appearance_mode_change,
-            width=200
+            width=120
         )
         self.appearance_mode_menu.pack(side="left", padx=10)
         
@@ -161,14 +159,69 @@ class ConfigTab(ctk.CTkFrame):
         mode_map = {"System": "Sistema", "Light": "Claro", "Dark": "Oscuro"}
         self.appearance_mode_menu.set(mode_map.get(current_mode, "Sistema"))
         
-        # Botón Importar (NUEVO)
+        # --- FILA 2: BOTONES DE ACCIÓN (Reordenados) ---
+        buttons_row = ctk.CTkFrame(self.appearance_frame, fg_color="transparent")
+        buttons_row.pack(fill="x", padx=15, pady=(0, 15))
+        
+        # 1. Importar
         self.import_theme_btn = ctk.CTkButton(
-            theme_row, 
-            text="Importar Tema 📂", 
-            width=120,
+            buttons_row, 
+            text="Importar Tema", 
+            width=100,
+            fg_color=self.TERTIARY_BTN,
+            hover_color=self.TERTIARY_HOVER,
+            text_color=self.TERTIARY_TEXT,
             command=self._import_theme
         )
         self.import_theme_btn.pack(side="left", padx=5)
+
+        # 2. Instalar URL (Movido aquí)
+        self.install_url_btn = ctk.CTkButton(
+            buttons_row, 
+            text="Instalar URL", 
+            width=100,
+            fg_color=self.TERTIARY_BTN,
+            hover_color=self.TERTIARY_HOVER,
+            text_color=self.TERTIARY_TEXT,
+            command=self._install_theme_from_url
+        )
+        self.install_url_btn.pack(side="left", padx=5)
+
+        # 3. Ver Plantilla
+        self.view_template_btn = ctk.CTkButton(
+            buttons_row, 
+            text="Ver Plantilla", 
+            width=100,
+            fg_color=self.TERTIARY_BTN,
+            hover_color=self.TERTIARY_HOVER,
+            text_color=self.TERTIARY_TEXT,
+            command=self._on_view_template
+        )
+        self.view_template_btn.pack(side="left", padx=5)
+
+        # 4. Abrir Carpeta (Emoji y movido)
+        self.open_themes_btn = ctk.CTkButton(
+            buttons_row, 
+            text="📁", 
+            width=40,
+            fg_color=self.TERTIARY_BTN,
+            hover_color=self.TERTIARY_HOVER,
+            text_color=self.TERTIARY_TEXT,
+            command=self._open_themes_folder
+        )
+        self.open_themes_btn.pack(side="left", padx=5)
+
+        # 5. Borrar Tema (Nombre corto)
+        self.delete_theme_btn = ctk.CTkButton(
+            buttons_row, 
+            text="Borrar Tema", 
+            width=100,
+            fg_color=self.CANCEL_BTN,
+            hover_color=self.CANCEL_HOVER,
+            text_color=self.CANCEL_TEXT,
+            command=self._delete_theme
+        )
+        self.delete_theme_btn.pack(side="left", padx=5)
 
         self._refresh_theme_list()
 
@@ -1117,7 +1170,8 @@ class ConfigTab(ctk.CTkFrame):
         # Temas base de CTK
         self.theme_display_names = {
             "blue": "Azul (Estándar)",
-            "dark-blue": "Azul Profundo"
+            "dark-blue": "Azul Profundo",
+            "green": "Verde (Estándar)"
         }
         
         # 1. Escaneo de Temas Internos
@@ -1129,6 +1183,7 @@ class ConfigTab(ctk.CTkFrame):
         
         for directory in [internal_dir, user_dir]:
             if directory and os.path.exists(directory):
+                import json
                 for file in os.listdir(directory):
                     if file.endswith(".json"):
                         name = file[:-5] # Quitar .json
@@ -1137,8 +1192,21 @@ class ConfigTab(ctk.CTkFrame):
                         if name == "plantilla_tema" or name.startswith("."):
                             continue
                             
-                        # Formatear nombre para mostrar (ej: verde_bosque -> Verde Bosque)
-                        display = name.replace("_", " ").replace("-", " ").title()
+                        # Intentar leer el nombre interno del JSON
+                        full_path = os.path.join(directory, file)
+                        display = None
+                        try:
+                            with open(full_path, 'r', encoding='utf-8') as f:
+                                data = json.load(f)
+                                # Buscar ThemeName en raíz o en instrucciones
+                                display = data.get("ThemeName") or data.get("_INSTRUCCIONES_DOWP", {}).get("ThemeName")
+                        except:
+                            pass
+                            
+                        if not display:
+                            # Fallback: Formatear nombre para mostrar (ej: verde_bosque -> Verde Bosque)
+                            display = name.replace("_", " ").replace("-", " ").title()
+                        
                         self.theme_display_names[name] = display
         
         self.theme_internal_names = {v: k for k, v in self.theme_display_names.items()}
@@ -1179,6 +1247,124 @@ class ConfigTab(ctk.CTkFrame):
             
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo importar el tema: {e}")
+
+    def _install_theme_from_url(self):
+        """Descarga un tema desde una URL y lo guarda en la carpeta de temas."""
+        from tkinter import messagebox
+        import requests
+        import json
+        
+        # Ocultar tooltips antes de abrir el diálogo de entrada
+        Tooltip.hide_all()
+        
+        dialog = URLInputDialog(master=self.app, text="Pega el link directo (JSON Raw) del tema:", title="Instalar Tema por URL")
+        url = dialog.get_input()
+        
+        if not url:
+            return
+            
+        try:
+            # 1. Descargar
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            
+            # 2. Validar que sea JSON
+            try:
+                theme_data = response.json()
+            except:
+                messagebox.showerror("Error de Formato", "El link no contiene un JSON válido.")
+                return
+            
+            # 3. Determinar nombre del archivo
+            # Prioridad: ThemeName interno > Nombre en URL > "tema_descargado"
+            internal_name = theme_data.get("ThemeName") or theme_data.get("_INSTRUCCIONES_DOWP", {}).get("ThemeName")
+            if internal_name:
+                filename = internal_name.lower().replace(" ", "_") + ".json"
+            else:
+                filename = url.split("/")[-1]
+                if "?" in filename: filename = filename.split("?")[0] # Limpiar query params
+                if not filename.endswith(".json"):
+                    filename = "tema_descargado.json"
+            
+            dest_path = os.path.join(self.app.USER_THEMES_DIR, filename)
+            
+            # 4. Preguntar si ya existe
+            if os.path.exists(dest_path):
+                if not messagebox.askyesno("Sobrescribir", f"El tema '{filename}' ya existe. ¿Quieres sobrescribirlo?"):
+                    return
+            
+            # 5. Guardar
+            with open(dest_path, "w", encoding="utf-8") as f:
+                json.dump(theme_data, f, indent=2, ensure_ascii=False)
+            
+            # 6. Refrescar
+            self._refresh_theme_list()
+            messagebox.showinfo("Instalación Exitosa", f"El tema '{filename}' se ha instalado correctamente.")
+            
+        except Exception as e:
+            messagebox.showerror("Error de Descarga", f"No se pudo descargar el tema:\n\n{e}")
+
+    def _delete_theme(self):
+        """Elimina el tema seleccionado actualmente (si es un tema de usuario)."""
+        from tkinter import messagebox
+        import os
+        
+        display_name = self.theme_menu.get()
+        internal_name = self.theme_internal_names.get(display_name)
+        
+        if not internal_name:
+            return
+            
+        # No permitir borrar temas internos básicos (Sistema y Curados)
+        system_themes = [
+            "blue", "dark-blue", "green", "green_shrek", "dorado", "tokyo", 
+            "coffee_noir", "cyberpunk_neon", "forest_moss", "midnight_ocean", "sunset_lavender", "shrek"
+        ]
+        if internal_name in system_themes:
+            messagebox.showwarning("Acción no permitida", "No puedes eliminar los temas preinstalados del sistema.")
+            return
+            
+        theme_path = os.path.join(self.app.USER_THEMES_DIR, f"{internal_name}.json")
+        
+        if not os.path.exists(theme_path):
+            messagebox.showerror("Error", f"No se encontró el archivo del tema: {internal_name}.json")
+            return
+            
+        if messagebox.askyesno("Confirmar eliminación", f"¿Estás seguro de que quieres eliminar el tema '{display_name}'?\n\nEsta acción no se puede deshacer."):
+            try:
+                os.remove(theme_path)
+                messagebox.showinfo("Tema eliminado", "El tema ha sido eliminado correctamente.\n\nEs necesario reiniciar la aplicación para aplicar los cambios.")
+                
+                # Volver al tema por defecto para evitar errores
+                self.app.selected_theme_accent = "blue"
+                self.app.save_config()
+                
+                # Opcional: preguntar si quiere reiniciar ahora
+                if messagebox.askyesno("Reiniciar ahora", "¿Quieres reiniciar DowP ahora para aplicar los cambios?"):
+                    self.app._on_restart_app()
+                else:
+                    self._refresh_theme_list()
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo eliminar el tema: {e}")
+
+    def _open_themes_folder(self):
+        """Abre la carpeta de temas del usuario en el explorador de archivos."""
+        import subprocess
+        import os
+        
+        path = self.app.USER_THEMES_DIR
+        if not os.path.exists(path):
+            os.makedirs(path, exist_ok=True)
+            
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir la carpeta: {e}")
 
     def _update_dpi_warning(self, val):
         """Muestra u oculta la advertencia según el valor de DPI."""
@@ -1770,11 +1956,11 @@ class ConfigTab(ctk.CTkFrame):
         # Resaltar el botón seleccionado (efecto visual)
         for name, btn in self.menu_buttons.items():
             if name == section_name:
-                # Color para el botón seleccionado
-                btn.configure(fg_color=("gray75", "gray25")) 
+                # Color para el botón seleccionado (usar acento del tema)
+                btn.configure(fg_color=self.MENU_SELECTED_BG, text_color=self.MENU_SELECTED_TEXT) 
             else:
                 # Fondo transparente para los no seleccionados
-                btn.configure(fg_color="transparent") 
+                btn.configure(fg_color="transparent", text_color=self.MENU_NORMAL_TEXT) 
         
         # Mostrar el frame correspondiente en el contenedor
         if section_name in self.sections:
@@ -1839,6 +2025,11 @@ class ConfigTab(ctk.CTkFrame):
         self.STATUS_ERROR = self.app.get_theme_color("STATUS_ERROR", ["#DC3545", "#C82333"])
         self.STATUS_WARNING = self.app.get_theme_color("STATUS_WARNING", ["#FFA500", "#FF8C00"])
         
+        # Colores de Menú Lateral (NUEVO)
+        self.MENU_SELECTED_BG = self.app.get_theme_color("LISTBOX_SELECTED_BG", ["#3B8ED0", "#1F6AA5"])
+        self.MENU_SELECTED_TEXT = self.app.get_theme_color("LISTBOX_SELECTED_TEXT", ["white", "white"])
+        self.MENU_NORMAL_TEXT = self.app.get_theme_color("CTkLabel", ["gray10", "#DCE4EE"], is_ctk_widget=True)
+        
         # Corner radius global del tema (o el de CTkFrame si no hay)
         _theme_frame = self.app.theme_data.get("CTkFrame", {})
         self.CONFIG_CARD_RADIUS = _theme_frame.get("corner_radius", 10)
@@ -1867,7 +2058,7 @@ class ConfigTab(ctk.CTkFrame):
         # 4. Aplicar a botones específicos
         # Botones Principales (Dorado/Verde)
         main_btns = [
-            'import_theme_btn', 'ink_verify_btn', 'test_cookies_btn', 
+            'ink_verify_btn', 'test_cookies_btn', 
             'btn_check_all_updates', 'btn_add_custom', '_btn_execute'
         ]
         for btn_name in main_btns:
@@ -1875,6 +2066,14 @@ class ConfigTab(ctk.CTkFrame):
                 btn = getattr(self, btn_name)
                 if btn.winfo_exists():
                     btn.configure(fg_color=self.DOWNLOAD_BTN, hover_color=self.DOWNLOAD_HOVER, text_color=self.DOWNLOAD_TEXT)
+        
+        # Botones Terciarios (Acento secundario/Temas)
+        theme_btns = ['import_theme_btn', 'view_template_btn', 'install_url_btn', 'open_themes_btn']
+        for btn_name in theme_btns:
+            if hasattr(self, btn_name):
+                btn = getattr(self, btn_name)
+                if btn.winfo_exists():
+                    btn.configure(fg_color=self.TERTIARY_BTN, hover_color=self.TERTIARY_HOVER, text_color=self.TERTIARY_TEXT)
 
         # Botones Secundarios (Bronce/Gris)
         sec_btns = [
@@ -1901,6 +2100,16 @@ class ConfigTab(ctk.CTkFrame):
             self._btn_cancel_cmd.configure(border_color=self.CANCEL_BTN, text_color=self.CANCEL_TEXT, hover_color=self.CANCEL_HOVER)
         if hasattr(self, '_btn_clear'):
             self._btn_clear.configure(fg_color=self.CANCEL_BTN, hover_color=self.CANCEL_HOVER, text_color=self.CANCEL_TEXT)
+        
+        # 4b. Refrescar colores del menú lateral
+        if hasattr(self, 'menu_buttons'):
+            # Detectar cuál está seleccionado actualmente para reaplicar colores
+            current_section = "general"
+            for name, frame in self.sections.items():
+                if frame.winfo_ismapped():
+                    current_section = name
+                    break
+            self.select_section(current_section)
 
         # 5. Botones de modelos e IA (Refrescar según estado para evitar pintado erróneo)
         if hasattr(self, 'model_rows'):
@@ -1980,7 +2189,7 @@ class ConfigTab(ctk.CTkFrame):
             self._console_textbox.tag_config("warning", foreground=self._resolve_color(_status_warning))
             self._console_textbox.tag_config("success", foreground=self._resolve_color(_status_success))
 
-        print("🔄 [REFRESH-THEME] ✅ ConfigTab actualizada dinámicamente.")
+        print("[REFRESH-THEME] OK ConfigTab actualizada dinámicamente.")
 
     def _resolve_color(self, color_pair):
         """Resuelve un par [claro, oscuro] según el modo de apariencia actual."""
@@ -2549,3 +2758,28 @@ class ConfigTab(ctk.CTkFrame):
             print("DEBUG: Referencias de Inkscape actualizadas en ImageToolsTab.")
         
         self.app.save_settings()
+    def _on_view_template(self):
+        """Muestra el diálogo con la plantilla del tema (dorado.json)."""
+        import json
+        from src.gui.dialogs import ThemeTemplateDialog
+        
+        # Intentar cargar dorado.json (que es nuestra base)
+        base_path = getattr(sys, '_MEIPASS', self.app.APP_BASE_PATH)
+        dorado_path = os.path.join(base_path, "src", "gui", "themes", "dorado.json")
+        
+        template_content = ""
+        if os.path.exists(dorado_path):
+            try:
+                with open(dorado_path, 'r', encoding='utf-8') as f:
+                    # Lo cargamos y volvemos a volcar para asegurar indentación bonita
+                    data = json.load(f)
+                    template_content = json.dumps(data, indent=2, ensure_ascii=False)
+            except Exception as e:
+                template_content = f"Error cargando dorado.json: {e}"
+        else:
+            template_content = "Error: No se encontró dorado.json en la ruta especificada."
+            
+        if not template_content:
+             template_content = "// No se pudo cargar la plantilla."
+
+        ThemeTemplateDialog(self.app, template_content)

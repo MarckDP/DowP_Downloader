@@ -1,0 +1,183 @@
+{
+  "_INSTRUCCIONES_DOWP": {
+    "VERSION": "5.1",
+    "INFO_1": "PINK DIAMOND: Estética vibrante y moderna dominada por tonos rosas y magentas.",
+    "ThemeName": "Pink Diamond"
+  },
+  "CustomColors": {
+    "DOWNLOAD_BTN": ["#F06292", "#C2185B"],
+    "DOWNLOAD_BTN_HOVER": ["#EC407A", "#AD1457"],
+    "ANALYZE_BTN": ["#BA68C8", "#7B1FA2"],
+    "ANALYZE_BTN_HOVER": ["#AB47BC", "#6A1B9A"],
+    "CANCEL_BTN": ["#F48FB1", "#880E4F"],
+    "CANCEL_BTN_HOVER": ["#F06292", "#AD1457"],
+    "PROCESS_BTN": ["#FF80AB", "#F50057"],
+    "PROCESS_BTN_HOVER": ["#FF4081", "#C51162"],
+    "SECONDARY_BTN": ["#FCE4EC", "#3D1A2A"],
+    "SECONDARY_BTN_HOVER": ["#F8BBD0", "#2D101A"],
+    "DOWNLOAD_BTN_TEXT": ["white", "white"],
+    "ANALYZE_BTN_TEXT": ["white", "white"],
+    "CANCEL_BTN_TEXT": ["white", "white"],
+    "PROCESS_BTN_TEXT": ["white", "white"],
+    "SECONDARY_BTN_TEXT": ["#880E4F", "#FCE4EC"],
+    "TERTIARY_BTN": ["#F8BBD0", "#4A148C"],
+    "TERTIARY_BTN_HOVER": ["#F48FB1", "#311B92"],
+    "TERTIARY_BTN_TEXT": ["#880E4F", "#E1BEE7"],
+    "QUATERNARY_BTN": ["#FFF1F1", "#2D1010"],
+    "QUATERNARY_BTN_HOVER": ["#FFEBEE", "#1F0A0A"],
+    "QUATERNARY_BTN_TEXT": ["#AD1457", "#F48FB1"],
+    "DND_BORDER": ["#F06292", "#C2185B"],
+    "DND_BG": ["#FFF5F8", "#1A0F14"],
+    "DND_TEXT": ["#F06292", "#C2185B"],
+    "STATUS_SUCCESS": ["#EC407A", "#C2185B"],
+    "STATUS_ERROR": ["#E91E63", "#880E4F"],
+    "STATUS_WARNING": ["#FF4081", "#C51162"],
+    "STATUS_PENDING": ["#F8BBD0", "#4A148C"],
+    "JOB_ACTION_ICON_COLOR": ["#3D1A2A", "#FCE4EC"],
+    "JOB_CANCEL_ICON_COLOR": ["#C2185B", "#C2185B"],
+    "LISTBOX_BG": ["#FFF9FB", "#2E2429"],
+    "LISTBOX_TEXT": ["#3D1A2A", "#F8BBD0"],
+    "LISTBOX_SELECTED_BG": ["#FCE4EC", "#4A142A"],
+    "LISTBOX_SELECTED_TEXT": ["#C2185B", "#FCE4EC"],
+    "VIEWER_BG": ["#FFF5F8", "#291D23"],
+    "VIEWER_BORDER": ["#F8BBD0", "#45323C"],
+    "SECTION_SUBTITLE": ["#C2185B", "#F06292"],
+    "CONFIG_CARD_BG": ["#FFFFFF", "#2E1F26"],
+    "CONFIG_CARD_BORDER": ["#FCE4EC", "#45323C"],
+    "HUD_BG": ["#FFF9FB", "#2E2429"],
+    "HUD_TEXT": ["#3D1A2A", "#F8BBD0"],
+    "SEPARATOR_COLOR": ["#FCE4EC", "#45323C"],
+    "OPTIONS_PANEL_BG": ["#FFF9FB", "#2E2429"],
+    "TRANSPARENCY_GRID_1": ["#FCE4EC", "#1F1519"],
+    "TRANSPARENCY_GRID_2": ["#FFFFFF", "#140F12"],
+    "CONSOLE_BG": ["#FFFFFF", "#0A0507"],
+    "CONSOLE_TEXT": ["#3D1A2A", "#F8BBD0"]
+  },
+  "CTk": { "fg_color": ["#FFF9FB", "#291D23"] },
+  "CTkToplevel": { "fg_color": ["#FFF9FB", "#291D23"] },
+  "CTkFrame": {
+    "corner_radius": 12,
+    "border_width": 0,
+    "fg_color": ["#FFF5F8", "#36272F"],
+    "top_fg_color": ["#FCE4EC", "#45323C"],
+    "border_color": ["#F8BBD0", "#543D49"]
+  },
+  "CTkButton": {
+    "corner_radius": 10,
+    "border_width": 0,
+    "fg_color": ["#F06292", "#C2185B"],
+    "hover_color": ["#EC407A", "#AD1457"],
+    "border_color": ["#C2185B", "#F8BBD0"],
+    "text_color": ["white", "white"],
+    "text_color_disabled": ["gray74", "gray60"]
+  },
+  "CTkLabel": {
+    "corner_radius": 0,
+    "fg_color": "transparent",
+    "text_color": ["#3D1A2A", "#F8BBD0"]
+  },
+  "CTkEntry": {
+    "corner_radius": 10,
+    "border_width": 2,
+    "fg_color": ["#FFFFFF", "#140F12"],
+    "border_color": ["#F8BBD0", "#421C2A"],
+    "text_color": ["#3D1A2A", "#F8BBD0"],
+    "placeholder_text_color": ["gray52", "gray62"]
+  },
+  "CTkCheckBox": {
+    "corner_radius": 6,
+    "border_width": 3,
+    "fg_color": ["#F06292", "#C2185B"],
+    "border_color": ["#C2185B", "#F8BBD0"],
+    "checkmark_color": ["white", "white"],
+    "text_color": ["#3D1A2A", "#F8BBD0"]
+  },
+  "CTkSwitch": {
+    "corner_radius": 1000,
+    "fg_color": ["#F8BBD0", "#2D1A22"],
+    "progress_color": ["#F06292", "#C2185B"],
+    "text_color": ["#3D1A2A", "#F8BBD0"]
+  },
+  "CTkRadioButton": {
+    "corner_radius": 1000,
+    "border_width_checked": 6,
+    "border_width_unchecked": 3,
+    "fg_color": ["#F06292", "#C2185B"],
+    "border_color": ["#C2185B", "#F8BBD0"],
+    "hover_color": ["#EC407A", "#AD1457"],
+    "text_color": ["#3D1A2A", "#F8BBD0"]
+  },
+  "CTkProgressBar": {
+    "corner_radius": 0,
+    "fg_color": ["#FCE4EC", "#2D1A22"],
+    "progress_color": ["#F06292", "#C2185B"]
+  },
+  "CTkSlider": {
+    "corner_radius": 0,
+    "fg_color": ["#FCE4EC", "#2D1A22"],
+    "progress_color": ["#F06292", "#C2185B"],
+    "button_color": ["#C2185B", "#F06292"]
+  },
+  "CTkOptionMenu": {
+    "corner_radius": 10,
+    "fg_color": ["#F06292", "#C2185B"],
+    "button_color": ["#C2185B", "#AD1457"],
+    "border_color": ["#C2185B", "#F8BBD0"],
+    "text_color": ["white", "white"],
+    "text_color_disabled": ["gray74", "gray60"]
+  },
+  "CTkComboBox": {
+    "corner_radius": 10,
+    "fg_color": ["#FFFFFF", "#140F12"],
+    "border_color": ["#F8BBD0", "#421C2A"],
+    "button_color": ["#F06292", "#C2185B"],
+    "text_color": ["#3D1A2A", "#F8BBD0"]
+  },
+  "CTkScrollbar": {
+    "corner_radius": 1000,
+    "button_color": ["#F06292", "#C2185B"],
+    "button_hover_color": ["#EC407A", "#AD1457"]
+  },
+  "CTkSegmentedButton": {
+    "corner_radius": 12,
+    "border_width": 2,
+    "fg_color": ["#FCE4EC", "#1F1519"],
+    "selected_color": ["#F06292", "#C2185B"],
+    "selected_hover_color": ["#EC407A", "#AD1457"],
+    "unselected_color": ["#FCE4EC", "#1F1519"],
+    "unselected_hover_color": ["#F8BBD0", "#2D1A22"],
+    "text_color": ["#C2185B", "#F8BBD0"],
+    "text_color_disabled": ["gray74", "gray60"]
+  },
+  "CTkTextbox": {
+    "corner_radius": 6,
+    "fg_color": ["#FFFFFF", "#0A0507"],
+    "border_color": ["#F8BBD0", "#1F1519"],
+    "text_color": ["#3D1A2A", "#F8BBD0"]
+  },
+  "CTkScrollableFrame": {
+    "label_fg_color": ["#FCE4EC", "#24181E"]
+  },
+  "DropdownMenu": {
+    "fg_color": ["#FFFFFF", "#1F1519"],
+    "hover_color": ["#FFF5F8", "#2D1A22"],
+    "text_color": ["#3D1A2A", "#F8BBD0"]
+  },
+  "CTkFont": {
+    "Windows": {
+      "family": "Inter",
+      "size": 13,
+      "weight": "normal"
+    },
+    "macOS": {
+      "family": "SF Pro Display",
+      "size": 13,
+      "weight": "normal"
+    },
+    "Linux": {
+      "family": "Inter",
+      "size": 13,
+      "weight": "normal"
+    }
+  }
+}
