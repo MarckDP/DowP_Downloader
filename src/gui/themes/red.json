@@ -1,8 +1,8 @@
 {
   "_INSTRUCCIONES_DOWP": {
     "VERSION": "5.1",
-    "INFO_1": "ROSE VELVET: Elegancia en rojo pastel con tonos cálidos y tipografía limpia.",
-    "ThemeName": "Rose Velvet"
+    "INFO_1": "RED: Elegancia en rojo pastel con tonos cálidos y tipografía limpia.",
+    "ThemeName": "Red"
   },
   "CustomColors": {
     "DOWNLOAD_BTN": ["#E57373", "#C62828"],
