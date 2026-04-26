@@ -561,7 +561,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.format_warning_label = ctk.CTkLabel(
             details_frame, 
             text=legend_text, 
-            text_color="gray", 
+            text_color=self.app.get_theme_color("SECTION_SUBTITLE", "gray"), 
             font=ctk.CTkFont(size=12, weight="normal"), 
             wraplength=400, 
             justify="left"

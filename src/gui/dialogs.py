@@ -1635,7 +1635,7 @@ class DependencySetupWindow(ctk.CTkToplevel):
         ctk.CTkLabel(self.main_container, text="DowP Downloader", 
                      font=ctk.CTkFont(size=22, weight="bold"), 
                      text_color=resolve_theme_color(self, "VIEWER_TEXT", "#52a2f2")).pack(pady=(30, 0))
-        ctk.CTkLabel(self.main_container, text="Componentes de Motor y Video", font=ctk.CTkFont(size=12), text_color="gray").pack(pady=(0, 20))
+        ctk.CTkLabel(self.main_container, text="Componentes de Motor y Video", font=ctk.CTkFont(size=12), text_color=resolve_theme_color(self, "HUD_TEXT", "gray")).pack(pady=(0, 20))
 
         # Lista de dependencias (solo texto)
         self.list_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
@@ -1686,7 +1686,7 @@ class DependencySetupWindow(ctk.CTkToplevel):
         name_label = ctk.CTkLabel(row, text=name, font=ctk.CTkFont(size=13))
         name_label.pack(side="left")
         
-        status_label = ctk.CTkLabel(row, text="Pendiente", font=ctk.CTkFont(size=13, weight="bold"), text_color="gray")
+        status_label = ctk.CTkLabel(row, text="Pendiente", font=ctk.CTkFont(size=13, weight="bold"), text_color=resolve_theme_color(self, "STATUS_PENDING", "gray"))
         status_label.pack(side="right")
         
         self.dep_widgets[key] = {
@@ -1777,7 +1777,7 @@ class DependencySetupWindow(ctk.CTkToplevel):
         for key, _ in self.dependencies:
             if self.dep_widgets[key]["state"] == "success": continue
             
-            self.update_queue.put((key, "STATUS", ("Conectando...", "gray")))
+            self.update_queue.put((key, "STATUS", ("Conectando...", resolve_theme_color(self, "STATUS_PENDING", "gray"))))
             
             try:
                 success = False
@@ -1948,7 +1948,7 @@ class ThemeTemplateDialog(ctk.CTkToplevel):
         self.label = ctk.CTkLabel(self, text="Plantilla de Tema JSON", font=ctk.CTkFont(size=16, weight="bold"))
         self.label.pack(pady=(20, 5), padx=20)
         
-        self.desc = ctk.CTkLabel(self, text="Usa este código como base para crear tus propios temas. Cópialo o expórtalo a un archivo .json.", font=ctk.CTkFont(size=12), text_color="gray60")
+        self.desc = ctk.CTkLabel(self, text="Usa este código como base para crear tus propios temas. Cópialo o expórtalo a un archivo .json.", font=ctk.CTkFont(size=12), text_color=resolve_theme_color(self, "HUD_TEXT", "gray60"))
         self.desc.pack(pady=(0, 15), padx=20)
 
         # Textbox para el código

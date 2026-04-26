@@ -408,6 +408,11 @@ if __name__ == "__main__":
                 print(f"ADVERTENCIA: No se pudo procesar el tema, intentando carga normal: {e}")
                 _theme = _found_path
         
+        # Si no se encontró el archivo del tema personalizado, volvemos al azul por defecto
+        # para evitar errores de pre-carga en CustomTkinter.
+        if not _found_path and _theme not in ["blue", "dark-blue", "green"]:
+            _theme = "blue"
+
         ctk.set_default_color_theme(_theme)
         print(f"INFO: Tema de acento pre-cargado.")
     except Exception as e:

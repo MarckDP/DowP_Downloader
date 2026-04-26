@@ -39,19 +39,19 @@ class ConfigTab(ctk.CTkFrame):
         self.sidebar_title.grid(row=0, column=0, padx=20, pady=(20, 10))
         
         # Botones del menú lateral
-        self.btn_general = ctk.CTkButton(self.sidebar_frame, text="General", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("general"))
+        self.btn_general = ctk.CTkButton(self.sidebar_frame, text="General", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=self.MENU_SELECTED_BG, anchor="w", command=lambda: self.select_section("general"))
         self.btn_general.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
         
-        self.btn_cookies = ctk.CTkButton(self.sidebar_frame, text="Cookies", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("cookies"))
+        self.btn_cookies = ctk.CTkButton(self.sidebar_frame, text="Cookies", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=self.MENU_SELECTED_BG, anchor="w", command=lambda: self.select_section("cookies"))
         self.btn_cookies.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
         
-        self.btn_deps = ctk.CTkButton(self.sidebar_frame, text="Dependencias", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("deps"))
+        self.btn_deps = ctk.CTkButton(self.sidebar_frame, text="Dependencias", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=self.MENU_SELECTED_BG, anchor="w", command=lambda: self.select_section("deps"))
         self.btn_deps.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
         
-        self.btn_models = ctk.CTkButton(self.sidebar_frame, text="Modelos", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("models"))
+        self.btn_models = ctk.CTkButton(self.sidebar_frame, text="Modelos", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=self.MENU_SELECTED_BG, anchor="w", command=lambda: self.select_section("models"))
         self.btn_models.grid(row=4, column=0, padx=10, pady=5, sticky="ew")
 
-        self.btn_console = ctk.CTkButton(self.sidebar_frame, text="Consola", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=("gray70", "gray30"), anchor="w", command=lambda: self.select_section("console"))
+        self.btn_console = ctk.CTkButton(self.sidebar_frame, text="Consola", fg_color="transparent", text_color=self.MENU_NORMAL_TEXT, hover_color=self.MENU_SELECTED_BG, anchor="w", command=lambda: self.select_section("console"))
         self.btn_console.grid(row=5, column=0, padx=10, pady=5, sticky="ew")
         
         # Guardamos los botones en un dict para cambiarles el color al seleccionarlos
@@ -86,16 +86,16 @@ class ConfigTab(ctk.CTkFrame):
         
         import webbrowser
         
-        self.link_yt = ctk.CTkButton(self.bottom_frame, text="YouTube", width=60, height=20, fg_color=("#FFB6B6", "#8C3A3A"), text_color=("gray10", "gray90"), hover_color=("#FF9999", "#A64D4D"), command=lambda: webbrowser.open("https://www.youtube.com/@MarckDBM"))
+        self.link_yt = ctk.CTkButton(self.bottom_frame, text="YouTube", width=60, height=20, fg_color=self.DOWNLOAD_BTN, text_color=self.DOWNLOAD_TEXT, hover_color=self.DOWNLOAD_HOVER, command=lambda: webbrowser.open("https://www.youtube.com/@MarckDBM"))
         self.link_yt.pack(side="left", padx=5)
 
-        self.link_github = ctk.CTkButton(self.bottom_frame, text="GitHub", width=50, height=20, fg_color=("#E0E0E0", "#4D4D4D"), text_color=("gray10", "gray90"), hover_color=("#CCCCCC", "#666666"), command=lambda: webbrowser.open("https://github.com/MarckDP/DowP_Downloader"))
+        self.link_github = ctk.CTkButton(self.bottom_frame, text="GitHub", width=50, height=20, fg_color=self.SECONDARY_BTN, text_color=self.SECONDARY_TEXT, hover_color=self.SECONDARY_HOVER, command=lambda: webbrowser.open("https://github.com/MarckDP/DowP_Downloader"))
         self.link_github.pack(side="left", padx=5)
         
-        self.link_donate = ctk.CTkButton(self.bottom_frame, text="Ko-fi ☕", width=80, height=20, fg_color=("#BAE1FF", "#3A628C"), text_color=("gray10", "gray90"), hover_color=("#99CCFF", "#4D7CB3"), command=lambda: webbrowser.open("https://ko-fi.com/marckdbm"))
+        self.link_donate = ctk.CTkButton(self.bottom_frame, text="Ko-fi ☕", width=80, height=20, fg_color=self.TERTIARY_BTN, text_color=self.TERTIARY_TEXT, hover_color=self.TERTIARY_HOVER, command=lambda: webbrowser.open("https://ko-fi.com/marckdbm"))
         self.link_donate.pack(side="left", padx=5)
 
-        self.version_label = ctk.CTkLabel(self.bottom_frame, text=f"Versión {getattr(self.app, 'APP_VERSION', 'Desconocida')}", font=ctk.CTkFont(size=12), text_color="gray50")
+        self.version_label = ctk.CTkLabel(self.bottom_frame, text=f"Versión {getattr(self.app, 'APP_VERSION', 'Desconocida')}", font=ctk.CTkFont(size=12), text_color=self.MENU_NORMAL_TEXT)
         self.version_label.pack(side="right", padx=15, pady=10)
 
         # Seleccionar la primera sección por defecto
@@ -557,7 +557,7 @@ class ConfigTab(ctk.CTkFrame):
         self._create_dependency_row(self.updatable_frame, "yt-dlp", "Motor principal de descargas", "ytdlp")
         
         # --- SEPARADOR VISUAL ---
-        separator = ctk.CTkFrame(frame_deps, height=2, fg_color=("gray75", "gray30"))
+        separator = ctk.CTkFrame(frame_deps, height=2, fg_color=self.SEPARATOR_COLOR)
         separator.pack(fill="x", pady=(10, 20), padx=20)
         
         # --- SUB-SECCIÓN: FIJAS ---
@@ -1880,7 +1880,7 @@ class ConfigTab(ctk.CTkFrame):
         btn_container = ctk.CTkFrame(row_frame, fg_color="transparent")
         btn_container.grid(row=0, column=2, sticky="nse", padx=(10, 0))
         
-        btn = ctk.CTkButton(btn_container, text="Actualizado", width=140, state="disabled", fg_color="gray30", text_color="gray70")
+        btn = ctk.CTkButton(btn_container, text="Actualizado", width=140, state="disabled", fg_color=self.SECONDARY_BTN, text_color=self.SECONDARY_TEXT)
         btn.pack(side="top", pady=2, fill="x")
         
         if key == "ffmpeg":
@@ -2024,6 +2024,8 @@ class ConfigTab(ctk.CTkFrame):
         self.STATUS_SUCCESS = self.app.get_theme_color("STATUS_SUCCESS", ["#28A745", "#218838"])
         self.STATUS_ERROR = self.app.get_theme_color("STATUS_ERROR", ["#DC3545", "#C82333"])
         self.STATUS_WARNING = self.app.get_theme_color("STATUS_WARNING", ["#FFA500", "#FF8C00"])
+        self.STATUS_PENDING = self.app.get_theme_color("STATUS_PENDING", ["#565B5E", "#565B5E"])
+        self.SEPARATOR_COLOR = self.app.get_theme_color("SEPARATOR_COLOR", ["gray65", "#3F3F46"])
         
         # Colores de Menú Lateral (NUEVO)
         self.MENU_SELECTED_BG = self.app.get_theme_color("LISTBOX_SELECTED_BG", ["#3B8ED0", "#1F6AA5"])
@@ -2110,6 +2112,10 @@ class ConfigTab(ctk.CTkFrame):
                     current_section = name
                     break
             self.select_section(current_section)
+            
+            # Sincronizar hover color de botones laterales
+            for btn in self.menu_buttons.values():
+                btn.configure(hover_color=self.MENU_SELECTED_BG)
 
         # 5. Botones de modelos e IA (Refrescar según estado para evitar pintado erróneo)
         if hasattr(self, 'model_rows'):
@@ -2226,9 +2232,9 @@ class ConfigTab(ctk.CTkFrame):
                 
             if key in self.dep_buttons:
                 if ver == "No encontrado":
-                    self.dep_buttons[key].configure(state="disabled", text="Usa Buscar", fg_color="gray30", text_color="gray70")
+                    self.dep_buttons[key].configure(state="disabled", text="Usa Buscar", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
                 else:
-                    self.dep_buttons[key].configure(state="disabled", text="Actualizado", fg_color="gray30", text_color="gray70")
+                    self.dep_buttons[key].configure(state="disabled", text="Actualizado", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
                 
         # Si ya estamos en la versión segura de FFmpeg, deshabilita el botón de restaurar
         if versions["ffmpeg"] == "8.0.1" and "ffmpeg_safe" in self.dep_buttons:
@@ -2246,7 +2252,7 @@ class ConfigTab(ctk.CTkFrame):
         
         # Ponemos los botones en estado de búsqueda
         for key in ["ffmpeg", "deno", "poppler", "ytdlp"]:
-            self.dep_buttons[key].configure(state="disabled", text="Buscando...", fg_color="gray30", text_color="gray70")
+            self.dep_buttons[key].configure(state="disabled", text="Buscando...", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
             current_text = self.dep_labels[key].cget("text")
             self.dep_labels[key].configure(text=f"{current_text} - Buscando...", text_color="gray50")
             
@@ -2286,7 +2292,7 @@ class ConfigTab(ctk.CTkFrame):
             self.dep_buttons["ffmpeg"].configure(state="normal", text=f"Actualizar", fg_color=("#3B8ED0", "#1F6AA5"), text_color=("#DCE4EE", "#DCE4EE"))
         else:
             self.dep_labels["ffmpeg"].configure(text=f"Versión: {local_ffmpeg} \n(Actualizado)", text_color="gray50")
-            self.dep_buttons["ffmpeg"].configure(state="disabled", text="Actualizado", fg_color="gray30", text_color="gray70")
+            self.dep_buttons["ffmpeg"].configure(state="disabled", text="Actualizado", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
             
         # 2. Deno
         local_deno = env_status.get("local_deno_version") or "No encontrado"
@@ -2310,7 +2316,7 @@ class ConfigTab(ctk.CTkFrame):
             self.dep_buttons["deno"].configure(state="normal", text=f"Actualizar", fg_color=("#3B8ED0", "#1F6AA5"), text_color=("#DCE4EE", "#DCE4EE"))
         else:
             self.dep_labels["deno"].configure(text=f"Versión: {local_deno} \n(Actualizado)", text_color="gray50")
-            self.dep_buttons["deno"].configure(state="disabled", text="Actualizado", fg_color="gray30", text_color="gray70")
+            self.dep_buttons["deno"].configure(state="disabled", text="Actualizado", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
             
         # 3. Poppler
         local_poppler = env_status.get("local_poppler_version") or "No encontrado"
@@ -2329,7 +2335,7 @@ class ConfigTab(ctk.CTkFrame):
             self.dep_buttons["poppler"].configure(state="normal", text=f"Actualizar", fg_color=("#3B8ED0", "#1F6AA5"), text_color=("#DCE4EE", "#DCE4EE"))
         else:
             self.dep_labels["poppler"].configure(text=f"Versión: {local_poppler} \n(Actualizado)", text_color="gray50")
-            self.dep_buttons["poppler"].configure(state="disabled", text="Actualizado", fg_color="gray30", text_color="gray70")
+            self.dep_buttons["poppler"].configure(state="disabled", text="Actualizado", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
             
         # 4. yt-dlp
         local_ytdlp = env_status.get("local_ytdlp_version") or "No encontrado"
@@ -2353,7 +2359,7 @@ class ConfigTab(ctk.CTkFrame):
             self.dep_buttons["ytdlp"].configure(state="normal", text=f"Actualizar", fg_color=("#3B8ED0", "#1F6AA5"), text_color=("#DCE4EE", "#DCE4EE"))
         else:
             self.dep_labels["ytdlp"].configure(text=f"Versión: {local_ytdlp} \n(Actualizado)", text_color="gray50")
-            self.dep_buttons["ytdlp"].configure(state="disabled", text="Actualizado", fg_color="gray30", text_color="gray70")
+            self.dep_buttons["ytdlp"].configure(state="disabled", text="Actualizado", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
 
 
     def download_ffmpeg_update(self):
@@ -2465,7 +2471,7 @@ class ConfigTab(ctk.CTkFrame):
             }
             new_ver = env_status.get(mapping[key]) or "Desconocida"
             self.dep_labels[key].configure(text=f"Versión: {new_ver} \n(Actualizado)", text_color="gray50")
-            self.dep_buttons[key].configure(state="disabled", text="Actualizado", fg_color="gray30", text_color="gray70")
+            self.dep_buttons[key].configure(state="disabled", text="Actualizado", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
             
             if key == "ffmpeg" and "ffmpeg_safe" in self.dep_buttons:
                 self.dep_buttons["ffmpeg_safe"].configure(state="normal", text="Restaurar (8.0.1)")
