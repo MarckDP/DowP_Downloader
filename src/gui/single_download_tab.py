@@ -169,6 +169,13 @@ class SingleDownloadTab(ctk.CTkFrame):
         
         self.DISABLED_TEXT_COLOR = self.app.get_theme_color("DISABLED_TEXT", "#D3D3D3")
         self.DISABLED_FG_COLOR = self.app.get_theme_color("DISABLED_FG", "#565b5f")
+        
+        # Estados Dinámicos (NUEVO)
+        self.STATUS_SUCCESS = self.app.get_theme_color("STATUS_SUCCESS", ["#28A745", "#218838"])
+        self.STATUS_ERROR = self.app.get_theme_color("STATUS_ERROR", ["#DC3545", "#C82333"])
+        self.STATUS_WARNING = self.app.get_theme_color("STATUS_WARNING", ["#FFA500", "#FF8C00"])
+        self.UPDATE_ALERT = self.app.get_theme_color("UPDATE_ALERT", self.STATUS_WARNING)
+        self.SECTION_SUBTITLE = self.app.get_theme_color("SECTION_SUBTITLE", ["gray40", "gray70"])
 
     def refresh_theme(self):
         """Actualiza los colores de los widgets críticos según el tema actual."""
@@ -2675,10 +2682,10 @@ class SingleDownloadTab(ctk.CTkFrame):
                         status, message = "warning", f"⚠️ El audio original ({original_acodec}) no es estándar en {target_container}. Se recomienda recodificar."
         self.recode_compatibility_status = status
         if status == "valid":
-            color = "#00A400"
+            color = self.STATUS_SUCCESS
             self.recode_warning_label.configure(text=message, text_color=color)
         else:
-            color = "#E54B4B" if status == "error" else "#E5A04B"
+            color = self.STATUS_ERROR if status == "error" else self.UPDATE_ALERT
             self.recode_warning_label.configure(text=message, text_color=color)
         self.recode_warning_frame.pack(after=self.recode_toggle_frame, pady=5, padx=10, fill="x")
         if hasattr(self, 'use_all_audio_tracks_check') and self.use_all_audio_tracks_check.winfo_ismapped():
@@ -3074,10 +3081,10 @@ class SingleDownloadTab(ctk.CTkFrame):
             issues_str = ", ".join(unknown_issues)
             warnings.append(f"• Compatibilidad desconocida para el códec de {issues_str}.")
         if warnings:
-            self.format_warning_label.configure(text="\n".join(warnings), text_color="#FFA500")
+            self.format_warning_label.configure(text="\n".join(warnings), text_color=self.UPDATE_ALERT)
         else:
             legend_text = ("Guía de etiquetas en la lista:\n" "✨ Ideal: Formato óptimo para editar sin conversión.\n" "⚠️ Recodificar: Formato no compatible con editores.")
-            self.format_warning_label.configure(text=legend_text, text_color="gray")
+            self.format_warning_label.configure(text=legend_text, text_color=self.SECTION_SUBTITLE)
 
     def _get_format_compatibility_issues(self, format_dict):
         if not format_dict: return [], []

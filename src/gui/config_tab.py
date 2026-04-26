@@ -63,6 +63,9 @@ class ConfigTab(ctk.CTkFrame):
             "console": self.btn_console,
         }
         
+        # Cache de actualizaciones (Persistencia de sesión)
+        self.update_cache = {}
+        
         # ==================== ÁREA DE CONTENIDO (Derecha) ====================
         self.content_container = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
         self.content_container.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
@@ -533,9 +536,9 @@ class ConfigTab(ctk.CTkFrame):
             updatable_header_frame, 
             text="Buscar Actualizaciones", 
             width=150, 
-            fg_color="#E5A04B", 
-            hover_color="#CC8A3B", 
-            text_color="gray10",
+            fg_color=self.ANALYZE_BTN, 
+            hover_color=self.ANALYZE_HOVER, 
+            text_color=self.ANALYZE_TEXT,
             command=self.check_all_updates
         )
         self.btn_check_all_updates.pack(side="right", padx=5)
@@ -1885,7 +1888,7 @@ class ConfigTab(ctk.CTkFrame):
         
         if key == "ffmpeg":
             safe_btn = ctk.CTkButton(btn_container, text="Restaurar (8.0.1)", width=140, 
-                                     fg_color="#28a745", hover_color="#218838",
+                                     fg_color=self.STATUS_SUCCESS,
                                      command=self.manual_ffmpeg_safe_update_check)
             safe_btn.pack(side="top", pady=2, fill="x")
             self.dep_buttons["ffmpeg_safe"] = safe_btn
@@ -1999,6 +2002,10 @@ class ConfigTab(ctk.CTkFrame):
         self.CANCEL_HOVER = self.app.get_theme_color("CANCEL_BTN_HOVER", ["#c82333", "#bd2130"])
         self.CANCEL_TEXT = self.app.get_theme_color("CANCEL_BTN_TEXT", ["white", "white"])
         
+        self.ANALYZE_BTN = self.app.get_theme_color("ANALYZE_BTN", ["#FF8C00", "#E67E22"])
+        self.ANALYZE_HOVER = self.app.get_theme_color("ANALYZE_BTN_HOVER", ["#E67E22", "#D35400"])
+        self.ANALYZE_TEXT = self.app.get_theme_color("ANALYZE_BTN_TEXT", ["white", "white"])
+        
         self.SECONDARY_BTN = self.app.get_theme_color("SECONDARY_BTN", ["gray50", "gray30"])
         self.SECONDARY_HOVER = self.app.get_theme_color("SECONDARY_BTN_HOVER", ["gray60", "gray40"])
         self.SECONDARY_TEXT = self.app.get_theme_color("SECONDARY_BTN_TEXT", ["white", "white"])
@@ -2025,6 +2032,7 @@ class ConfigTab(ctk.CTkFrame):
         self.STATUS_ERROR = self.app.get_theme_color("STATUS_ERROR", ["#DC3545", "#C82333"])
         self.STATUS_WARNING = self.app.get_theme_color("STATUS_WARNING", ["#FFA500", "#FF8C00"])
         self.STATUS_PENDING = self.app.get_theme_color("STATUS_PENDING", ["#565B5E", "#565B5E"])
+        self.UPDATE_ALERT = self.app.get_theme_color("UPDATE_ALERT", self.STATUS_WARNING)
         self.SEPARATOR_COLOR = self.app.get_theme_color("SEPARATOR_COLOR", ["gray65", "#3F3F46"])
         
         # Colores de Menú Lateral (NUEVO)
@@ -2225,12 +2233,26 @@ class ConfigTab(ctk.CTkFrame):
         for key, ver in versions.items():
             if key in self.dep_labels:
                 status_text = "No encontrado" if ver == "No encontrado" else f"Versión: {ver}"
-                color = "gray50"
+                color = self.MENU_NORMAL_TEXT
+                
+                # REVISIÓN DE CACHE: Si ya buscamos actualizaciones antes en esta sesión, recuperamos el aviso
+                cache = self.update_cache.get(key)
+                if cache and cache.get("update_available") and ver != "No encontrado":
+                    status_text = f"Versión: {ver} \n(Actualización disponible: {cache.get('latest_version')})"
+                    color = self.UPDATE_ALERT
+                
                 if ver == "No encontrado":
-                    color = "orange"
+                    color = self.STATUS_ERROR
+                
                 self.dep_labels[key].configure(text=status_text, text_color=color)
                 
             if key in self.dep_buttons:
+                # Si hay una actualización en cache, habilitamos el botón correspondiente
+                cache = self.update_cache.get(key)
+                if cache and cache.get("update_available") and ver != "No encontrado":
+                    self.dep_buttons[key].configure(state="normal", text="Actualizar", fg_color=self.DOWNLOAD_BTN, text_color=self.DOWNLOAD_TEXT, hover_color=self.DOWNLOAD_HOVER)
+                    continue
+
                 if ver == "No encontrado":
                     self.dep_buttons[key].configure(state="disabled", text="Usa Buscar", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
                 else:
@@ -2248,7 +2270,11 @@ class ConfigTab(ctk.CTkFrame):
 
     def check_all_updates(self):
         """Busca actualizaciones consultando las APIs de GitHub en segundo plano."""
-        self.btn_check_all_updates.configure(state="disabled", text="Buscando...")
+        self.btn_check_all_updates.configure(
+            state="disabled", 
+            text="Buscando...",
+            fg_color=self.STATUS_PENDING # Color neutro mientras busca
+        )
         
         # Ponemos los botones en estado de búsqueda
         for key in ["ffmpeg", "deno", "poppler", "ytdlp"]:
@@ -2266,7 +2292,13 @@ class ConfigTab(ctk.CTkFrame):
 
     def _on_all_updates_check_complete(self, env_status):
         """Procesa los resultados de la búsqueda global y habilita botones si hay update."""
-        self.btn_check_all_updates.configure(state="normal", text="Buscar Actualizaciones", fg_color="#E5A04B", text_color="gray10")
+        self.btn_check_all_updates.configure(
+            state="normal", 
+            text="Buscar Actualizaciones", 
+            fg_color=self.ANALYZE_BTN, 
+            hover_color=self.ANALYZE_HOVER,
+            text_color=self.ANALYZE_TEXT
+        )
         import re
         from packaging import version
         
@@ -2288,11 +2320,14 @@ class ConfigTab(ctk.CTkFrame):
              update_available_ffmpeg = True
              
         if update_available_ffmpeg:
-            self.dep_labels["ffmpeg"].configure(text=f"Versión: {local_ffmpeg} \n(Actualización disponible: {latest_ffmpeg})", text_color="#E5A04B")
-            self.dep_buttons["ffmpeg"].configure(state="normal", text=f"Actualizar", fg_color=("#3B8ED0", "#1F6AA5"), text_color=("#DCE4EE", "#DCE4EE"))
+            self.dep_labels["ffmpeg"].configure(text=f"Versión: {local_ffmpeg} \n(Actualización disponible: {latest_ffmpeg})", text_color=self.UPDATE_ALERT)
+            self.dep_buttons["ffmpeg"].configure(state="normal", text=f"Actualizar", fg_color=self.DOWNLOAD_BTN, text_color=self.DOWNLOAD_TEXT, hover_color=self.DOWNLOAD_HOVER)
         else:
-            self.dep_labels["ffmpeg"].configure(text=f"Versión: {local_ffmpeg} \n(Actualizado)", text_color="gray50")
+            self.dep_labels["ffmpeg"].configure(text=f"Versión: {local_ffmpeg} \n(Actualizado)", text_color=self.MENU_NORMAL_TEXT)
             self.dep_buttons["ffmpeg"].configure(state="disabled", text="Actualizado", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
+            
+        # Guardar en cache para persistencia de sesión
+        self.update_cache["ffmpeg"] = {"latest_version": latest_ffmpeg, "update_available": update_available_ffmpeg}
             
         # 2. Deno
         local_deno = env_status.get("local_deno_version") or "No encontrado"
@@ -2312,11 +2347,14 @@ class ConfigTab(ctk.CTkFrame):
              update_available_deno = True
              
         if update_available_deno:
-            self.dep_labels["deno"].configure(text=f"Versión: {local_deno} \n(Actualización disponible: {latest_deno})", text_color="#E5A04B")
-            self.dep_buttons["deno"].configure(state="normal", text=f"Actualizar", fg_color=("#3B8ED0", "#1F6AA5"), text_color=("#DCE4EE", "#DCE4EE"))
+            self.dep_labels["deno"].configure(text=f"Versión: {local_deno} \n(Actualización disponible: {latest_deno})", text_color=self.UPDATE_ALERT)
+            self.dep_buttons["deno"].configure(state="normal", text=f"Actualizar", fg_color=self.DOWNLOAD_BTN, text_color=self.DOWNLOAD_TEXT, hover_color=self.DOWNLOAD_HOVER)
         else:
-            self.dep_labels["deno"].configure(text=f"Versión: {local_deno} \n(Actualizado)", text_color="gray50")
+            self.dep_labels["deno"].configure(text=f"Versión: {local_deno} \n(Actualizado)", text_color=self.MENU_NORMAL_TEXT)
             self.dep_buttons["deno"].configure(state="disabled", text="Actualizado", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
+            
+        # Guardar en cache para persistencia de sesión
+        self.update_cache["deno"] = {"latest_version": latest_deno, "update_available": update_available_deno}
             
         # 3. Poppler
         local_poppler = env_status.get("local_poppler_version") or "No encontrado"
@@ -2331,11 +2369,14 @@ class ConfigTab(ctk.CTkFrame):
             update_available_poppler = True
             
         if update_available_poppler:
-            self.dep_labels["poppler"].configure(text=f"Versión: {local_poppler} \n(Actualización disponible: {latest_poppler})", text_color="#E5A04B")
-            self.dep_buttons["poppler"].configure(state="normal", text=f"Actualizar", fg_color=("#3B8ED0", "#1F6AA5"), text_color=("#DCE4EE", "#DCE4EE"))
+            self.dep_labels["poppler"].configure(text=f"Versión: {local_poppler} \n(Actualización disponible: {latest_poppler})", text_color=self.UPDATE_ALERT)
+            self.dep_buttons["poppler"].configure(state="normal", text=f"Actualizar", fg_color=self.DOWNLOAD_BTN, text_color=self.DOWNLOAD_TEXT, hover_color=self.DOWNLOAD_HOVER)
         else:
-            self.dep_labels["poppler"].configure(text=f"Versión: {local_poppler} \n(Actualizado)", text_color="gray50")
+            self.dep_labels["poppler"].configure(text=f"Versión: {local_poppler} \n(Actualizado)", text_color=self.MENU_NORMAL_TEXT)
             self.dep_buttons["poppler"].configure(state="disabled", text="Actualizado", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
+            
+        # Guardar en cache para persistencia de sesión
+        self.update_cache["poppler"] = {"latest_version": latest_poppler, "update_available": update_available_poppler}
             
         # 4. yt-dlp
         local_ytdlp = env_status.get("local_ytdlp_version") or "No encontrado"
@@ -2355,11 +2396,14 @@ class ConfigTab(ctk.CTkFrame):
              update_available_ytdlp = True
 
         if update_available_ytdlp:
-            self.dep_labels["ytdlp"].configure(text=f"Versión: {local_ytdlp} \n(Actualización disponible: {latest_ytdlp})", text_color="#E5A04B")
-            self.dep_buttons["ytdlp"].configure(state="normal", text=f"Actualizar", fg_color=("#3B8ED0", "#1F6AA5"), text_color=("#DCE4EE", "#DCE4EE"))
+            self.dep_labels["ytdlp"].configure(text=f"Versión: {local_ytdlp} \n(Actualización disponible: {latest_ytdlp})", text_color=self.UPDATE_ALERT)
+            self.dep_buttons["ytdlp"].configure(state="normal", text=f"Actualizar", fg_color=self.DOWNLOAD_BTN, text_color=self.DOWNLOAD_TEXT, hover_color=self.DOWNLOAD_HOVER)
         else:
-            self.dep_labels["ytdlp"].configure(text=f"Versión: {local_ytdlp} \n(Actualizado)", text_color="gray50")
+            self.dep_labels["ytdlp"].configure(text=f"Versión: {local_ytdlp} \n(Actualizado)", text_color=self.MENU_NORMAL_TEXT)
             self.dep_buttons["ytdlp"].configure(state="disabled", text="Actualizado", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
+            
+        # Guardar en cache para persistencia de sesión
+        self.update_cache["ytdlp"] = {"latest_version": latest_ytdlp, "update_available": update_available_ytdlp}
 
 
     def download_ffmpeg_update(self):

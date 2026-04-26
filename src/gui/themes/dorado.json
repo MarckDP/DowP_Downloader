@@ -38,6 +38,7 @@
     "STATUS_SUCCESS": ["#28A745", "#218838"],
     "STATUS_ERROR": ["#DC3545", "#C82333"],
     "STATUS_WARNING": ["#FFA500", "#FF8C00"],
+    "UPDATE_ALERT": ["#B8860B", "#D4AF37"],
     "STATUS_PENDING": ["#565B5E", "#565B5E"],
     "JOB_ACTION_ICON_COLOR": ["black", "white"],
     "JOB_CANCEL_ICON_COLOR": ["#DC3545", "#DC3545"],
