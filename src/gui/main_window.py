@@ -690,7 +690,8 @@ class MainWindow(TkBase):
         self.vector_force_background = False # Fondo blanco para vectores (Default: False/Transparente)
         
         self.inkscape_enabled = False
-        self.inkscape_custom_path = r"C:\Program Files\Inkscape"
+        self.inkscape_path = r"C:\Program Files\Inkscape"
+        self.inkscape_version = ""
         self.selected_theme_accent = "blue"
         self.appearance_mode = "System" # Default
         
@@ -732,7 +733,7 @@ class MainWindow(TkBase):
                     
                     # Cargar ajustes de Inkscape externo
                     self.inkscape_enabled = settings.get("inkscape_enabled", False)
-                    self.inkscape_custom_path = settings.get("inkscape_path", r"C:\Program Files\Inkscape")
+                    self.inkscape_path = settings.get("inkscape_path", r"C:\Program Files\Inkscape")
                     self.inkscape_version = settings.get("inkscape_version", "")
                     self.selected_theme_accent = settings.get("selected_theme_accent", "blue")
                     self.appearance_mode = settings.get("appearance_mode", "System")
@@ -741,7 +742,7 @@ class MainWindow(TkBase):
                 print("DEBUG: Archivo de configuración no encontrado. Usando valores por defecto.")
             
             # Inicializar servicio de Inkscape
-            self.inkscape_service = InkscapeService(self.inkscape_custom_path) if self.inkscape_enabled else None
+            self.inkscape_service = InkscapeService(self.inkscape_path) if self.inkscape_enabled else None
             
             # --- NUEVO: Crear plantilla de tema si no existe ---
             self._ensure_theme_template()
@@ -1592,7 +1593,7 @@ class MainWindow(TkBase):
 
             # Inkscape Externo
             "inkscape_enabled": self.inkscape_enabled,
-            "inkscape_path": self.inkscape_custom_path,
+            "inkscape_path": self.inkscape_path,
             "inkscape_version": getattr(self, 'inkscape_version', ""),
             "vector_force_background": getattr(self, 'vector_force_background', False),
             "selected_theme_accent": self.selected_theme_accent,

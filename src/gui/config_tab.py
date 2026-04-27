@@ -365,7 +365,7 @@ class ConfigTab(ctk.CTkFrame):
         ink_path_frame.pack(fill="x", pady=(10, 5))
         
         self.inkscape_path_entry = ctk.CTkEntry(ink_path_frame, placeholder_text=r"C:\Program Files\Inkscape")
-        self.inkscape_path_entry.insert(0, self.app.inkscape_custom_path)
+        self.inkscape_path_entry.insert(0, self.app.inkscape_path)
         self.inkscape_path_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.inkscape_path_entry.bind("<KeyRelease>", self._on_inkscape_path_change)
         
@@ -2821,7 +2821,7 @@ class ConfigTab(ctk.CTkFrame):
         self.app.save_settings()
 
     def _on_inkscape_path_change(self, event=None):
-        self.app.inkscape_custom_path = self.inkscape_path_entry.get()
+        self.app.inkscape_path = self.inkscape_path_entry.get()
         # Resetear versión guardada si la ruta cambia
         self.app.inkscape_version = ""
         self.ink_status_label.configure(text="⚠️ La ruta cambió. Por favor, vuelve a comprobar.", text_color="#FFC107")
@@ -2840,7 +2840,7 @@ class ConfigTab(ctk.CTkFrame):
         self.update_idletasks() # Forzar actualización visual
         
         from src.core.inkscape_service import InkscapeService
-        service = InkscapeService(self.app.inkscape_custom_path)
+        service = InkscapeService(self.app.inkscape_path)
         
         if service.is_available():
             v_text = service.version_info.split("(")[0].strip() if service.version_info else "Disponible"
