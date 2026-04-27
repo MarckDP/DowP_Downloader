@@ -74,6 +74,10 @@ class ConfigTab(ctk.CTkFrame):
         
         # Diccionario para guardar los frames de cada sección
         self.sections = {}
+
+        # --- Estado de la Consola ---
+        self._console_at_start = True
+        self._console_wrap_var = ctk.BooleanVar(value=getattr(self.app, 'console_wrap', False))
         
         self._setup_sections()
         self._setup_console_section()
@@ -100,6 +104,7 @@ class ConfigTab(ctk.CTkFrame):
 
         self.version_label = ctk.CTkLabel(self.bottom_frame, text=f"Versión {getattr(self.app, 'APP_VERSION', 'Desconocida')}", font=ctk.CTkFont(size=12), text_color=self.MENU_NORMAL_TEXT)
         self.version_label.pack(side="right", padx=15, pady=10)
+
 
         # Seleccionar la primera sección por defecto
         self.select_section("general")
@@ -707,7 +712,7 @@ class ConfigTab(ctk.CTkFrame):
         header.grid_columnconfigure(0, weight=1)   # lado izquierdo se expande
         header.grid_columnconfigure(1, weight=0)   # lado derecho fijo
 
-        # ── Columna izquierda: título + descripción ──
+        # ── Columna izquierda: título + controles ──
         left_frame = ctk.CTkFrame(header, fg_color="transparent")
         left_frame.grid(row=0, column=0, rowspan=2, sticky="w")
 
@@ -717,24 +722,34 @@ class ConfigTab(ctk.CTkFrame):
             font=ctk.CTkFont(size=20, weight="bold")
         ).pack(anchor="w")
 
-        ctk.CTkLabel(
-            left_frame,
-            text="Captura en tiempo real los mensajes internos de DowP.",
-            font=ctk.CTkFont(size=11),
-            text_color="gray60"
-        ).pack(anchor="w", pady=(2, 0))
+        # ── Fila de Controles (Debajo del título) ──
+        controls_row = ctk.CTkFrame(left_frame, fg_color="transparent")
+        controls_row.pack(anchor="w", pady=(5, 0))
 
-        # ── Columna derecha, fila 0: switch ──
+        # Switch 1: Activar Consola
         self._console_switch_var = ctk.BooleanVar(value=getattr(self.app, 'console_enabled', False))
         self._console_switch = ctk.CTkSwitch(
-            header,
-            text="",
+            controls_row,
+            text="Activar Consola",
+            font=ctk.CTkFont(size=12),
             variable=self._console_switch_var,
             onvalue=True,
             offvalue=False,
             command=self._on_console_switch_toggle
         )
-        self._console_switch.grid(row=0, column=1, sticky="e", padx=(10, 0), pady=(2, 4))
+        self._console_switch.pack(side="left", padx=(0, 20))
+
+        # Switch 2: Ajuste de línea (Word Wrap)
+        self._console_wrap_switch = ctk.CTkSwitch(
+            controls_row,
+            text="Ajuste de línea",
+            font=ctk.CTkFont(size=12),
+            variable=self._console_wrap_var,
+            onvalue=True,
+            offvalue=False,
+            command=self._on_console_wrap_toggle
+        )
+        self._console_wrap_switch.pack(side="left")
 
         # ── Columna derecha, fila 1: botones de log ──
         log_btn_frame = ctk.CTkFrame(header, fg_color="transparent")
@@ -780,7 +795,7 @@ class ConfigTab(ctk.CTkFrame):
             font=ctk.CTkFont(family="Consolas", size=11),
             fg_color=self.CONSOLE_BG,
             text_color=self.CONSOLE_TEXT,
-            wrap="none",
+            wrap="word" if self._console_wrap_var.get() else "none",
             state="disabled",
         )
         self._console_textbox.grid(row=1, column=0, sticky="nsew")
@@ -890,6 +905,17 @@ class ConfigTab(ctk.CTkFrame):
             if not content.strip():
                 self._console_set_placeholder(True)
 
+    def _on_console_wrap_toggle(self):
+        """Alterna entre ajuste de línea (word wrap) y scroll horizontal (none)."""
+        wrapped = self._console_wrap_var.get()
+        self.app.console_wrap = wrapped
+        self.app.save_settings()
+        
+        if wrapped:
+            self._console_textbox.configure(wrap="word")
+        else:
+            self._console_textbox.configure(wrap="none")
+
     def _console_set_placeholder(self, show: bool):
         """Muestra u oculta el texto de placeholder en la consola."""
         self._console_textbox.configure(state="normal")
@@ -899,24 +925,42 @@ class ConfigTab(ctk.CTkFrame):
                 "\n\n          Consola inactiva — activa el interruptor para comenzar a capturar registros."
             )
             self._console_textbox.configure(text_color="gray50")
+            self._console_at_start = True
         else:
-            self._console_textbox.configure(text_color="#d4d4d4")
+            # Recuperar el color del tema activo
+            self._console_textbox.configure(text_color=self.CONSOLE_TEXT)
+            self._console_at_start = True
         self._console_textbox.configure(state="disabled")
 
     def append_to_console(self, text: str, tag: str = "normal"):
         """
         Callback llamado por ConsoleLogger o ConsoleHandler.
-        Añade texto al textbox y maneja el límite de líneas de forma optimizada.
+        Añade texto al textbox con timestamp si falta y maneja el límite de líneas.
         """
-        if not self.winfo_exists():
+        if not self.winfo_exists() or not text:
             return
             
         try:
             self._console_textbox.configure(state="normal")
-            self._console_textbox.insert("end", text, tag)
+            
+            import re
+            import time
+            from datetime import datetime
+            
+            # Procesar el texto para insertar timestamps en cada inicio de línea si faltan
+            lines = text.splitlines(keepends=True)
+            for line in lines:
+                # Si estamos al inicio de una línea física en el widget
+                if self._console_at_start and line.strip():
+                    # Comprobar si ya tiene un timestamp [HH:MM:SS]
+                    if not bool(re.match(r'^\s*\[\d{2}:\d{2}:\d{2}\]', line)):
+                        timestamp = f"[{datetime.now().strftime('%H:%M:%S')}] "
+                        self._console_textbox.insert("end", timestamp, tag)
+                
+                self._console_textbox.insert("end", line, tag)
+                self._console_at_start = line.endswith('\n')
 
             # Optimización: Solo verificar el límite de líneas cada cierto tiempo
-            # para no saturar el hilo principal con cálculos de índices
             current_time = time.time()
             if not hasattr(self, "_last_console_cleanup"):
                 self._last_console_cleanup = 0
@@ -2237,6 +2281,14 @@ class ConfigTab(ctk.CTkFrame):
                 
                 # REVISIÓN DE CACHE: Si ya buscamos actualizaciones antes en esta sesión, recuperamos el aviso
                 cache = self.update_cache.get(key)
+                
+                # VALIDACIÓN DINÁMICA: Si la versión actual ya es igual a la última detectada, limpiar aviso
+                if cache and cache.get("latest_version"):
+                    latest = cache.get("latest_version").lstrip('v')
+                    current = str(ver).lstrip('v')
+                    if latest == current:
+                        cache["update_available"] = False
+
                 if cache and cache.get("update_available") and ver != "No encontrado":
                     status_text = f"Versión: {ver} \n(Actualización disponible: {cache.get('latest_version')})"
                     color = self.UPDATE_ALERT
@@ -2516,6 +2568,10 @@ class ConfigTab(ctk.CTkFrame):
             new_ver = env_status.get(mapping[key]) or "Desconocida"
             self.dep_labels[key].configure(text=f"Versión: {new_ver} \n(Actualizado)", text_color="gray50")
             self.dep_buttons[key].configure(state="disabled", text="Actualizado", fg_color=self.STATUS_PENDING, text_color=self.MENU_NORMAL_TEXT)
+            
+            # Limpiar caché de actualización para que no vuelva a salir el aviso al cambiar de pestaña
+            if key in self.update_cache:
+                self.update_cache[key]["update_available"] = False
             
             if key == "ffmpeg" and "ffmpeg_safe" in self.dep_buttons:
                 self.dep_buttons["ffmpeg_safe"].configure(state="normal", text="Restaurar (8.0.1)")

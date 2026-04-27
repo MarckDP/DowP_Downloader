@@ -481,7 +481,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         # --- CÓDIGO DEL NUEVO CHECKBOX (Asegúrate que esté aquí) ---
         self.keep_full_subtitle_check = ctk.CTkCheckBox(
             subtitle_options_frame, 
-            text="No cortar subtítulos (Mantener completos)",
+            text="Mantener subtítulos completos",
             text_color="orange"
         )
         # NO usamos .pack() aquí. Se hará en _toggle_fragment_panel
@@ -1254,7 +1254,7 @@ class SingleDownloadTab(ctk.CTkFrame):
             webbrowser.open_new_tab(self.release_page_url)
         else:
             from src.core.setup import check_app_update
-            self.app_status_label.configure(text=f"DowP v{self.APP_VERSION} - Verificando de nuevo...")
+            self.app_status_label.configure(text=f"DowP v{self.app.APP_VERSION} - Verificando de nuevo...")
             self.update_app_button.configure(state="disabled")
             threading.Thread(
                 target=lambda: self.app.on_update_check_complete(check_app_update(self.app.APP_VERSION)),
@@ -5025,21 +5025,7 @@ class SingleDownloadTab(ctk.CTkFrame):
                     print(f"DEBUG: 🔥 Fallback: se descargará completo y se cortará con FFmpeg")
                     is_fragment_mode = False
                 
-                # 🆕 LOGGING: Comando CLI actualizado
-                if end_time_str:
-                    download_section = f"*{start_time_str if start_time_str else '0'}-{end_time_str}"
-                else:
-                    download_section = f"*{start_time_str if start_time_str else '0'}-inf"
-            
-            # Construir string de flag
-            force_keyframe_flag = "--force-keyframes-at-cuts" if options.get("precise_clip_enabled") else ""
-            
-            cli_command = f"yt-dlp -f \"{precise_selector}\" --download-sections \"{download_section}\" {force_keyframe_flag} \"{options['url']}\" -o \"{output_template}\""
-            
-            print(f"\n{'='*80}")
-            print(f"🔍 COMANDO EQUIVALENTE DE CLI:")
-            print(f"{cli_command}")
-            print(f"{'='*80}\n")
+                # 🔧 El comando CLI se generará globalmente más abajo
         
         # Resto de configuración (subtítulos, cookies, etc.)
         if mode == "Solo Audio" and audio_format_info.get('extract_only'):
@@ -5074,17 +5060,39 @@ class SingleDownloadTab(ctk.CTkFrame):
                 pass
         
         cookie_mode = options["cookie_mode"]
+        cookie_flag = "" # Para el log de CLI
         if cookie_mode == "Archivo Manual..." and options["cookie_path"]: 
             ydl_opts['cookiefile'] = options["cookie_path"]
+            cookie_flag = f' --cookies "{options["cookie_path"]}"'
+            using_cookies = True
         elif cookie_mode != "No usar":
             browser_arg = options["selected_browser"]
             if options["browser_profile"]: 
                 browser_arg += f":{options['browser_profile']}"
             ydl_opts['cookiesfrombrowser'] = (browser_arg,)
+            cookie_flag = f' --cookies-from-browser {browser_arg}'
+            using_cookies = True
 
         # Aplicar parche SOLO con cookies
         if using_cookies:
             ydl_opts = apply_yt_patch(ydl_opts)
+
+        # 🔧 GENERACIÓN DE COMANDO CLI EQUIVALENTE
+        download_section_flag = ""
+        if is_fragment_mode:
+            # Re-obtener los strings para el log si no estaban en el scope (ya están arriba pero por seguridad)
+            s_t = options.get("start_time") or "0"
+            e_t = options.get("end_time") or "inf"
+            download_section_flag = f' --download-sections "*{s_t}-{e_t}"'
+            if options.get("precise_clip_enabled"):
+                download_section_flag += " --force-keyframes-at-cuts"
+
+        cli_command = f'yt-dlp -f "{precise_selector}"{cookie_flag}{download_section_flag} "{options["url"]}" -o "{output_template}"'
+        
+        print(f"\n{'='*80}")
+        print(f"🔍 COMANDO EQUIVALENTE DE CLI (Cópialo para usar en terminal):")
+        print(f"{cli_command}")
+        print(f"{'='*80}\n")
         
         # 🆕 Logging detallado de opciones
         print(f"DEBUG: 📋 Opciones de yt-dlp:")

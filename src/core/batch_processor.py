@@ -889,8 +889,10 @@ class QueueManager:
 
         using_cookies = False
         cookie_mode = self.main_app.cookies_mode_saved
+        cookie_flag = "" # Para el log de CLI
         if cookie_mode == "Archivo Manual..." and self.main_app.cookies_path:
             ydl_opts['cookiefile'] = self.main_app.cookies_path
+            cookie_flag = f' --cookies "{self.main_app.cookies_path}"'
             using_cookies = True
         elif cookie_mode != "No usar":
             browser_arg = self.main_app.selected_browser_saved
@@ -898,11 +900,20 @@ class QueueManager:
             if profile: 
                 browser_arg += f":{profile}"
             ydl_opts['cookiesfrombrowser'] = (browser_arg,)
+            cookie_flag = f' --cookies-from-browser {browser_arg}'
             using_cookies = True
 
         # Aplicar parche SOLO con cookies
         if using_cookies:
             ydl_opts = apply_yt_patch(ydl_opts)
+
+        # 🔧 GENERACIÓN DE COMANDO CLI EQUIVALENTE
+        cli_command = f'yt-dlp -f "{precise_selector}"{cookie_flag} "{url}" -o "{output_template}"'
+        
+        print(f"\n{'='*80}")
+        print(f"🔍 [LOTE] COMANDO EQUIVALENTE DE CLI:")
+        print(f"{cli_command}")
+        print(f"{'='*80}\n")
 
         # Definir el hook de progreso
         def download_hook(d):

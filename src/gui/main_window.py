@@ -147,8 +147,8 @@ class ConsoleLogger:
     llamando a connect_ui().
     """
     def __init__(self):
-        self._stdout_tee = _TeeStream(sys.__stdout__ or sys.stdout)
-        self._stderr_tee = _TeeStream(sys.__stderr__ or sys.stderr)
+        self._stdout_tee = _TeeStream(sys.stdout)
+        self._stderr_tee = _TeeStream(sys.stderr)
         # Instalar inmediatamente (modo pasivo: captura desactivada hasta enable())
         sys.stdout = self._stdout_tee
         sys.stderr = self._stderr_tee
@@ -682,6 +682,7 @@ class MainWindow(TkBase):
         self.image_settings = {}
         self.upscayl_custom_models = {}  # Mapeo: nombre_real -> apodo
         self.console_enabled = False   # Consola de diagnóstico desactivada por defecto
+        self.console_wrap = False      # Ajuste de línea desactivado por defecto
         self.keep_ai_models_in_memory = False # Optimización de VRAM
         self.show_onnx_warning = True # Mostrar aviso de rendimiento de ONNX por defecto
         self.vector_dpi = 300 # Calidad de renderizado para PDF/AI/EPS (Estándar: 300)
@@ -721,6 +722,7 @@ class MainWindow(TkBase):
                     self.image_settings = settings.get("image_settings", {})
                     self.upscayl_custom_models = settings.get("upscayl_custom_models", {})
                     self.console_enabled = settings.get("console_enabled", False)
+                    self.console_wrap = settings.get("console_wrap", False)
                     self.keep_ai_models_in_memory = settings.get("keep_ai_models_in_memory", False)
                     self.show_onnx_warning = settings.get("show_onnx_warning", True)
                     self.vector_dpi = settings.get("vector_dpi", 300)
@@ -1581,6 +1583,7 @@ class MainWindow(TkBase):
 
             # Consola de Diagnóstico
             "console_enabled": self.console_enabled,
+            "console_wrap": self.console_wrap,
 
             # Optimización de VRAM
             "keep_ai_models_in_memory": self.keep_ai_models_in_memory,
@@ -2024,45 +2027,58 @@ class MainWindow(TkBase):
 
     def on_inkscape_check_complete(self, status_info):
         """Callback tras verificar Inkscape."""
-        self.config_tab.dep_buttons["inkscape"].configure(state="normal")
+        # 1. Rehabilitar el botón de verificación
+        if hasattr(self.config_tab, "ink_verify_btn"):
+            self.config_tab.ink_verify_btn.configure(state="normal")
         
+        # 2. Manejar errores de ejecución (fallos reales del comando)
         if status_info.get("status") == "error":
-            self.config_tab.dep_labels["inkscape"].configure(text="Versión: Error al verificar", text_color="red")
-            print(f"ERROR Inkscape: {status_info.get('message')}")
+            if hasattr(self.config_tab, "ink_status_label"):
+                self.config_tab.ink_status_label.configure(text="Versión: Error al verificar", text_color="red")
+            print(f"INFO Inkscape: {status_info.get('message')}")
             return
 
+        # 3. Actualizar estado según presencia
         exists = status_info.get("exists")
+        version = status_info.get("version", "")
+        self.inkscape_version = version
+
         if exists:
-            # Verde o texto normal indicando éxito
-            self.config_tab.dep_labels["inkscape"].configure(
-                text="Versión: Detectado ✅", text_color="#28a745"
-            )
+            if hasattr(self.config_tab, "ink_status_label"):
+                self.config_tab.ink_status_label.configure(
+                    text=f"✅ Detectado: {version}", text_color="#28a745"
+                )
         else:
-            # Rojo o aviso
-            self.config_tab.dep_labels["inkscape"].configure(
-                text="Versión: No encontrado ❌\n(Requerido para vectores)", text_color="red"
-            )
+            if hasattr(self.config_tab, "ink_status_label"):
+                # Si no existe, es INFO, no ERROR (es opcional)
+                self.config_tab.ink_status_label.configure(
+                    text="No encontrado (Opcional)", text_color="gray50"
+                )
+            if self.inkscape_enabled:
+                print("INFO: Inkscape no encontrado en la ruta especificada. Se usarán motores nativos.")
 
     def on_ghostscript_check_complete(self, status_info):
         """Callback tras verificar Ghostscript."""
-        self.config_tab.dep_buttons["ghostscript"].configure(state="normal")
+        if "ghostscript" in self.config_tab.dep_buttons:
+            self.config_tab.dep_buttons["ghostscript"].configure(state="normal")
         
         if status_info.get("status") == "error":
-            self.config_tab.dep_labels["ghostscript"].configure(text="Versión: Error al verificar", text_color="red")
-            print(f"ERROR Ghostscript: {status_info.get('message')}")
+            if "ghostscript" in self.config_tab.dep_labels:
+                self.config_tab.dep_labels["ghostscript"].configure(text="Estado: Error al verificar", text_color="red")
+            print(f"INFO Ghostscript: {status_info.get('message')}")
             return
 
         exists = status_info.get("exists")
         if exists:
-            # Texto verde/normal
-            self.config_tab.dep_labels["ghostscript"].configure(
-                text="Versión: Detectado ✅", text_color="#28a745"
-            )
+            if "ghostscript" in self.config_tab.dep_labels:
+                self.config_tab.dep_labels["ghostscript"].configure(
+                    text="Estado: Detectado ✅", text_color="#28a745"
+                )
         else:
-            # Texto de aviso
-            self.config_tab.dep_labels["ghostscript"].configure(
-                text="Versión: No encontrado ❌\n(Requerido para EPS/AI)", text_color="red"
-            )
+            if "ghostscript" in self.config_tab.dep_labels:
+                self.config_tab.dep_labels["ghostscript"].configure(
+                    text="Estado: No encontrado (Opcional)", text_color="gray50"
+                )
 
     def update_setup_progress(self, text, value):
         """
