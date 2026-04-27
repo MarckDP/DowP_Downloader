@@ -6,9 +6,51 @@ import tempfile
 import atexit   
 import tkinter as tk 
 import pillow_avif
+from datetime import datetime
 
 from tkinter import messagebox
 from PIL import Image, ImageTk
+
+# ==============================================================================
+# 🕒 LOGGER GLOBAL CON TIMESTAMP (MEJORADO)
+# ==============================================================================
+class TimestampLogger:
+    def __init__(self, original_stream):
+        self.original_stream = original_stream
+        self.at_start_of_line = True
+        self._is_timestamped = True # Bandera para evitar re-parchear
+
+    def write(self, message):
+        if not message:
+            return
+        
+        # Dividir el mensaje en líneas manteniendo los finales de línea
+        lines = message.splitlines(keepends=True)
+        
+        import re
+        for line in lines:
+            # Comprobar si la línea ya tiene un timestamp al inicio [HH:MM:SS]
+            # Esto evita duplicados si el mensaje ya viene formateado
+            has_timestamp = bool(re.match(r'^\s*\[\d{2}:\d{2}:\d{2}\]', line))
+            
+            # Si estamos al inicio de una línea, no es solo espacio/vacío, y no tiene hora: poner hora
+            if self.at_start_of_line and line.strip() and not has_timestamp:
+                timestamp = f"[{datetime.now().strftime('%H:%M:%S')}] "
+                self.original_stream.write(timestamp)
+            
+            self.original_stream.write(line)
+            # Actualizar si el siguiente mensaje vendrá en una línea nueva
+            self.at_start_of_line = line.endswith('\n')
+
+    def flush(self):
+        self.original_stream.flush()
+
+# Aplicar redirección global SOLO si no ha sido aplicada antes
+if not hasattr(sys.stdout, "_is_timestamped"):
+    sys.stdout = TimestampLogger(sys.stdout)
+if not hasattr(sys.stderr, "_is_timestamped"):
+    sys.stderr = TimestampLogger(sys.stderr)
+# ==============================================================================
 
 APP_VERSION = "1.4.1"
 
