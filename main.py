@@ -441,6 +441,7 @@ if __name__ == "__main__":
                                 break
                 
                 # 6. Guardar en un archivo temporal seguro para cargar
+                os.makedirs(_user_themes_dir, exist_ok=True)
                 _temp_theme_path = os.path.join(_user_themes_dir, ".active_theme_sanitized.json")
                 with open(_temp_theme_path, 'w', encoding='utf-8') as f:
                     json.dump(_theme_data, f)

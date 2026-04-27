@@ -948,8 +948,24 @@ class ConfigTab(ctk.CTkFrame):
             from datetime import datetime
             
             # Procesar el texto para insertar timestamps en cada inicio de línea si faltan
+            # y manejar retornos de carro (\r) para progreso
+            
+            # Si el bloque de texto contiene \r, es probable que sea spam de progreso.
+            # Lo procesamos para que solo quede la última versión de la línea.
+            if "\r" in text:
+                parts = text.split("\r")
+                text = parts[-1] if parts[-1] else parts[-2] if len(parts) > 1 else text
+                self._console_last_was_r = True
+            else:
+                self._console_last_was_r = False
+
             lines = text.splitlines(keepends=True)
             for line in lines:
+                # Si el bloque anterior terminó en \r, borramos la línea actual antes de escribir
+                if getattr(self, "_console_at_r_pos", False):
+                    self._console_textbox.delete("insert linestart", "insert lineend")
+                    self._console_at_r_pos = False
+
                 # Si estamos al inicio de una línea física en el widget
                 if self._console_at_start and line.strip():
                     # Comprobar si ya tiene un timestamp [HH:MM:SS]
@@ -959,6 +975,9 @@ class ConfigTab(ctk.CTkFrame):
                 
                 self._console_textbox.insert("end", line, tag)
                 self._console_at_start = line.endswith('\n')
+                
+            if self._console_last_was_r:
+                self._console_at_r_pos = True
 
             # Optimización: Solo verificar el límite de líneas cada cierto tiempo
             current_time = time.time()

@@ -30,7 +30,8 @@ from src.core.setup import get_remote_file_size, format_size
 from src.core.constants import (
     REMBG_MODEL_FAMILIES, WAIFU2X_MODELS, SRMD_MODELS, 
     VIDEO_EXTENSIONS, AUDIO_EXTENSIONS,
-    IMAGE_RASTER_FORMATS, IMAGE_RAW_FORMATS
+    IMAGE_RASTER_FORMATS, IMAGE_RAW_FORMATS,
+    AI_FAMILY_HOLDER, AI_ENGINE_HOLDER, AI_MODEL_HOLDER
 )
 from main import REMBG_MODELS_DIR, MODELS_DIR, UPSCALING_DIR
 
@@ -1381,9 +1382,10 @@ class ImageToolsTab(ctk.CTkFrame):
         
         self.rembg_family_menu = ctk.CTkOptionMenu(
             self.rembg_options_frame,
-            values=list(REMBG_MODEL_FAMILIES.keys()),
+            values=[AI_ENGINE_HOLDER] + list(REMBG_MODEL_FAMILIES.keys()),
             command=self._on_rembg_family_change
         )
+        self.rembg_family_menu.set(AI_ENGINE_HOLDER)
         self.rembg_family_menu.grid(row=1, column=1, padx=(0, 10), pady=5, sticky="ew")
         
         # --- MENÚ 2: MODELO (Ahora Fila 2) ---
@@ -1391,9 +1393,10 @@ class ImageToolsTab(ctk.CTkFrame):
         
         self.rembg_model_menu = ctk.CTkOptionMenu(
             self.rembg_options_frame,
-            values=["-"], # Se llena dinámicamente
+            values=[AI_MODEL_HOLDER], # Se llena dinámicamente
             command=self._on_rembg_model_change
         )
+        self.rembg_model_menu.set(AI_MODEL_HOLDER)
         self.rembg_model_menu.grid(row=2, column=1, padx=(0, 10), pady=5, sticky="ew")
         
         # (Ahora Fila 3)
@@ -1480,9 +1483,9 @@ class ImageToolsTab(ctk.CTkFrame):
 
         self.rembg_options_frame.pack_forget()
         
-        # Inicializar menús con el default
-        default_family = "Rembg Standard (U2Net)"
-        self.rembg_family_menu.set(default_family)
+        # Inicializar menús con el placeholder (si no hay settings cargados luego)
+        self.rembg_family_menu.set(AI_ENGINE_HOLDER)
+        self.rembg_model_menu.set(AI_MODEL_HOLDER)
 
         # ---------------------------------------------------------
         # 3.4.6: Módulo "Cuadrito" Maestro de Reescalado IA (NUEVO)
@@ -1510,9 +1513,10 @@ class ImageToolsTab(ctk.CTkFrame):
         ctk.CTkLabel(self.upscale_options_frame, text="Motor:").grid(row=0, column=0, padx=(10, 5), pady=5, sticky="w")
         self.upscale_engine_menu = ctk.CTkOptionMenu(
             self.upscale_options_frame,
-            values=["Upscayl", "Waifu2x", "SRMD (Enfoque/Deblur)"],
+            values=[AI_ENGINE_HOLDER, "Upscayl", "Waifu2x", "SRMD (Enfoque/Deblur)"],
             command=self._on_upscale_engine_change
         )
+        self.upscale_engine_menu.set(AI_ENGINE_HOLDER)
         self.upscale_engine_menu.grid(row=0, column=1, columnspan=3, padx=(0, 10), pady=5, sticky="ew")
 
         # --- FILA 1: Modelo ---
@@ -1524,9 +1528,10 @@ class ImageToolsTab(ctk.CTkFrame):
 
         self.upscale_model_menu = ctk.CTkOptionMenu(
             self.upscale_model_container, 
-            values=["-"],
+            values=[AI_MODEL_HOLDER],
             command=self._on_upscale_model_change
         )
+        self.upscale_model_menu.set(AI_MODEL_HOLDER)
         self.upscale_model_menu.grid(row=0, column=0, padx=(0, 5), pady=5, sticky="ew")
 
         self.upscale_add_custom_btn = ctk.CTkButton(
@@ -2377,13 +2382,22 @@ class ImageToolsTab(ctk.CTkFrame):
         # 🔍 DEBUG
         print(f"DEBUG: Cambiando a motor: {engine}")
         
+        if engine == AI_ENGINE_HOLDER:
+            self.upscale_add_custom_btn.grid_remove()
+            self.upscale_model_menu.configure(values=[AI_MODEL_HOLDER])
+            self.upscale_model_menu.set(AI_MODEL_HOLDER)
+            self.upscale_denoise_label.grid_remove()
+            self.upscale_denoise_menu.grid_remove()
+            self._on_upscale_model_change(AI_MODEL_HOLDER, engine=engine, silent=True)
+            return
+
         if engine == "Waifu2x":
             # Ocultar botón Añadir en motores que no son Upscayl
             self.upscale_add_custom_btn.grid_remove()
             
             models_list = list(WAIFU2X_MODELS.keys())
-            self.upscale_model_menu.configure(values=models_list)
-            self.upscale_model_menu.set(models_list[0])
+            self.upscale_model_menu.configure(values=[AI_MODEL_HOLDER] + models_list)
+            self.upscale_model_menu.set(AI_MODEL_HOLDER)
             
             # Mostrar Denoise
             self.upscale_denoise_label.grid()
@@ -2394,8 +2408,8 @@ class ImageToolsTab(ctk.CTkFrame):
             self.upscale_add_custom_btn.grid_remove()
             
             models_list = list(SRMD_MODELS.keys())
-            self.upscale_model_menu.configure(values=models_list)
-            self.upscale_model_menu.set(models_list[0])
+            self.upscale_model_menu.configure(values=[AI_MODEL_HOLDER] + models_list)
+            self.upscale_model_menu.set(AI_MODEL_HOLDER)
             
             # Mostrar Denoise
             self.upscale_denoise_label.configure(text="Nivel Ruido/Blur:")
@@ -2408,9 +2422,10 @@ class ImageToolsTab(ctk.CTkFrame):
             
             models_list = self._scan_upscayl_models()
             if not models_list:
-                models_list = ["- No hay modelos -"]
-            self.upscale_model_menu.configure(values=models_list)
-            self.upscale_model_menu.set(models_list[0])
+                models_list = ["Descargar Modelos"]
+            
+            self.upscale_model_menu.configure(values=[AI_MODEL_HOLDER] + models_list)
+            self.upscale_model_menu.set(AI_MODEL_HOLDER)
             
             # Ocultar Denoise
             self.upscale_denoise_label.grid_remove()
@@ -2428,6 +2443,11 @@ class ImageToolsTab(ctk.CTkFrame):
         """
         # 1. Si la herramienta no está activa, no hacer nada
         if self.upscale_checkbox.get() != 1: return
+
+        # 1.5: Si es un placeholder, limpiar estado y salir
+        if selected_model_friendly == AI_MODEL_HOLDER:
+            self.upscale_status_label.configure(text="Seleccione un modelo para continuar", text_color="gray")
+            return
         
         # 2. Si no se pasa el motor explícitamente, leerlo del menú
         if engine is None:
@@ -2491,7 +2511,12 @@ class ImageToolsTab(ctk.CTkFrame):
                     
                     # 2. Obtener peso remoto (HEAD request)
                     file_size = get_remote_file_size(tool_info["url"])
-                    size_str = format_size(file_size)
+                    
+                    # 🔧 MEJORA: Para Upscayl, el binario es pequeño (2MB) pero los modelos pesan ~300MB
+                    if engine_key == "Upscayl":
+                        size_str = "~300 MB (Motor + Modelos)"
+                    else:
+                        size_str = format_size(file_size)
                     
                     # 3. Preguntar al usuario
                     Tooltip.hide_all()
@@ -2518,9 +2543,9 @@ class ImageToolsTab(ctk.CTkFrame):
                             success = check_and_download_upscaling_tools(progress_cb, target_tool=engine_key)
                             
                             if success:
-                                # Si termina bien, volvemos a llamar a esta función (silent=True) para refrescar botones
+                                # Si termina bien, llamamos a engine_change para que re-escanee la carpeta y refresque la lista de modelos
                                 self.app.ui_update_queue.put((
-                                    lambda: self._on_upscale_model_change(selected_model_friendly, engine, silent=True), ()
+                                    lambda: self._on_upscale_engine_change(engine, silent=True), ()
                                 ))
                             else:
                                 self.app.ui_update_queue.put((
@@ -3000,8 +3025,8 @@ class ImageToolsTab(ctk.CTkFrame):
             else:
                 self.rembg_gpu_checkbox.deselect()
 
-            # 2. Obtener familia guardada o usar default
-            saved_family = rem.get("family", "Rembg Standard (U2Net)")
+            # 2. Obtener familia guardada o usar default (Placeholder)
+            saved_family = rem.get("family", AI_ENGINE_HOLDER)
             self.rembg_family_menu.set(saved_family)
             
             # 3. CRÍTICO: Forzar la población del menú de modelos AHORA (SILENCIOSAMENTE)
@@ -3029,6 +3054,9 @@ class ImageToolsTab(ctk.CTkFrame):
                 self.upscale_engine_menu.set(settings["upscale_engine"])
                 # Importante: Actualizar los modelos disponibles para este motor (CON SILENCIO)
                 self._on_upscale_engine_change(settings["upscale_engine"], silent=True) 
+            else:
+                self.upscale_engine_menu.set(AI_ENGINE_HOLDER)
+                self._on_upscale_engine_change(AI_ENGINE_HOLDER, silent=True)
                 
             if settings.get("upscale_model_friendly"):
                 current_models = self.upscale_model_menu.cget("values")
@@ -5582,19 +5610,23 @@ class ImageToolsTab(ctk.CTkFrame):
 
     def _on_rembg_family_change(self, selected_family, silent=False):
         """Actualiza el menú de modelos basado en la familia seleccionada."""
+        if selected_family == AI_ENGINE_HOLDER:
+            self.rembg_model_menu.configure(values=[AI_MODEL_HOLDER])
+            self.rembg_model_menu.set(AI_MODEL_HOLDER)
+            self._on_rembg_model_change(AI_MODEL_HOLDER, silent=True)
+            return
+
         models_dict = REMBG_MODEL_FAMILIES.get(selected_family, {})
         model_names = list(models_dict.keys())
         
         if model_names:
-            self.rembg_model_menu.configure(values=model_names)
-            # Intentar seleccionar el "general" o "recomendado" por defecto
-            default_model = next((m for m in model_names if "General" in m or "Recomendado" in m), model_names[0])
-            self.rembg_model_menu.set(default_model)
-            # ✅ PASAMOS EL SILENCIO AQUÍ
-            self._on_rembg_model_change(default_model, silent=silent)
+            self.rembg_model_menu.configure(values=[AI_MODEL_HOLDER] + model_names)
+            self.rembg_model_menu.set(AI_MODEL_HOLDER)
+            # Ya no seleccionamos el default automáticamente para evitar descargas
+            self._on_rembg_model_change(AI_MODEL_HOLDER, silent=silent)
         else:
-            self.rembg_model_menu.configure(values=["-"])
-            self.rembg_model_menu.set("-")
+            self.rembg_model_menu.configure(values=[AI_MODEL_HOLDER])
+            self.rembg_model_menu.set(AI_MODEL_HOLDER)
 
     def _on_rembg_model_change(self, selected_model, silent=False):
         """
@@ -5603,7 +5635,9 @@ class ImageToolsTab(ctk.CTkFrame):
         Si silent=False (usuario), pregunta antes de descargar mostrando el peso.
         """
         if self.rembg_checkbox.get() != 1: return
-        if selected_model == "-" or not selected_model: return
+        if selected_model == AI_MODEL_HOLDER or not selected_model or selected_model == "-":
+            self.rembg_status_label.configure(text="Seleccione un modelo para continuar", text_color="gray")
+            return
 
         family = self.rembg_family_menu.get()
         model_info = REMBG_MODEL_FAMILIES.get(family, {}).get(selected_model)

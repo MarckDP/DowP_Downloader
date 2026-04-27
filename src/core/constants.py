@@ -427,6 +427,11 @@ INTERPOLATION_METHODS = {
     "Nearest (Pixelado)": "NEAREST"
 }
 
+# --- CONSTANTES DE PLACEHOLDERS (IA) ---
+AI_FAMILY_HOLDER = "Seleccione la familia..."
+AI_ENGINE_HOLDER = "Seleccione el motor..."
+AI_MODEL_HOLDER = "Seleccione el modelo..."
+
 # Opciones de Canvas
 CANVAS_OPTIONS = [
     "Sin ajuste",
