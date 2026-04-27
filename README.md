@@ -63,7 +63,7 @@ Selecciona un segmento específico del video o audio indicando los tiempos de in
 
 #### ✨ Extras
 Esta sección (antes "Modo Extraer") incluye herramientas adicionales para el procesamiento:
-- **Reescalado con IA**: Mejora la resolución de fotos y videos usando motores **Real-ESRGAN, Waifu2x, RealSR y SRMD**. Permite elegir escala (2x, 3x, 4x) y motor según tu GPU/CPU.
+- **Reescalado con IA**: Mejora la resolución de fotos y videos usando motores **Real-ESRGAN, Waifu2x, RealSR, SRMD y Upscayl**. Permite elegir escala (2x, 3x, 4x) y motor según tu GPU/CPU, aprovechando la potencia de los binarios unificados de **Upscayl NCNN**.
 - **Extraer Fotogramas**: Extrae frames del video a una secuencia de imágenes. Puedes configurar los FPS, elegir formato PNG o ajustar la compresión JPG usando un slider interactivo, y guardar todo en una subcarpeta automática.
 - **Auto-enviar a H.I. (Herramientas de Imagen)**: Opción en el panel de miniaturas para enviar automáticamente la vista previa descargada y poder editarla, quitar sus fondos o reescalarla.
 

@@ -113,7 +113,8 @@ Implementaciones portables NCNN-Vulkan desarrolladas por nihui y xinntao.
 - **srmd-ncnn-vulkan** (manejo de degradaciones múltiples)
 - **Real-ESRGAN** (restauración de imágenes de propósito general)
 - **Upscayl NCNN** (binario unificado para procesamiento de alto rendimiento)
-- **Upscayl Custom Models** (colección de modelos especializados)
+- **Upscayl Custom Models** (colección de modelos especializados compilados por la comunidad)
+- **Nota sobre modelos:** Los modelos incluidos en la colección de Upscayl son creaciones originales de diversos autores de la comunidad de IA (como BlueAmulet, victorca25, entre otros) y son distribuidos bajo licencias abiertas compatibles.
 
 ### **Licencias**
 - waifu2x, RealSR, SRMD: [MIT License](https://opensource.org/licenses/MIT)
