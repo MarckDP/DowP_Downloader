@@ -687,6 +687,7 @@ class MainWindow(TkBase):
         self.show_onnx_warning = True # Mostrar aviso de rendimiento de ONNX por defecto
         self.vector_dpi = 300 # Calidad de renderizado para PDF/AI/EPS (Estándar: 300)
         self.preview_vector_dpi = 100 # Calidad de previsualización para vectores (Rápida: 100)
+        self.vector_force_background = False # Fondo blanco para vectores (Default: False/Transparente)
         
         self.inkscape_enabled = False
         self.inkscape_custom_path = r"C:\Program Files\Inkscape"
