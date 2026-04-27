@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 # Importar nuestros otros módulos
 from src.core.downloader import get_video_info, download_media, apply_site_specific_rules, apply_yt_patch
 from src.core.processor import FFmpegProcessor, CODEC_PROFILES
-from src.core.exceptions import UserCancelledError, LocalRecodeFailedError, PlaylistDownloadError # <-- MODIFICAR
+from src.core.exceptions import UserCancelledError, LocalRecodeFailedError, PlaylistDownloadError
 from src.core.processor import clean_and_convert_vtt_to_srt, slice_subtitle
 from .dialogs import ConflictDialog, LoadingWindow, CompromiseDialog, SimpleMessageDialog, SavePresetDialog, PlaylistErrorDialog, Tooltip
 from src.core.constants import (
@@ -34,7 +34,7 @@ from src.core.constants import (
     FORMAT_MUXER_MAP, LANG_CODE_MAP, LANGUAGE_ORDER,
     DEFAULT_PRIORITY, EDITOR_FRIENDLY_CRITERIA, COMPATIBILITY_RULES,
     WAIFU2X_MODELS, SRMD_MODELS,
-    UPSCALING_TOOLS,
+    UPSCALING_TOOLS, AI_ENGINE_HOLDER, AI_MODEL_HOLDER,
 )
 from contextlib import redirect_stdout
 def resource_path(relative_path):
@@ -116,6 +116,7 @@ class SingleDownloadTab(ctk.CTkFrame):
         self.apply_quick_preset_checkbox_state = False
         self.keep_original_quick_saved = True
         self.analysis_was_playlist = False
+        self._last_progress_update_time = 0.0 # Throttling para UI (3fps)
 
         self.active_downloads_state = {
             "ffmpeg": {"text": "", "value": 0.0, "active": False},
@@ -950,10 +951,11 @@ class SingleDownloadTab(ctk.CTkFrame):
             row=0, column=0, padx=(10, 5), pady=(5, 3), sticky="w")
         self.upscale_engine_menu = ctk.CTkOptionMenu(
             self.upscale_video_subpanel,
-            values=["Upscayl", "Waifu2x", "SRMD"],
+            values=[AI_ENGINE_HOLDER, "Upscayl", "Waifu2x", "SRMD"],
             font=ctk.CTkFont(size=12),
             command=self._on_upscale_engine_change
         )
+        self.upscale_engine_menu.set(AI_ENGINE_HOLDER)
         self.upscale_engine_menu.grid(row=0, column=1, columnspan=3, padx=(0, 10), pady=(5, 3), sticky="ew")
         Tooltip(self.upscale_engine_menu, "Motor de IA para reescalado.\nUpscayl es el mas recomendado para video.", delay_ms=1000)
 
@@ -967,9 +969,11 @@ class SingleDownloadTab(ctk.CTkFrame):
 
         self.upscale_model_menu = ctk.CTkOptionMenu(
             self.upscale_model_container,
+            values=[AI_MODEL_HOLDER],
             font=ctk.CTkFont(size=12),
             command=self._on_upscale_model_change
         )
+        self.upscale_model_menu.set(AI_MODEL_HOLDER)
         self.upscale_model_menu.grid(row=0, column=0, padx=(0, 5), pady=0, sticky="ew")
         Tooltip(self.upscale_model_menu, "Modelo dentro del motor seleccionado.", delay_ms=1000)
 
@@ -2998,10 +3002,36 @@ class SingleDownloadTab(ctk.CTkFrame):
                         
                         audio_language_options.sort(key=sort_by_lang_priority)
                         
+                        # 🆕 SELECCIÓN INTELIGENTE: Priorizar "Original"
+                        default_lang_selection = audio_language_options[0]
+                        original_video_lang = getattr(self, 'original_video_language', None)
+                        
+                        for label in audio_language_options:
+                            f_id = self.combined_audio_map.get(label)
+                            # Buscar en las variantes originales para ver el format_note
+                            for variant in variants:
+                                if variant.get('format_id') == f_id:
+                                    note = (variant.get('format_note') or '').lower()
+                                    v_lang = variant.get('language')
+                                    
+                                    # Condición 1: Tiene la nota 'original'
+                                    if 'original' in note:
+                                        default_lang_selection = label
+                                        print(f"DEBUG: [Multiidioma] Pre-seleccionando idioma ORIGINAL (por nota): {label}")
+                                        break
+                                        
+                                    # Condición 2: El idioma coincide con el idioma principal del video
+                                    if original_video_lang and v_lang:
+                                        if v_lang.startswith(original_video_lang) or original_video_lang.startswith(v_lang):
+                                            default_lang_selection = label
+                                            print(f"DEBUG: [Multiidioma] Pre-seleccionando idioma ORIGINAL (por metadato global): {label}")
+                                            break
+                            if default_lang_selection == label: break
+
                         # Actualizar el menú de audio
                         self.audio_quality_menu.configure(state="normal", values=audio_language_options)
-                        self.audio_quality_menu.set(audio_language_options[0])
-                        print(f"DEBUG: Menú de audio llenado con {len(audio_language_options)} idiomas")
+                        self.audio_quality_menu.set(default_lang_selection)
+                        print(f"DEBUG: Menú de audio llenado con {len(audio_language_options)} idiomas. Seleccionado: {default_lang_selection}")
                 else:
                     # 🆕 NUEVO: Solo hay un idioma o ninguno, deshabilitar el menú
                     self.audio_quality_menu.configure(state="disabled")
@@ -5413,7 +5443,15 @@ class SingleDownloadTab(ctk.CTkFrame):
                             print(f"⚠️ No se pudo eliminar (bloqueado): {temp_file}")
                             failed_files.append(temp_file)
                             
+                    except FileNotFoundError:
+                        # Si no se encuentra, es que ya fue eliminado (probablemente por yt-dlp)
+                        cleaned_count += 1
+                        break
+                        
                     except OSError as e:
+                        if getattr(e, 'winerror', None) == 2 or e.errno == 2:
+                            cleaned_count += 1
+                            break
                         if attempt < max_retries - 1:
                             continue
                         else:
@@ -5734,6 +5772,16 @@ class SingleDownloadTab(ctk.CTkFrame):
         - Valores en escala 0.0-1.0
         - Valor especial -1 para activar modo INDETERMINADO
         """
+        now = time.time()
+        
+        # Throttling: 3 veces por segundo (aprox cada 333ms)
+        # Siempre permitimos actualizaciones críticas (inicio, fin, indeterminado)
+        if percentage != 0 and percentage != 100 and percentage != -1:
+            if now - self._last_progress_update_time < 0.33:
+                return
+                
+        self._last_progress_update_time = now
+
         try:
             progress_value = float(percentage)
         except (ValueError, TypeError):
@@ -6120,6 +6168,13 @@ class SingleDownloadTab(ctk.CTkFrame):
             formats = info.get('formats', [])
             self.has_video_streams = any(f.get('height') for f in formats)
             self.has_audio_streams = any(f.get('acodec') != 'none' or (not f.get('height') and f.get('vcodec') == 'none') for f in formats)
+            # ✅ GUARDAR IDIOMA ORIGINAL (Para multiidioma)
+            if info:
+                self.original_video_language = info.get('language')
+                print(f"DEBUG: Idioma principal del video detectado como: {self.original_video_language}")
+            else:
+                self.original_video_language = None
+
             thumbnail_url = info.get('thumbnail')
             if thumbnail_url:
                 threading.Thread(target=self.load_thumbnail, args=(thumbnail_url,), daemon=True).start()
@@ -6774,6 +6829,13 @@ class SingleDownloadTab(ctk.CTkFrame):
         
         self.audio_quality_menu.configure(state="normal" if self.audio_formats else "disabled", values=a_opts)
         self.audio_quality_menu.set(default_audio_selection)
+
+        # ✅ FIX: Forzar el refresco de audio para variantes combinadas (Multiidioma)
+        # Esto evita que el menú de audio se vea vacío al terminar el análisis
+        if self.video_formats.get(default_video_selection, {}).get('is_combined'):
+            print(f"DEBUG: Forzando refresco de audio para variante combinada inicial...")
+            self.on_video_quality_change(default_video_selection)
+
         self.all_subtitles = {}
         
         def process_sub_list(sub_list, is_auto):
@@ -6939,7 +7001,14 @@ class SingleDownloadTab(ctk.CTkFrame):
                 self.upscale_model_menu.set(model_names[-1])
 
     def _on_upscale_engine_change(self, engine: str, silent=False):
-        """Actualiza la lista de modelos segun el motor seleccionado."""
+        """Carga modelos y ajusta visibilidad según el motor."""
+        if engine == AI_ENGINE_HOLDER:
+            self.upscale_add_custom_btn.grid_remove()
+            self.upscale_model_menu.configure(values=[AI_MODEL_HOLDER])
+            self.upscale_model_menu.set(AI_MODEL_HOLDER)
+            self._on_upscale_model_change(AI_MODEL_HOLDER, engine=engine, silent=True)
+            return
+
         # Mapeo de motores a constantes de modelos
         engine_map = {
             "Waifu2x":     WAIFU2X_MODELS,
@@ -6952,16 +7021,19 @@ class SingleDownloadTab(ctk.CTkFrame):
             
             model_names = self._scan_upscayl_models()
             if not model_names:
-                model_names = ["- No hay modelos -"]
+                model_names = ["Descargar Modelos"]
+            
+            # Añadir placeholder a la lista
+            model_names = [AI_MODEL_HOLDER] + model_names
         else:
             # Ocultar botón Añadir en motores que no son Upscayl
             self.upscale_add_custom_btn.grid_remove()
             
             models_dict = engine_map.get(engine, WAIFU2X_MODELS)
-            model_names = list(models_dict.keys())
+            model_names = [AI_MODEL_HOLDER] + list(models_dict.keys())
         
         self.upscale_model_menu.configure(values=model_names)
-        self.upscale_model_menu.set(model_names[0])
+        self.upscale_model_menu.set(AI_MODEL_HOLDER)
         
         # Mostrar/Ocultar Denoise según el motor
         if engine in ["Waifu2x", "SRMD"]:
@@ -6972,13 +7044,19 @@ class SingleDownloadTab(ctk.CTkFrame):
             self.upscale_denoise_menu.grid_remove()
 
         # Disparar actualizacion de escalas y chequeo de instalacion
-        self._on_upscale_model_change(model_names[0], engine=engine, silent=silent)
+        self._on_upscale_model_change(AI_MODEL_HOLDER, engine=engine, silent=silent)
 
     def _on_upscale_model_change(self, selected_model_friendly: str, engine=None, silent=False):
         """
         Actualiza las escalas validas y verifica si el motor esta instalado.
         Si no esta, ofrece descarga (a menos que silent=True).
         """
+        if self.upscale_video_checkbox.get() != 1: return
+
+        if selected_model_friendly == AI_MODEL_HOLDER:
+            self.upscale_status_label.configure(text="Seleccione un modelo para continuar", text_color="gray")
+            return
+
         if engine is None:
             engine = self.upscale_engine_menu.get()
             
@@ -7013,7 +7091,12 @@ class SingleDownloadTab(ctk.CTkFrame):
                     self.update()
                     
                     file_size = get_remote_file_size(tool_info["url"])
-                    size_str = format_size(file_size)
+                    
+                    # 🔧 MEJORA: Para Upscayl, el binario es pequeño (2MB) pero los modelos pesan ~300MB
+                    if engine_key == "Upscayl":
+                        size_str = "~300 MB (Motor + Modelos)"
+                    else:
+                        size_str = format_size(file_size)
                     
                     Tooltip.hide_all()
                     user_response = messagebox.askyesno(
@@ -7033,7 +7116,8 @@ class SingleDownloadTab(ctk.CTkFrame):
                             success = check_and_download_upscaling_tools(progress_cb, target_tool=engine_key)
                             
                             if success:
-                                self.app.after(0, lambda: self._on_upscale_model_change(selected_model_friendly, engine, silent=True))
+                                # Re-escanear para encontrar los modelos recién descargados
+                                self.app.after(0, lambda: self._on_upscale_engine_change(engine, silent=True))
                             else:
                                 self.app.after(0, lambda: self.upscale_status_label.configure(text="❌ Error descarga", text_color="red"))
 

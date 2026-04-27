@@ -557,6 +557,7 @@ class QueueManager:
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
+            'noprogress': True,
             'ffmpeg_location': self.main_app.ffmpeg_processor.ffmpeg_path
         }
         
@@ -664,6 +665,7 @@ class QueueManager:
                 ydl_opts = {
                     'no_warnings': True,
                     'noplaylist': True,
+                    'noprogress': True,
                 }
 
                 using_cookies = False               
@@ -776,15 +778,10 @@ class QueueManager:
 
         print(f"DEBUG: Descargando con v_id={v_id}, a_id={a_id}")
 
-        # 🆕 Si es combinado multiidioma, usar el ID del idioma seleccionado
+        # 🔧 LÓGICA DE SELECTOR (Multiidioma Fix)
+        # Eliminada la dependencia directa de batch_tab.combined_audio_map (inseguro para hilos)
+        # v_id y a_id ya vienen resueltos desde el hilo de la UI.
         is_combined = v_format_dict.get('is_combined', False) if v_format_dict else False
-        if is_combined and v_format_dict:
-            quality_key = v_format_dict.get('quality_key')
-            batch_tab = self.main_app.batch_tab
-            if quality_key and hasattr(batch_tab, 'combined_audio_map') and batch_tab.combined_audio_map:
-                if a_label in batch_tab.combined_audio_map:
-                    v_id = batch_tab.combined_audio_map[a_label]
-                    print(f"DEBUG: Usando format_id de variante multiidioma: {v_id}")
 
         precise_selector = ""
         if mode == "Video+Audio":
@@ -840,6 +837,7 @@ class QueueManager:
             'ffmpeg_location': self.main_app.ffmpeg_processor.ffmpeg_path,
             'format': precise_selector,
             'restrictfilenames': True,
+            'noprogress': True,
         }
 
         # ✅ CORRECCIÓN DINÁMICA: Extraer audio respetando el formato original
@@ -919,6 +917,11 @@ class QueueManager:
         def download_hook(d):
             if self.pause_event.is_set() or self.stop_event.is_set():
                  raise UserCancelledError("Proceso pausado por el usuario.")
+            
+            # ✅ NUEVO: Detectar si el usuario eliminó el trabajo (X en la GUI)
+            if job.status == "FAILED" or job.status == "CANCELLED":
+                 print(f"DEBUG: Trabajo {job.job_id} fue eliminado, abortando descarga.")
+                 raise UserCancelledError("Trabajo cancelado/eliminado por el usuario.")
 
             if d['status'] == 'downloading':
                 total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
@@ -1143,6 +1146,32 @@ class QueueManager:
                     
                     # 5. Enviar el paquete por el socket
                     self.main_app.socketio.emit('new_file', {'filePackage': file_package}, to=active_target)
+            
+        except UserCancelledError as e:
+            # Limpiar temporales si el usuario canceló
+            if 'final_filepath' in locals() and final_filepath:
+                output_dir = os.path.dirname(final_filepath)
+                base_title = os.path.splitext(os.path.basename(final_filepath))[0]
+                import glob
+                patterns = [
+                    f"{base_title}*.part", f"{base_title}*.f[0-9]*", f"{base_title}*.ytdl",
+                    f"{base_title}*.temp", f"*.f[0-9]*.part", f"{base_title}*.temp.*", f"{base_title}*.part-*", f".{base_title}*"
+                ]
+                for p in patterns:
+                    for f in glob.glob(os.path.join(output_dir, p)):
+                        try:
+                            os.remove(f)
+                            print(f"DEBUG: Eliminado temp (Lote): {f}")
+                        except Exception:
+                            pass
+            
+            # Restaurar backup (.bak) si existía
+            if 'backup_path' in locals() and backup_path and os.path.exists(backup_path):
+                if 'final_filepath' in locals() and os.path.exists(final_filepath): 
+                    os.remove(final_filepath)
+                os.rename(backup_path, final_filepath)
+                
+            raise e
             
         except Exception as e:
             # Si falló, restaurar el backup si existía

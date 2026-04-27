@@ -116,6 +116,10 @@ class BatchDownloadTab(ctk.CTkFrame):
         self._selection_timer_id = None 
         # -------------------------------------------------------------------
 
+        # --- NUEVO: Control de frecuencia de actualización de UI (Throttling) ---
+        self._last_ui_update_times = {} # job_id -> timestamp
+        # -----------------------------------------------------------------------
+
         # Dibujar los widgets
         self._create_widgets()
         self._initialize_ui_settings()
@@ -1003,8 +1007,44 @@ class BatchDownloadTab(ctk.CTkFrame):
                         
                         audio_language_options.sort(key=sort_by_lang_priority)
                         
+                        # 🆕 SELECCIÓN INTELIGENTE: Priorizar "Original"
+                        default_lang_selection = audio_language_options[0]
+                        
+                        # Intentar obtener el idioma original del trabajo actual
+                        original_video_lang = None
+                        try:
+                            selected_items = self.queue_tree.selection()
+                            if selected_items:
+                                job = self.app.queue_manager.get_job(selected_items[0])
+                                if job and job.analysis_data:
+                                    original_video_lang = job.analysis_data.get('language')
+                        except Exception:
+                            pass
+                        
+                        for label in audio_language_options:
+                            f_id = self.combined_audio_map.get(label)
+                            # Buscar en las variantes originales para ver el format_note
+                            for variant in variants:
+                                if variant.get('format_id') == f_id:
+                                    note = (variant.get('format_note') or '').lower()
+                                    v_lang = variant.get('language')
+                                    
+                                    # Condición 1: Tiene la nota 'original'
+                                    if 'original' in note:
+                                        default_lang_selection = label
+                                        print(f"DEBUG: [Lote Multiidioma] Pre-seleccionando idioma ORIGINAL (por nota): {label}")
+                                        break
+                                        
+                                    # Condición 2: El idioma coincide con el idioma principal del video
+                                    if original_video_lang and v_lang:
+                                        if v_lang.startswith(original_video_lang) or original_video_lang.startswith(v_lang):
+                                            default_lang_selection = label
+                                            print(f"DEBUG: [Lote Multiidioma] Pre-seleccionando idioma ORIGINAL (por metadato global): {label}")
+                                            break
+                            if default_lang_selection == label: break
+
                         self.audio_quality_menu.configure(state="normal", values=audio_language_options)
-                        self.audio_quality_menu.set(audio_language_options[0])
+                        self.audio_quality_menu.set(default_lang_selection)
                 else:
                     # 🆕 NUEVO: Solo hay un idioma o ninguno, deshabilitar el menú
                     self.audio_quality_menu.configure(state="disabled")
@@ -1094,8 +1134,27 @@ class BatchDownloadTab(ctk.CTkFrame):
 
     def update_job_ui(self, job_id: str, status: str, message: str, progress_percent: float = 0.0):
         """
-        Callback que el QueueManager usa para actualizar la UI.
-        Se ejecuta en el hilo principal.
+        Punto de entrada para actualizaciones desde QueueManager.
+        Maneja el throttling y asegura que la UI se actualice en el hilo principal.
+        """
+        now = time.time()
+        
+        # Throttling: Solo limitar si el estado es RUNNING (progreso continuo)
+        # Estados determinantes (COMPLETED, FAILED, PENDING, etc) siempre pasan.
+        if status == "RUNNING":
+            last_time = self._last_ui_update_times.get(job_id, 0)
+            if now - last_time < 0.5: # Límite de 2 veces por segundo
+                return
+        
+        self._last_ui_update_times[job_id] = now
+        
+        # Enviar al hilo principal de forma segura
+        self.after(0, lambda: self._do_update_job_ui(job_id, status, message, progress_percent))
+
+    def _do_update_job_ui(self, job_id: str, status: str, message: str, progress_percent: float = 0.0):
+        """
+        Ejecuta la actualización real de los widgets. 
+        DEBE ejecutarse en el hilo principal.
         """
         
         if job_id == "QUEUE_STATUS":
@@ -1316,6 +1375,7 @@ class BatchDownloadTab(ctk.CTkFrame):
 
     def _remove_job(self, job_id: str):
         """Elimina un trabajo de la UI y de la cola."""
+        print(f"DEBUG: El usuario presionó la 'X' para eliminar el trabajo {job_id[:8]}...")
         if job_id in self.job_widgets:
             self.job_widgets[job_id].destroy()
             del self.job_widgets[job_id]
@@ -2101,12 +2161,26 @@ class BatchDownloadTab(ctk.CTkFrame):
                 
                 job.config['audio_format_label'] = audio_selection_to_set
 
-                # También resolver y guardar el ID inmediatamente para que el procesador no tenga dudas
-                # (Esto evita que el procesador tenga que adivinar de nuevo)
+                # --- INICIO DE RESOLUCIÓN DE IDs REALES (Multiidioma Fix) ---
+                v_label_set = self.video_quality_menu.get()
+                v_info_set = self.current_video_formats.get(v_label_set, {})
+                v_id_to_save = v_info_set.get('format_id')
+                
+                # Si es un combinado multiidioma, el video_id real depende del idioma (audio_selection)
+                if v_info_set.get('is_combined') and hasattr(self, 'combined_audio_map') and self.combined_audio_map:
+                    if audio_selection_to_set in self.combined_audio_map:
+                        v_id_to_save = self.combined_audio_map[audio_selection_to_set]
+                        print(f"DEBUG: [Populate] Detectado multiidioma. Video ID resuelto: {v_id_to_save}")
+
+                job.config['video_format_label'] = v_label_set
+                job.config['resolved_video_format_id'] = v_id_to_save
+                
                 if audio_selection_to_set != "-" and audio_selection_to_set in self.current_audio_formats:
                     sel_audio_data = self.current_audio_formats.get(audio_selection_to_set, {})
                     job.config['resolved_audio_format_id'] = sel_audio_data.get('format_id')
-                    print(f"DEBUG: Selección inteligente guardada en Job: {audio_selection_to_set}")
+                # --- FIN DE RESOLUCIÓN DE IDs ---
+
+                print(f"DEBUG: Configuración inteligente guardada en Job {job.job_id[:6]}")
 
                 # Restaurar estado del checkbox de miniatura
                 saved_thumbnail = job.config.get('download_thumbnail', False)
@@ -3655,11 +3729,12 @@ class BatchDownloadTab(ctk.CTkFrame):
         # Determinar el format_id de video correcto
         v_id = v_info.get('format_id')
         
-        # Si es combinado multiidioma, usar el ID del idioma seleccionado
+        # 🔧 MODIFICADO: Si es combinado multiidioma, usar el ID del idioma seleccionado
+        # Solo hacemos esto si el v_info tiene el flag is_combined
         if v_info.get('is_combined') and hasattr(self, 'combined_audio_map') and self.combined_audio_map:
             if a_label in self.combined_audio_map:
                 v_id = self.combined_audio_map[a_label]
-                print(f"DEBUG: Guardando format_id multiidioma: {v_id}")
+                print(f"DEBUG: [ConfigChange] Guardando format_id multiidioma: {v_id}")
         
         # Guardar los IDs reales en el config
         job.config['resolved_video_format_id'] = v_id
