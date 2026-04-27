@@ -21,7 +21,7 @@ class TimestampLogger:
         self._is_timestamped = True # Bandera para evitar re-parchear
 
     def write(self, message):
-        if not message:
+        if not message or self.original_stream is None:
             return
         
         # Dividir el mensaje en líneas manteniendo los finales de línea
@@ -43,7 +43,8 @@ class TimestampLogger:
             self.at_start_of_line = line.endswith('\n')
 
     def flush(self):
-        self.original_stream.flush()
+        if self.original_stream is not None:
+            self.original_stream.flush()
 
 # Aplicar redirección global SOLO si no ha sido aplicada antes
 if not hasattr(sys.stdout, "_is_timestamped"):
