@@ -45,3 +45,4 @@ out_img2.txt
 out_single.txt
 git_push.bat
 test_dialogs.py
+src/core/ffmpeg_encoders_log.txt
