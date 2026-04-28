@@ -2,6 +2,12 @@ VIDEO_EXTENSIONS = {'mp4', 'mkv', 'webm', 'mov', 'flv', 'avi', 'gif'}
 AUDIO_EXTENSIONS = {'m4a', 'mp3', 'ogg', 'opus', 'flac', 'wav'}
 SINGLE_STREAM_AUDIO_CONTAINERS = {'.mp3', '.wav', '.flac', '.ac3'}
 
+# Dominios que funcionan bien con extracción plana (Modo Rápido)
+FAST_MODE_SUPPORTED_DOMAINS = ["youtube.com", "youtu.be", "soundcloud.com", "x.com", "twitter.com", 
+"instagram.com", "tiktok.com", "reddit.com", "facebook.com", "tumblr.com", "vimeo.com", 
+"dailymotion.com", "bandcamp.com", "twitch.tv", "smugmug.com", "flickr.com", "metacafe.com", "vimeo.com", 
+"archive.org", "archive.org", "archive.org", "archive.org", "archive.org", "archive.org", "archive.org"]
+
 FORMAT_MUXER_MAP = {
     ".m4a": "mp4",
     ".wma": "asf"

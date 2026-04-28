@@ -18,6 +18,7 @@ from contextlib import redirect_stdout
 from src.core.exceptions import UserCancelledError 
 from src.core.downloader import get_video_info, apply_site_specific_rules, apply_yt_patch
 from src.core.batch_processor import Job
+from src.core.constants import FAST_MODE_SUPPORTED_DOMAINS
 from .dialogs import Tooltip, messagebox, PlaylistSelectionDialog
 
 import requests
@@ -3434,10 +3435,11 @@ class BatchDownloadTab(ctk.CTkFrame):
             print(f"DEBUG: Iniciando análisis. Playlist: {analizar_playlist}, Rápido: {user_wants_fast}")
 
             # --- MODIFICADO: Detección de Modo Rápido ---
-            is_youtube = "youtube.com" in url or "youtu.be" in url
+            # Ahora usamos la lista global en constants.py para facilitar pruebas
+            is_fast_compatible = any(domain in url.lower() for domain in FAST_MODE_SUPPORTED_DOMAINS)
             
-            # Ahora requerimos que sea YouTube, sea Playlist Y que el usuario quiera modo rápido
-            use_fast_mode = is_youtube and analizar_playlist and user_wants_fast
+            # Ahora requerimos que sea un sitio compatible, sea Playlist Y que el usuario quiera modo rápido
+            use_fast_mode = is_fast_compatible and analizar_playlist and user_wants_fast
             
             if use_fast_mode:
                 print("DEBUG: 🚀 Modo Rápido activado (extract_flat)")
@@ -3570,10 +3572,19 @@ class BatchDownloadTab(ctk.CTkFrame):
         if is_playlist and info_dict.get('extractor_key') != 'Generic':
             # --- NUEVO: Lógica de Playlist ---
             
-            is_flat_result = info_dict.get('entries', [{}])[0].get('_type') == 'url'
+            # Detectar si el resultado es 'flat' (YouTube usa 'url', SoundCloud usa 'url_transparent')
+            first_entry = info_dict.get('entries', [{}])[0]
+            is_flat_result = first_entry.get('_type') in ('url', 'url_transparent')
             
             if is_flat_result:
                 print("INFO: Resultado 'flat' detectado. Abriendo selector de playlist...")
+
+                # 🆕 MEJORA: Asegurar que todos los items tengan un título (especialmente SoundCloud rápido)
+                for i, entry in enumerate(info_dict.get('entries', [])):
+                    if not entry.get('title'):
+                        # Usar ID o el final de la URL como nombre temporal
+                        fallback = entry.get('id') or entry.get('url', '').split('/')[-1] or f"Item {i+1}"
+                        entry['title'] = fallback
                 
                 # 🆕 GUARDAR EN CACHÉ con estructura completa
                 self.playlist_cache[job_id] = {
@@ -3601,8 +3612,8 @@ class BatchDownloadTab(ctk.CTkFrame):
             for i, (entry, current_job) in enumerate(zip(entries, all_jobs)):
                 if not entry: continue
 
-                video_url = entry.get('webpage_url') or job.config.get('url')
-                title = entry.get('title') or f'Video {i+1}'
+                video_url = entry.get('webpage_url') or entry.get('url') or job.config.get('url')
+                title = entry.get('title') or entry.get('id') or f'Video {i+1}'
                 
                 playlist_index = entry.get('playlist_index', i + 1) 
 
