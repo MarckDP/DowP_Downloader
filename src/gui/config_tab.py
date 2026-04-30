@@ -474,15 +474,15 @@ class ConfigTab(ctk.CTkFrame):
         davinci_switches_top = ctk.CTkFrame(davinci_group, fg_color="transparent")
         davinci_switches_top.pack(fill="x", pady=(0, 10))
 
-        self.davinci_single_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_single', False))
+        self.davinci_single_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_single', True))
         self.davinci_single_switch = ctk.CTkSwitch(davinci_switches_top, text="Proceso único", variable=self.davinci_single_var, command=self._on_integration_toggle)
         self.davinci_single_switch.pack(side="left", padx=(0, 20))
 
-        self.davinci_batch_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_batch', False))
+        self.davinci_batch_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_batch', True))
         self.davinci_batch_switch = ctk.CTkSwitch(davinci_switches_top, text="Proceso por lotes", variable=self.davinci_batch_var, command=self._on_integration_toggle)
         self.davinci_batch_switch.pack(side="left", padx=(0, 20))
 
-        self.davinci_image_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_image', False))
+        self.davinci_image_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_image', True))
         self.davinci_image_switch = ctk.CTkSwitch(davinci_switches_top, text="Herramientas de imagen", variable=self.davinci_image_var, command=self._on_integration_toggle)
         self.davinci_image_switch.pack(side="left")
 
@@ -493,7 +493,7 @@ class ConfigTab(ctk.CTkFrame):
         self.davinci_everything_switch = ctk.CTkSwitch(davinci_extra_row, text="Importar originales y procesados", variable=self.davinci_everything_var, command=self._on_integration_toggle)
         self.davinci_everything_switch.pack(side="left", padx=(0, 20))
 
-        self.davinci_timeline_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_to_timeline', True))
+        self.davinci_timeline_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_to_timeline', False))
         self.davinci_timeline_switch = ctk.CTkSwitch(davinci_extra_row, text="Importar a línea de tiempo", variable=self.davinci_timeline_var, command=self._on_integration_toggle)
         self.davinci_timeline_switch.pack(side="left")
 
