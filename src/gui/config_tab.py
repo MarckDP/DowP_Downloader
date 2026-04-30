@@ -435,7 +435,7 @@ class ConfigTab(ctk.CTkFrame):
         self.config_subtitles.append(adobe_header)
 
         self.adobe_master_var = ctk.BooleanVar(value=getattr(self.app, 'adobe_enabled', True))
-        self.adobe_master_switch = ctk.CTkSwitch(adobe_header_frame, text="Activar integración", variable=self.adobe_master_var, command=self._on_integration_toggle, progress_color="#C17B42")
+        self.adobe_master_switch = ctk.CTkSwitch(adobe_header_frame, text="Activar integración", variable=self.adobe_master_var, command=self._on_integration_toggle)
         self.adobe_master_switch.pack(side="right")
 
         adobe_switches = ctk.CTkFrame(adobe_group, fg_color="transparent")
@@ -468,7 +468,7 @@ class ConfigTab(ctk.CTkFrame):
         self.config_subtitles.append(davinci_header)
 
         self.davinci_master_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_enabled', True))
-        self.davinci_master_switch = ctk.CTkSwitch(davinci_header_frame, text="Activar integración", variable=self.davinci_master_var, command=self._on_integration_toggle, progress_color="#C17B42")
+        self.davinci_master_switch = ctk.CTkSwitch(davinci_header_frame, text="Activar integración", variable=self.davinci_master_var, command=self._on_integration_toggle)
         self.davinci_master_switch.pack(side="right")
 
         davinci_switches_top = ctk.CTkFrame(davinci_group, fg_color="transparent")
