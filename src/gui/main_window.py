@@ -698,11 +698,11 @@ class MainWindow(TkBase):
         self.adobe_import_batch = True
         self.adobe_import_image = True
         self.davinci_enabled = True
-        self.davinci_import_single = False
-        self.davinci_import_batch = False
-        self.davinci_import_image = False
+        self.davinci_import_single = True
+        self.davinci_import_batch = True
+        self.davinci_import_image = True
         self.davinci_import_everything = False
-        self.davinci_import_to_timeline = True
+        self.davinci_import_to_timeline = False
         
         self.inkscape_enabled = False
         self.inkscape_path = r"C:\Program Files\Inkscape"
