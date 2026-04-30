@@ -53,7 +53,7 @@ if not hasattr(sys.stderr, "_is_timestamped"):
     sys.stderr = TimestampLogger(sys.stderr)
 # ==============================================================================
 
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.4.2"
 
 # ==============================================================================
 # 🔕 PARCHE GLOBAL: OCULTAR CONSOLAS (WINDOWS)
