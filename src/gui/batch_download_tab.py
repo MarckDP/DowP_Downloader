@@ -722,17 +722,6 @@ class BatchDownloadTab(ctk.CTkFrame):
         auto_tooltip_text = "Si está activo, la cola comenzará a descargarse automáticamente después de que el análisis de una URL finalice."
         Tooltip(self.auto_download_checkbox, auto_tooltip_text, delay_ms=1000)
         
-        self.auto_import_checkbox = ctk.CTkCheckBox(
-            line2_frame, 
-            text="Import Adobe", 
-            command=self.save_settings,
-            text_color="#FFC792",       
-            fg_color="#C17B42",         
-            hover_color="#9A6336"        
-        )
-        self.auto_import_checkbox.grid(row=0, column=5, padx=5, pady=5, sticky="w")
-        import_tooltip_text = "Habilita la importación automática de los archivos descargados a Premiere Pro y After Effects."
-        Tooltip(self.auto_import_checkbox, import_tooltip_text, delay_ms=1000)
         
         self.start_queue_button = ctk.CTkButton(
             line2_frame, text="Iniciar Cola", state="disabled", command=self.start_queue_processing, 
@@ -2830,22 +2819,13 @@ class BatchDownloadTab(ctk.CTkFrame):
                 print(f"INFO: Miniatura guardada como JPG (sin transparencia): {file_path}")
 
             
-            # 4. Comprobar si se debe importar
-            if self.auto_import_checkbox.get():
-                active_target = self.app.ACTIVE_TARGET_SID_accessor()
-                if active_target:
-                    # 5. Armar el paquete (solo miniatura, sin bin de lote)
-                    file_package = {
-                        "video": None,
-                        "thumbnail": file_path.replace('\\', '/'),
-                        "subtitle": None,
-                        "targetBin": None # Importa a la raíz "DowP Imports"
-                    }
-                    
-                    print(f"INFO: [Manual] Enviando miniatura a CEP: {file_package}")
-                    
-                    # 6. Enviar
-                    self.app.socketio.emit('new_file', {'filePackage': file_package}, to=active_target)
+            # 4. Enviar a integraciones (el manager checa los settings)
+            self.app.integration_manager.broadcast_import(
+                source_path=file_path,
+                thumb_path=None, 
+                workflow_type="batch",
+                bin_name=None
+            )
 
         except Exception as e:
             print(f"ERROR: No se pudo guardar o importar la miniatura manualmente: {e}")
@@ -3916,10 +3896,6 @@ class BatchDownloadTab(ctk.CTkFrame):
         # Sincronizar estado visual (si playlist está off, fast debe estar disabled)
         self._on_playlist_analysis_toggle()
 
-        if self.app.batch_auto_import_saved:
-            self.auto_import_checkbox.select()
-        else:
-            self.auto_import_checkbox.deselect()
         self.is_initializing = False
 
     def save_settings(self, event=None):
@@ -3944,7 +3920,6 @@ class BatchDownloadTab(ctk.CTkFrame):
         # --- AQUÍ VA TU CÓDIGO ORIGINAL DE SAVE_SETTINGS ---
         self.app.batch_download_path = self.output_path_entry.get() 
         self.app.batch_playlist_analysis_saved = self.playlist_analysis_check.get() == 1
-        self.app.batch_auto_import_saved = self.auto_import_checkbox.get() == 1
         self.app.batch_fast_mode_saved = self.fast_mode_check.get() == 1
         
         # Llamar al guardado principal

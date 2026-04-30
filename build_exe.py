@@ -107,6 +107,7 @@ def build():
         '--windowed',
         '--noconfirm',
         '--clean',
+        '--noupx',
         f'--icon={ICON_PATH}',
         
         # ------------------------------

@@ -1823,13 +1823,6 @@ class ImageToolsTab(ctk.CTkFrame):
         
         # (Se omite Auto-descarga)
         
-        self.auto_import_checkbox = ctk.CTkCheckBox(
-            line2_frame, text="Import Adobe", 
-            command=self.save_settings,
-            text_color="#FFC792", fg_color="#C17B42", hover_color="#9A6336"
-        )
-        self.auto_import_checkbox.grid(row=0, column=4, padx=5, pady=5, sticky="w")
-        Tooltip(self.auto_import_checkbox, "Importa automáticamente los archivos procesados a Premiere o After Effects.", delay_ms=1000)
         
         self.start_process_button = ctk.CTkButton(
             line2_frame, text="Iniciar Proceso", 
@@ -2871,9 +2864,9 @@ class ImageToolsTab(ctk.CTkFrame):
                 cancellation_event=cancel_event
             )
             
-            # 5. Importar a Adobe si está activado
-            if not cancel_event.is_set() and self.auto_import_checkbox.get():
-                self.app.after(500, self._import_to_adobe, [final_video_path])
+            # 5. Importar a integraciones si está activado (el manager checa los settings)
+            if not cancel_event.is_set():
+                self.app.after(500, self._import_to_integrations, [final_video_path])
 
             # 6. Mostrar resumen
             if not cancel_event.is_set():
@@ -2930,10 +2923,6 @@ class ImageToolsTab(ctk.CTkFrame):
                 self.open_folder_button.configure(state="normal")
             except: pass
         
-        if self.app.image_auto_import_saved:
-            self.auto_import_checkbox.select()
-        else:
-            self.auto_import_checkbox.deselect()
 
         # 2. Cargar Herramientas de Imagen
         settings = getattr(self.app, 'image_settings', {})
@@ -3085,8 +3074,6 @@ class ImageToolsTab(ctk.CTkFrame):
             
         # Guardar ruta y auto-import (ya existían)
         self.app.image_output_path = self.output_path_entry.get()
-        if hasattr(self, 'auto_import_checkbox'):
-             self.app.image_auto_import_saved = self.auto_import_checkbox.get() == 1
         
         # --- NUEVO: Guardar estado de herramientas ---
         current_settings = {
@@ -4321,10 +4308,10 @@ class ImageToolsTab(ctk.CTkFrame):
             self.conversion_complete_event.set()
             print("DEBUG: ✅ Todas las conversiones completadas. Señal enviada.")
             
-            # Importar a Adobe
-            if not cancel_event.is_set() and self.auto_import_checkbox.get():
-                print(f"DEBUG: Proceso finalizado. Programando importación a Adobe.")
-                self.app.after(0, self._import_to_adobe, successfully_processed_paths)
+            # Importar a integraciones (el manager checa los settings)
+            if not cancel_event.is_set():
+                print(f"DEBUG: Proceso finalizado. Programando importación.")
+                self.app.after(0, self._import_to_integrations, successfully_processed_paths)
 
             # 🔧 NUEVO: Mostrar resumen mejorado
             if not cancel_event.is_set():
@@ -4715,84 +4702,39 @@ class ImageToolsTab(ctk.CTkFrame):
                 return new_path
             counter += 1
 
-    def _import_to_adobe(self, processed_filepaths: list):
+    def _import_to_integrations(self, processed_filepaths: list):
         """
-        Importa los archivos procesados a Adobe (Premiere/After Effects).
-        CORREGIDO: Ahora recibe una lista de archivos para no re-escanear.
+        Importa los archivos procesados a las integraciones activas (Adobe / DaVinci).
         """
         try:
-            # 1. Obtener el objetivo activo
-            active_target_sid = self.app.ACTIVE_TARGET_SID_accessor()
-            
-            if not active_target_sid:
-                print("INFO: No hay aplicación Adobe vinculada para importación automática")
-                return
-            
-            # 2. Determinar la papelera (bin) de destino
+            # 1. Determinar la papelera (bin) de destino
             target_bin_name = None
             if self.create_subfolder_checkbox.get():
                 # Usar el nombre de la subcarpeta como nombre del bin
                 target_bin_name = self.subfolder_name_entry.get() or "DowP Imágenes"
+            else:
+                target_bin_name = "DowP Imágenes"
 
-            # 3. Lista de formatos compatibles (excluyendo WEBP)
-            compatible_formats = {".png", ".jpg", ".jpeg", ".pdf", ".tiff", ".tif", ".ico", ".bmp"}
-            
+            # 2. Lista de formatos compatibles (para filtrar si es necesario)
+            # DaVinci es muy permisivo, Adobe no tanto.
+            # Por ahora, enviamos todo lo que sea archivo.
             files_to_import = []
-
-            # 4. Iterar sobre la LISTA RECIBIDA (esta es la corrección)
-            print(f"DEBUG: Preparando {len(processed_filepaths)} archivos para importar.")
-            
             for filepath in processed_filepaths:
-                file_ext = os.path.splitext(filepath)[1].lower()
-                
-                # Validar que el archivo exista y sea compatible
-                if os.path.isfile(filepath) and file_ext in compatible_formats:
-                    files_to_import.append(filepath.replace('\\', '/'))
-                elif file_ext not in compatible_formats:
-                    # Omitir silenciosamente formatos no compatibles (como .webp)
-                    print(f"INFO: [ImgTools] Omitiendo importación de {os.path.basename(filepath)} (no compatible).")
+                if os.path.isfile(filepath):
+                    files_to_import.append(filepath)
             
             if not files_to_import:
-                print("ADVERTENCIA: No se encontraron archivos compatibles en la lista procesada para importar.")
                 return
             
-            # 5. Verificar que TODOS los archivos sean accesibles
-            print(f"DEBUG: Verificando accesibilidad de {len(files_to_import)} archivos...")
-            verified_files = []
-            for filepath in files_to_import:
-                try:
-                    # Verificar que existe y es accesible
-                    if not os.path.exists(filepath):
-                        print(f"  ❌ {os.path.basename(filepath)} - No existe")
-                        continue
-                    
-                    size = os.path.getsize(filepath)
-                    with open(filepath, 'rb') as f:
-                        f.read(1)  # Leer primer byte
-                    
-                    verified_files.append(filepath)
-                    print(f"  ✅ {os.path.basename(filepath)} ({size} bytes)")
-                except Exception as e:
-                    print(f"  ❌ {os.path.basename(filepath)} - ERROR: {e}")
-            
-            if not verified_files:
-                print("ERROR: Ningún archivo pasó la verificación de accesibilidad")
-                return
-            
-            # 6. Armar el PAQUETE ÚNICO (con archivos verificados)
-            import_package = {
-                "files": verified_files,
-                "targetBin": target_bin_name
-            }
-            
-            # 7. Enviar el paquete en UN SOLO MENSAJE
-            print(f"INFO: [ImgTools] Enviando paquete de lote a CEP: {len(verified_files)} archivos a la papelera '{target_bin_name}'")
-            self.app.socketio.emit('import_files', 
-                                   import_package,
-                                   to=active_target_sid)
+            # 3. Enviar a integraciones
+            self.app.integration_manager.broadcast_import_list(
+                files=files_to_import,
+                bin_name=target_bin_name,
+                workflow_type="image"
+            )
         
         except Exception as e:
-            print(f"ERROR: Falló la importación automática a Adobe: {e}")
+            print(f"ERROR: Falló la importación automática: {e}")
         
     def _toggle_subfolder_name_entry(self):
         """Habilita/deshabilita el entry de nombre de carpeta."""

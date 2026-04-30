@@ -4484,6 +4484,7 @@ class SingleDownloadTab(ctk.CTkFrame):
                 user_facing_title,  # <- Pasa el título ya resuelto
                 audio_extraction_fallback
             )
+            self.last_downloaded_original_path = downloaded_filepath
                         
             filepath_to_process = self._handle_optional_clipping(downloaded_filepath, options)
                                           
@@ -5550,34 +5551,24 @@ class SingleDownloadTab(ctk.CTkFrame):
         """
         Callback UNIFICADO. Usa las listas de extensiones de la clase para una clasificación robusta.
         """
-        if success and final_filepath and self.app.ACTIVE_TARGET_SID_accessor():
-            with self.app.LATEST_FILE_LOCK:
-                file_package = {
-                    "video": None,
-                    "thumbnail": None,
-                    "subtitle": None
-                }
-                file_ext_without_dot = os.path.splitext(final_filepath)[1].lower().lstrip('.')
-                if file_ext_without_dot in VIDEO_EXTENSIONS or file_ext_without_dot in AUDIO_EXTENSIONS or file_ext_without_dot in SINGLE_STREAM_AUDIO_CONTAINERS:
-                    file_package["video"] = final_filepath.replace('\\', '/')
-                elif file_ext_without_dot == 'srt':
-                    file_package["subtitle"] = final_filepath.replace('\\', '/')
-                elif file_ext_without_dot == 'jpg':
-                     file_package["thumbnail"] = final_filepath.replace('\\', '/')
-                if file_package["video"]:
-                    output_dir = os.path.dirname(final_filepath)
-                    base_name = os.path.splitext(os.path.basename(final_filepath))[0]
-                    if base_name.endswith('_recoded'):
-                        base_name = base_name.rsplit('_recoded', 1)[0]
-                    expected_thumb_path = os.path.join(output_dir, f"{base_name}.jpg")
-                    if os.path.exists(expected_thumb_path):
-                        file_package["thumbnail"] = expected_thumb_path.replace('\\', '/')
-                    for item in os.listdir(output_dir):
-                        if item.startswith(base_name) and item.lower().endswith('.srt'):
-                             file_package["subtitle"] = os.path.join(output_dir, item).replace('\\', '/')
-                             break
-                print(f"INFO: Paquete de archivos listo para enviar: {file_package}")
-                self.app.socketio.emit('new_file', {'filePackage': file_package}, to=self.app.ACTIVE_TARGET_SID_accessor())
+        if success and final_filepath:
+            # Enviar a integraciones (Adobe/DaVinci) centralizadamente
+            output_dir = os.path.dirname(final_filepath)
+            base_name = os.path.splitext(os.path.basename(final_filepath))[0]
+            if base_name.endswith('_recoded'):
+                base_name = base_name.rsplit('_recoded', 1)[0]
+            
+            expected_thumb_path = os.path.join(output_dir, f"{base_name}.jpg")
+            thumb_path = expected_thumb_path if os.path.exists(expected_thumb_path) else None
+            
+            source_path = getattr(self, 'last_downloaded_original_path', final_filepath)
+            
+            self.app.integration_manager.broadcast_import(
+                source_path=source_path,
+                final_path=final_filepath,
+                thumb_path=thumb_path,
+                workflow_type="single"
+            )
         self.last_download_path = final_filepath
         self.progress_bar.stop()
         self.progress_bar.set(1 if success else 0)

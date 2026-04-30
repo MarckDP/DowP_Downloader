@@ -476,27 +476,19 @@ class QueueManager:
                     if thumb_path and self.main_app.batch_tab.auto_send_to_it_checkbox.get() == 1:
                         self.main_app.after(0, self.main_app.image_tab._process_imported_files, [thumb_path])
                     
-                # 4. ✅ LÓGICA DE IMPORTACIÓN AUTOMÁTICA A ADOBE (NUEVO)
-                if self.main_app.batch_tab.auto_import_checkbox.get() and final_path_for_import:
-                    active_target = self.main_app.ACTIVE_TARGET_SID_accessor()
+                # 4. ✅ LÓGICA DE INTEGRACIÓN CENTRALIZADA
+                if final_path_for_import:
+                    # Determinamos el Bin (Carpeta) de destino
+                    # Usamos el título de la playlist para agrupar los ítems
+                    target_bin_name = playlist_title 
                     
-                    if active_target:
-                        # Determinar el nombre del Bin (Carpeta en Premiere)
-                        # Usamos el nombre de la playlist (playlist_title) que ya calculamos arriba
-                        target_bin_name = playlist_title 
-                        
-                        # Si hay una subcarpeta de lote global, podemos combinarla o usarla
-                        # Por simplicidad, usaremos el título de la playlist para agrupar los ítems
-                        
-                        file_package = {
-                            "video": final_path_for_import.replace('\\', '/'),
-                            "thumbnail": thumb_path.replace('\\', '/') if thumb_path else None,
-                            "subtitle": None, # (Podrías añadir lógica de subtítulos aquí en el futuro)
-                            "targetBin": target_bin_name
-                        }
-                        
-                        print(f"INFO: [Playlist Item] Enviando a Adobe: {os.path.basename(final_path_for_import)}")
-                        self.main_app.socketio.emit('new_file', {'filePackage': file_package}, to=active_target)
+                    self.main_app.integration_manager.broadcast_import(
+                        source_path=downloaded_path,
+                        final_path=final_path_for_import,
+                        thumb_path=thumb_path,
+                        workflow_type="batch",
+                        bin_name=target_bin_name
+                    )
 
             except Exception as e:
                 print(f"ERROR procesando item {i+1} ({video_title}): {e}")
@@ -953,6 +945,9 @@ class QueueManager:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
             
+            # Guardamos la ruta del original descargado para integraciones (DaVinci "Import Everything")
+            original_source_path = final_filepath
+            
             # Limpiar backup si todo salió bien
             if backup_path and os.path.exists(backup_path):
                 os.remove(backup_path)
@@ -1113,39 +1108,24 @@ class QueueManager:
             job.final_filepath = final_filepath # ✅ Ahora apunta al archivo real (.m4a/.mp3)
             self.ui_callback(job.job_id, "COMPLETED", f"Completado: {os.path.basename(final_filepath)}")
 
-            # --- LÓGICA DE IMPORTACIÓN AUTOMÁTICA ---
+            # --- LÓGICA DE INTEGRACIÓN CENTRALIZADA ---
             
-            # 1. Verificar si el usuario quiere importar
-            batch_tab = self.main_app.batch_tab
-            # (Usamos tu nuevo texto "Import Pr/Ae" para encontrar el checkbox)
-            if batch_tab and batch_tab.auto_import_checkbox.get():
-                
-                # 2. Verificar si hay una extensión de Adobe conectada
-                active_target = self.main_app.ACTIVE_TARGET_SID_accessor()
-                if active_target:
-                    
-                    # 3. Determinar la papelera (bin) de destino
+            # 1. Determinar el Bin (Carpeta) de destino
+            target_bin_name = None
+            if hasattr(self, 'subfolder_path') and self.subfolder_path:
+                try:
+                    target_bin_name = os.path.basename(os.path.normpath(self.subfolder_path))
+                except Exception:
                     target_bin_name = None
-                    if hasattr(self, 'subfolder_path') and self.subfolder_path:
-                        # self.subfolder_path es la RUTA COMPLETA (ej: C:/.../DowP List 01)
-                        # Necesitamos solo el nombre final.
-                        try:
-                            target_bin_name = os.path.basename(os.path.normpath(self.subfolder_path))
-                        except Exception:
-                            target_bin_name = None # Fallback
-                    
-                    # 4. Armar el paquete de archivos
-                    file_package = {
-                        "video": job.final_filepath.replace('\\', '/'),
-                        "thumbnail": thumbnail_path.replace('\\', '/') if thumbnail_path else None,
-                        "subtitle": None,
-                        "targetBin": target_bin_name # <-- AÑADIDO
-                    }
-                    
-                    print(f"INFO: [Lote] Enviando paquete a CEP: {file_package}")
-                    
-                    # 5. Enviar el paquete por el socket
-                    self.main_app.socketio.emit('new_file', {'filePackage': file_package}, to=active_target)
+            
+            # 2. Enviar a integraciones
+            self.main_app.integration_manager.broadcast_import(
+                source_path=original_source_path,
+                final_path=final_filepath,
+                thumb_path=thumbnail_path,
+                workflow_type="batch",
+                bin_name=target_bin_name
+            )
             
         except UserCancelledError as e:
             # Limpiar temporales si el usuario canceló

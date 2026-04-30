@@ -55,6 +55,7 @@ from .batch_download_tab import BatchDownloadTab
 from .single_download_tab import SingleDownloadTab
 from .image_tools_tab import ImageToolsTab
 from .config_tab import ConfigTab
+from src.core.integration_manager import IntegrationManager
 
 from .dialogs import (
     ConflictDialog, LoadingWindow, CompromiseDialog, 
@@ -557,11 +558,13 @@ class MainWindow(TkBase):
             print(f"ERROR: No se pudo crear la carpeta de datos en %APPDATA%: {e}")
             self.APP_DATA_DIR = self.APP_BASE_PATH
 
-        # 3. Definir las rutas usando la nueva carpeta de datos
         self.SETTINGS_FILE = os.path.join(self.APP_DATA_DIR, "app_settings.json")
         self.PRESETS_FILE = os.path.join(self.APP_DATA_DIR, "presets.json") 
         self.USER_THEMES_DIR = os.path.join(self.APP_DATA_DIR, "themes")
         os.makedirs(self.USER_THEMES_DIR, exist_ok=True)
+        
+        print(f"DEBUG: Carpeta de datos de usuario: {self.APP_DATA_DIR}")
+        print(f"DEBUG: Archivo de configuración: {self.SETTINGS_FILE}")
         
         # 4. MIGRACIÓN AUTOMÁTICA (Para evitar que los usuarios pierdan configuraciones antiguas)
         import shutil
@@ -689,6 +692,18 @@ class MainWindow(TkBase):
         self.preview_vector_dpi = 100 # Calidad de previsualización para vectores (Rápida: 100)
         self.vector_force_background = False # Fondo blanco para vectores (Default: False/Transparente)
         
+        # --- NUEVO: Integraciones ---
+        self.adobe_enabled = True
+        self.adobe_import_single = True
+        self.adobe_import_batch = True
+        self.adobe_import_image = True
+        self.davinci_enabled = True
+        self.davinci_import_single = False
+        self.davinci_import_batch = False
+        self.davinci_import_image = False
+        self.davinci_import_everything = False
+        self.davinci_import_to_timeline = True
+        
         self.inkscape_enabled = False
         self.inkscape_path = r"C:\Program Files\Inkscape"
         self.inkscape_version = ""
@@ -737,6 +752,19 @@ class MainWindow(TkBase):
                     self.inkscape_version = settings.get("inkscape_version", "")
                     self.selected_theme_accent = settings.get("selected_theme_accent", "blue")
                     self.appearance_mode = settings.get("appearance_mode", "System")
+
+                    # Integraciones
+                    self.adobe_enabled = settings.get("adobe_enabled", self.adobe_enabled)
+                    self.adobe_import_single = settings.get("adobe_import_single", self.adobe_import_single)
+                    self.adobe_import_batch = settings.get("adobe_import_batch", self.adobe_import_batch)
+                    self.adobe_import_image = settings.get("adobe_import_image", self.adobe_import_image)
+                    self.davinci_enabled = settings.get("davinci_enabled", self.davinci_enabled)
+                    self.davinci_import_single = settings.get("davinci_import_single", self.davinci_import_single)
+                    self.davinci_import_batch = settings.get("davinci_import_batch", self.davinci_import_batch)
+                    self.davinci_import_image = settings.get("davinci_import_image", self.davinci_import_image)
+                    self.davinci_import_everything = settings.get("davinci_import_everything", self.davinci_import_everything)
+                    self.davinci_import_to_timeline = settings.get("davinci_import_to_timeline", self.davinci_import_to_timeline)
+
                 print(f"DEBUG: Configuración cargada exitosamente.")
             else:
                 print("DEBUG: Archivo de configuración no encontrado. Usando valores por defecto.")
@@ -752,6 +780,7 @@ class MainWindow(TkBase):
             # No se necesita 'pass' porque los valores por defecto ya están establecidos
 
         self.ffmpeg_processor = FFmpegProcessor(app_version=self.APP_VERSION, cache_dir=self.APP_DATA_DIR)
+        self.integration_manager = IntegrationManager(self)
 
         self.tab_view = ctk.CTkTabview(self, anchor="nw", command=self._on_tab_view_change)
         self.tab_view.pack(expand=True, fill="both", padx=5, pady=(0, 5))
@@ -1591,13 +1620,25 @@ class MainWindow(TkBase):
             "keep_ai_models_in_memory": self.keep_ai_models_in_memory,
             "show_onnx_warning": self.show_onnx_warning,
 
+            # Integraciones
+            "adobe_enabled": self.adobe_enabled,
+            "adobe_import_single": self.adobe_import_single,
+            "adobe_import_batch": self.adobe_import_batch,
+            "adobe_import_image": self.adobe_import_image,
+            "davinci_enabled": self.davinci_enabled,
+            "davinci_import_single": self.davinci_import_single,
+            "davinci_import_batch": self.davinci_import_batch,
+            "davinci_import_image": self.davinci_import_image,
+            "davinci_import_everything": self.davinci_import_everything,
+            "davinci_import_to_timeline": self.davinci_import_to_timeline,
+
             # Inkscape Externo
             "inkscape_enabled": self.inkscape_enabled,
             "inkscape_path": self.inkscape_path,
             "inkscape_version": getattr(self, 'inkscape_version', ""),
             "vector_force_background": getattr(self, 'vector_force_background', False),
             "selected_theme_accent": self.selected_theme_accent,
-            "appearance_mode": self.appearance_mode,
+            "appearance_mode": self.appearance_mode
         }
 
         # 4. Escribir en el archivo

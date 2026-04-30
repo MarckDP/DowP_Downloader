@@ -415,7 +415,92 @@ class ConfigTab(ctk.CTkFrame):
         self.ink_status_label = ctk.CTkLabel(ink_status_row, text=initial_status, font=ctk.CTkFont(size=11, weight="bold"), text_color=initial_color)
         self.ink_status_label.pack(side="left")
 
+        # --- BLOQUE: INTEGRACIONES (NUEVO) ---
+        ctk.CTkLabel(frame_general, text="Integraciones", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", pady=(10, 2), padx=10)
+        ctk.CTkLabel(frame_general, text="Conecta DowP con aplicaciones de edición externas.", font=ctk.CTkFont(size=11), text_color="gray60").pack(anchor="w", pady=(0, 10), padx=10)
+
+        self.integrations_frame = ctk.CTkFrame(frame_general, fg_color=self.CONFIG_CARD_BG, corner_radius=self.CONFIG_CARD_RADIUS, border_width=1, border_color=self.CONFIG_CARD_BORDER)
+        self.integrations_frame.pack(fill="x", pady=5, padx=5)
+        self.config_cards.append(self.integrations_frame)
+
+        # --- ADOBE ---
+        adobe_group = ctk.CTkFrame(self.integrations_frame, fg_color="transparent")
+        adobe_group.pack(fill="x", padx=15, pady=15)
+        
+        adobe_header_frame = ctk.CTkFrame(adobe_group, fg_color="transparent")
+        adobe_header_frame.pack(fill="x", pady=(0, 10))
+
+        adobe_header = ctk.CTkLabel(adobe_header_frame, text="Adobe (Premiere Pro / After Effects)", font=ctk.CTkFont(size=15, weight="bold"), text_color=self.SECTION_SUBTITLE)
+        adobe_header.pack(side="left")
+        self.config_subtitles.append(adobe_header)
+
+        self.adobe_master_var = ctk.BooleanVar(value=getattr(self.app, 'adobe_enabled', True))
+        self.adobe_master_switch = ctk.CTkSwitch(adobe_header_frame, text="Activar integración", variable=self.adobe_master_var, command=self._on_integration_toggle, progress_color="#C17B42")
+        self.adobe_master_switch.pack(side="right")
+
+        adobe_switches = ctk.CTkFrame(adobe_group, fg_color="transparent")
+        adobe_switches.pack(fill="x")
+
+        self.adobe_single_var = ctk.BooleanVar(value=getattr(self.app, 'adobe_import_single', True))
+        self.adobe_single_switch = ctk.CTkSwitch(adobe_switches, text="Proceso único", variable=self.adobe_single_var, command=self._on_integration_toggle)
+        self.adobe_single_switch.pack(side="left", padx=(0, 20))
+
+        self.adobe_batch_var = ctk.BooleanVar(value=getattr(self.app, 'adobe_import_batch', True))
+        self.adobe_batch_switch = ctk.CTkSwitch(adobe_switches, text="Proceso por lotes", variable=self.adobe_batch_var, command=self._on_integration_toggle)
+        self.adobe_batch_switch.pack(side="left", padx=(0, 20))
+
+        self.adobe_image_var = ctk.BooleanVar(value=getattr(self.app, 'adobe_import_image', True))
+        self.adobe_image_switch = ctk.CTkSwitch(adobe_switches, text="Herramientas de imagen", variable=self.adobe_image_var, command=self._on_integration_toggle)
+        self.adobe_image_switch.pack(side="left")
+
+        # SEPARADOR
+        ctk.CTkFrame(self.integrations_frame, height=2, fg_color=("gray80", "gray25")).pack(fill="x", padx=15)
+
+        # --- DAVINCI ---
+        davinci_group = ctk.CTkFrame(self.integrations_frame, fg_color="transparent")
+        davinci_group.pack(fill="x", padx=15, pady=15)
+        
+        davinci_header_frame = ctk.CTkFrame(davinci_group, fg_color="transparent")
+        davinci_header_frame.pack(fill="x", pady=(0, 10))
+
+        davinci_header = ctk.CTkLabel(davinci_header_frame, text="DaVinci Resolve (Solo versión Studio)", font=ctk.CTkFont(size=15, weight="bold"), text_color=self.SECTION_SUBTITLE)
+        davinci_header.pack(side="left")
+        self.config_subtitles.append(davinci_header)
+
+        self.davinci_master_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_enabled', True))
+        self.davinci_master_switch = ctk.CTkSwitch(davinci_header_frame, text="Activar integración", variable=self.davinci_master_var, command=self._on_integration_toggle, progress_color="#C17B42")
+        self.davinci_master_switch.pack(side="right")
+
+        davinci_switches_top = ctk.CTkFrame(davinci_group, fg_color="transparent")
+        davinci_switches_top.pack(fill="x", pady=(0, 10))
+
+        self.davinci_single_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_single', False))
+        self.davinci_single_switch = ctk.CTkSwitch(davinci_switches_top, text="Proceso único", variable=self.davinci_single_var, command=self._on_integration_toggle)
+        self.davinci_single_switch.pack(side="left", padx=(0, 20))
+
+        self.davinci_batch_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_batch', False))
+        self.davinci_batch_switch = ctk.CTkSwitch(davinci_switches_top, text="Proceso por lotes", variable=self.davinci_batch_var, command=self._on_integration_toggle)
+        self.davinci_batch_switch.pack(side="left", padx=(0, 20))
+
+        self.davinci_image_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_image', False))
+        self.davinci_image_switch = ctk.CTkSwitch(davinci_switches_top, text="Herramientas de imagen", variable=self.davinci_image_var, command=self._on_integration_toggle)
+        self.davinci_image_switch.pack(side="left")
+
+        davinci_extra_row = ctk.CTkFrame(davinci_group, fg_color="transparent")
+        davinci_extra_row.pack(fill="x")
+
+        self.davinci_everything_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_everything', False))
+        self.davinci_everything_switch = ctk.CTkSwitch(davinci_extra_row, text="Importar originales y procesados", variable=self.davinci_everything_var, command=self._on_integration_toggle)
+        self.davinci_everything_switch.pack(side="left", padx=(0, 20))
+
+        self.davinci_timeline_var = ctk.BooleanVar(value=getattr(self.app, 'davinci_import_to_timeline', True))
+        self.davinci_timeline_switch = ctk.CTkSwitch(davinci_extra_row, text="Importar a línea de tiempo", variable=self.davinci_timeline_var, command=self._on_integration_toggle)
+        self.davinci_timeline_switch.pack(side="left")
+
         self.sections["general"] = frame_general
+        
+        # Sincronización inicial de estados de switches
+        self._update_integration_switches_state()
         
         # ===== Sección: Cookies =====
         frame_cookies = ctk.CTkScrollableFrame(self.content_container, fg_color="transparent")
@@ -2830,6 +2915,40 @@ class ConfigTab(ctk.CTkFrame):
             
         Tooltip.hide_all()
         messagebox.showinfo("Limpieza Completada", f"Se han eliminado {success_count} modelos correctamente.")
+
+    def _on_integration_toggle(self):
+        """Actualiza los ajustes de integración en la app."""
+        self.app.adobe_enabled = self.adobe_master_var.get()
+        self.app.adobe_import_single = self.adobe_single_var.get()
+        self.app.adobe_import_batch = self.adobe_batch_var.get()
+        self.app.adobe_import_image = self.adobe_image_var.get()
+
+        self.app.davinci_enabled = self.davinci_master_var.get()
+        self.app.davinci_import_single = self.davinci_single_var.get()
+        self.app.davinci_import_batch = self.davinci_batch_var.get()
+        self.app.davinci_import_image = self.davinci_image_var.get()
+        self.app.davinci_import_everything = self.davinci_everything_var.get()
+        self.app.davinci_import_to_timeline = self.davinci_timeline_var.get()
+        
+        # Sincronizar estado visual de los sub-switches
+        self._update_integration_switches_state()
+        
+        self.app.save_settings()
+
+    def _update_integration_switches_state(self):
+        """Habilita o deshabilita los sub-switches según el master switch."""
+        adobe_state = "normal" if self.adobe_master_var.get() else "disabled"
+        self.adobe_single_switch.configure(state=adobe_state)
+        self.adobe_batch_switch.configure(state=adobe_state)
+        self.adobe_image_switch.configure(state=adobe_state)
+
+        davinci_state = "normal" if self.davinci_master_var.get() else "disabled"
+        self.davinci_single_switch.configure(state=davinci_state)
+        self.davinci_batch_switch.configure(state=davinci_state)
+        self.davinci_image_switch.configure(state=davinci_state)
+        self.davinci_everything_switch.configure(state=davinci_state)
+        self.davinci_timeline_switch.configure(state=davinci_state)
+
     def _on_vector_bg_toggle(self):
         self.app.vector_force_background = self.vector_bg_var.get()
         self.app.save_settings()
